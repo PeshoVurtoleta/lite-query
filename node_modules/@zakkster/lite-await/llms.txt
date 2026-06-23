@@ -1,0 +1,162 @@
+# @zakkster/lite-await
+
+Zero-GC bridge between @zakkster/lite-signal and Promise / async-await. Wait
+for signal values, race multi-source predicates, AbortSignal-first
+cancellation, bidirectional promise<->signal conversion. The missing
+async-coordination primitive for the lite-signal ecosystem.
+
+ESM only. Node >=18. Peer dep: @zakkster/lite-signal ^1.2.0. Zero runtime deps.
+
+## Public API
+
+import {
+    whenSignal, allOf, anyOf, raceOf,
+    withTimeout, withAbort,
+    whenTruthy, whenEquals,
+    fromPromise,
+    whenStatechart,
+    TimeoutError
+} from "@zakkster/lite-await";
+
+Every awaiter accepts: { timeout?: number, signal?: AbortSignal }
+- timeout (ms): rejects with TimeoutError if no settlement in time.
+- signal: rejects with AbortError if the signal aborts before settlement.
+
+### Core primitives
+
+whenSignal(source, predicate, opts?) -> Promise<T>
+  Resolve when source() first satisfies predicate(value). If already true on
+  first read, resolves on next microtask. Settlement (resolve / abort /
+  timeout) cleans the internal effect.
+
+allOf(specs, opts?) -> Promise<T[]>
+  specs: Array<[source, predicate]>. Resolves with values in input order when
+  every spec satisfies. Any rejection aborts the remaining specs.
+
+anyOf(specs, opts?) -> Promise<{ index, value }>
+  First spec to resolve wins; siblings aborted. Rejects with AggregateError
+  ONLY if every spec rejects independently. Bundle abort surfaces AbortError
+  directly.
+
+raceOf(specs, opts?) -> Promise<{ index, value }>
+  First spec to settle wins -- success OR failure cascades. Use for
+  success-vs-error race patterns.
+
+### Promise wrappers (non-signal-aware)
+
+withTimeout(promise, ms) -> Promise<T>
+  Wrap arbitrary Promise with deadline. Rejects TimeoutError. Inner promise
+  is NOT cancelled (arbitrary promises aren't AbortSignal-aware). For
+  signal-based work, use the primitive's `timeout` option instead.
+
+withAbort(promise, signal) -> Promise<T>
+  Wrap arbitrary Promise with AbortSignal. Same caveat: inner work continues.
+
+### Convenience
+
+whenTruthy(source, opts?)      // whenSignal(source, Boolean, opts)
+whenEquals(source, target, opts?)  // whenSignal(source, (v) => Object.is(v, target), opts)
+
+### Bidirectional bridge
+
+fromPromise(promise, initialData?) -> Signal<AsyncState<T>>
+  AsyncState<T> = { status, data, error }, status in
+  "pending" | "resolved" | "rejected". Updates EXACTLY ONCE on settlement.
+  Dispose via lite-signal's `dispose(sig)` when done.
+
+### lite-statechart specialization
+
+whenStatechart(machine, stateName, opts?) -> Promise<void>
+  Hooks into machine.onTransition directly (no tracking effect node).
+  Duck-typed: any { state: { peek() }, onTransition(fn): () => void } works.
+  Resolves on next microtask if already in target state.
+
+### Errors
+
+TimeoutError extends Error
+  { name: "TimeoutError", timeout: number }
+
+Abort errors are platform-shaped: signal.reason if set, else
+DOMException("Aborted", "AbortError"), else Error with name "AbortError".
+
+## Design invariants
+
+- ASCII-only source. ESM only. Zero runtime dependencies.
+- Cleanup is STRUCTURAL: every settlement path (resolve / reject / timeout /
+  abort) runs the same fullCleanup that disposes the effect, clears timeout,
+  removes abort listener. There is no path where one is skipped.
+- A throwing predicate or source() getter settles by REJECTION: the thrown
+  value rejects the promise and the effect tears down, on both the sync first
+  read and later change-driven fires. The throw never escapes at the signal
+  writer's .set() call site.
+- Pre-aborted signal short-circuits every primitive: returns rejected Promise
+  synchronously, never constructs internal machinery to tear it down.
+- Hoisted untrack body in whenSignal -- checkPredicate is allocated once at
+  registration, reused per fire (zero per-change allocation).
+- Late-binding stopFn pattern: handles the race where effect() fires its body
+  synchronously on first registration and the predicate is already satisfied
+  (mirrors WatchEx.js's watchUntil).
+- Internal AbortController per combinator coordinates cleanup across child
+  whenSignal calls. linkUserSignal forwards user's signal in and cleans up
+  the forward listener on settlement.
+
+## Performance
+
+Honest numbers (Node 22, M1-class machine, after warmup):
+- whenSignal resolve:        213K ops/s, ~4 B/op retained
+- whenSignal pre-aborted:     87K ops/s, ~3 B/op
+- allOf 4-spec:              103K ops/s, ~5 B/op
+- anyOf 4-spec:               55K ops/s, ~3 B/op
+- raceOf 4-spec:              60K ops/s, ~3 B/op
+- fromPromise lifecycle:     228K ops/s, ~5 B/op
+
+Final lite-signal pool returns to baseline (zero retained nodes) after each
+scenario. 4096-cycle leak probe in test/09-cleanup-leak.test.mjs.
+
+## Common patterns
+
+1. Wait for ready with deadline:
+   await whenSignal(state, (s) => s === "live", { timeout: 5000 });
+
+2. Wait for ALL of several conditions:
+   await allOf([[jwt, j => j !== null], [room, r => r === "joined"]]);
+
+3. First-to-resolve from N sources:
+   const { index, value } = await anyOf(specs);
+
+4. Success-vs-error race (EBS / API pattern):
+   const r = await raceOf([
+       [response, (r) => r?.id === id],
+       [error,    (e) => e?.id === id]
+   ], { timeout: 10000 });
+   if (r.index === 1) throw new ApiError(r.value);
+
+5. Project a fetch into a signal:
+   const userQuery = fromPromise(fetchUser(id));
+   effect(() => {
+       const s = userQuery();
+       if (s.status === "resolved") render(s.data);
+   });
+
+6. Cancel everything on dispose:
+   const ctrl = new AbortController();
+   const p = whenSignal(sig, pred, { signal: ctrl.signal });
+   // ... later ...
+   ctrl.abort();   // p rejects with AbortError; effect cleaned up
+
+## Anti-patterns
+
+- DO NOT use lite-await inside per-frame render loops. It is for one-shot
+  async coordination at lifecycle boundaries. For per-frame work use signals
+  + effect().
+- DO NOT expect withTimeout / withAbort to cancel arbitrary inner work. They
+  cannot; the inner Promise has no AbortSignal awareness. Pass the signal /
+  timeout DIRECTLY to the primitive that creates the inner work.
+- DO NOT allocate a fresh predicate closure on every call site. Hoist common
+  predicates as module-level constants when possible.
+- DO NOT forget to dispose() signals you create. The library cleans up its
+  own effects, but signals you allocate are your responsibility.
+
+## License
+
+MIT (c) 2026 Zahary Shinikchiev <shinikchiev@yahoo.com>

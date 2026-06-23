@@ -1,0 +1,94 @@
+{
+  "name": "@zakkster/lite-query",
+  "version": "1.1.0",
+  "description": "Reactive async cache with cross-tab coherence, streaming queries, and async coordination. Built on lite-signal.",
+  "type": "module",
+  "main": "./Query.js",
+  "module": "./Query.js",
+  "types": "./Query.d.ts",
+  "exports": {
+    ".": {
+      "node": "./Query.js",
+      "import": "./Query.js",
+      "types": "./Query.d.ts",
+      "default": "./Query.js"
+    },
+    "./stream": {
+      "node": "./StreamQuery.js",
+      "import": "./StreamQuery.js",
+      "types": "./StreamQuery.d.ts",
+      "default": "./StreamQuery.js"
+    },
+    "./await": {
+      "node": "./Awaitable.js",
+      "import": "./Awaitable.js",
+      "types": "./Awaitable.d.ts",
+      "default": "./Awaitable.js"
+    }
+  },
+  "files": [
+    "Query.js",
+    "Query.d.ts",
+    "StreamQuery.js",
+    "StreamQuery.d.ts",
+    "Awaitable.js",
+    "Awaitable.d.ts",
+    "README.md",
+    "CHANGELOG.md",
+    "llms.txt",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "bench": "node --expose-gc bench/bench.mjs"
+  },
+  "peerDependencies": {
+    "@zakkster/lite-await": "^1.0.0",
+    "@zakkster/lite-signal": ">=1.5.0-alpha",
+    "@zakkster/lite-stream": "^1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@zakkster/lite-stream": {
+      "optional": true
+    },
+    "@zakkster/lite-await": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@tanstack/query-core": "^5.101.0",
+    "@zakkster/lite-await": "^1.0.0",
+    "@zakkster/lite-signal": ">=1.5.0-alpha",
+    "@zakkster/lite-stream": "^1.0.0"
+  },
+  "overrides": {
+    "@zakkster/lite-await": {
+      "@zakkster/lite-signal": "$@zakkster/lite-signal"
+    },
+    "@zakkster/lite-stream": {
+      "@zakkster/lite-signal": "$@zakkster/lite-signal"
+    }
+  },
+  "author": "Zahary Shinikchiev",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "homepage": "https://github.com/PeshoVurtoleta/lite-query#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PeshoVurtoleta/lite-query.git"
+  },
+  "bugs": {
+    "url": "https://github.com/PeshoVurtoleta/lite-query/issues",
+    "email": "shinikchiev@yahoo.com"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/PeshoVurtoleta"
+  }
+}

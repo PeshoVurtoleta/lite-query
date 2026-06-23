@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>lite-query · streaming</title>
+
+<script type="importmap">
+{
+  "imports": {
+    "@zakkster/lite-signal":      "./vendor/Signal.js",
+    "@zakkster/lite-stream":      "./vendor/lite-stream.js",
+    "@zakkster/lite-await":       "./vendor/lite-await.js",
+    "@zakkster/lite-query":       "../Query.js",
+    "@zakkster/lite-query/stream":"../StreamQuery.js",
+    "@zakkster/lite-query/await": "../Awaitable.js"
+  }
+}
+</script>
+
+<style>
+  :root {
+    --bg: #0a0e1a;
+    --bg-elev: #131829;
+    --bg-elev-2: #1a2138;
+    --border: #1f2845;
+    --border-strong: #2d3a5f;
+    --text: #e8ecf5;
+    --text-muted: #8794b3;
+    --text-dim: #5a6485;
+    --accent: #4dd2c8;
+    --accent-glow: #4dd2c855;
+    --pink: #ec4899;
+    --pink-glow: #ec489955;
+    --amber: #f59e0b;
+    --success: #10b981;
+    --error: #ef4444;
+    --code-bg: #0d1220;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo, monospace;
+    color-scheme: dark;
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background:
+      radial-gradient(1200px 600px at 80% -10%, #16203a 0%, transparent 60%),
+      var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+    min-height: 100dvh;
+  }
+
+  .wrap { max-width: 76rem; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+
+  header.hero { margin-bottom: 1.75rem; }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  h1 {
+    margin: 0.35rem 0 0.5rem;
+    font-size: clamp(1.7rem, 3.4vw, 2.4rem);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+  h1 .dim { color: var(--text-dim); font-weight: 400; }
+  .lede { margin: 0; max-width: 56rem; color: var(--text-muted); font-size: 1.02rem; }
+  .lede strong { color: var(--text); font-weight: 600; }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 1fr 19rem;
+    gap: 1.25rem;
+    align-items: start;
+    margin-top: 1.5rem;
+  }
+  @media (max-width: 56rem) { .layout { grid-template-columns: 1fr; } }
+
+  nav#tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-bottom: 1rem;
+  }
+  nav#tabs button {
+    appearance: none;
+    border: 1px solid var(--border);
+    background: var(--bg-elev);
+    color: var(--text-muted);
+    font: inherit;
+    font-size: 0.86rem;
+    padding: 0.5rem 0.85rem;
+    border-radius: 0.55rem;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+  }
+  @media (hover: hover) {
+    nav#tabs button:hover { color: var(--text); border-color: var(--border-strong); }
+  }
+  nav#tabs button.active {
+    color: var(--bg);
+    background: var(--accent);
+    border-color: var(--accent);
+    font-weight: 600;
+  }
+
+  .scene { display: none; }
+  .scene.active { display: block; }
+
+  .card {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 0.85rem;
+    padding: 1.25rem;
+  }
+  .card + .card { margin-top: 1rem; }
+  .card h2 { margin: 0 0 0.25rem; font-size: 1.12rem; letter-spacing: -0.01em; }
+  .card p.desc { margin: 0 0 1rem; color: var(--text-muted); font-size: 0.92rem; }
+
+  .scope {
+    width: 100%;
+    height: 13rem;
+    display: block;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 0.6rem;
+  }
+
+  .readouts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+    gap: 0.6rem;
+    margin-top: 1rem;
+  }
+  .ro {
+    background: var(--bg-elev-2);
+    border: 1px solid var(--border);
+    border-radius: 0.55rem;
+    padding: 0.6rem 0.7rem;
+  }
+  .ro .k { font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); }
+  .ro .v { font-family: var(--mono); font-size: 1.35rem; font-variant-numeric: tabular-nums; margin-top: 0.15rem; }
+  .ro .v.accent { color: var(--accent); }
+  .ro .v.pink { color: var(--pink); }
+  .ro .v.amber { color: var(--amber); }
+
+  .controls { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1.1rem; }
+  button.btn {
+    appearance: none;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-elev-2);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.85rem;
+    padding: 0.5rem 0.95rem;
+    border-radius: 0.5rem;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s, opacity 0.15s;
+  }
+  @media (hover: hover) { button.btn:hover { border-color: var(--accent); } }
+  button.btn.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
+  button.btn.pink { border-color: var(--pink); }
+  button.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    border: 1px solid var(--border-strong);
+    color: var(--text-muted);
+  }
+  .badge::before { content: ""; width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--text-dim); }
+  .badge[data-s="pending"]   { color: var(--amber); border-color: var(--amber); }
+  .badge[data-s="pending"]::before   { background: var(--amber); }
+  .badge[data-s="streaming"] { color: var(--accent); border-color: var(--accent); }
+  .badge[data-s="streaming"]::before { background: var(--accent); box-shadow: 0 0 8px var(--accent-glow); animation: pulse 1.1s ease-in-out infinite; }
+  .badge[data-s="success"]   { color: var(--success); border-color: var(--success); }
+  .badge[data-s="success"]::before   { background: var(--success); }
+  .badge[data-s="error"]     { color: var(--error); border-color: var(--error); }
+  .badge[data-s="error"]::before     { background: var(--error); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+  .feed {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    border: 1px solid var(--border);
+    border-radius: 0.6rem;
+    overflow: hidden;
+    background: var(--code-bg);
+  }
+  .feed li {
+    display: flex;
+    gap: 0.7rem;
+    padding: 0.45rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .feed li:last-child { border-bottom: 0; }
+  .feed li:nth-child(odd) { background: #0b1020; }
+  .feed .t { color: var(--text-dim); }
+  .feed .lvl { width: 3.4rem; }
+  .feed .lvl.info { color: var(--accent); }
+  .feed .lvl.warn { color: var(--amber); }
+  .feed .lvl.err  { color: var(--error); }
+  .feed .msg { color: var(--text-muted); }
+  .feed.empty { display: grid; place-items: center; height: 8rem; color: var(--text-dim); }
+
+  .log {
+    margin: 1rem 0 0;
+    padding: 0.6rem 0.8rem;
+    list-style: none;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 0.6rem;
+    max-height: 9rem;
+    overflow-y: auto;
+  }
+  .log li { padding: 0.12rem 0; color: var(--text-muted); }
+  .log li .ts { color: var(--text-dim); margin-right: 0.6rem; }
+  .log li .ev { color: var(--accent); }
+  .log li .ev.warn { color: var(--amber); }
+
+  aside.side { position: sticky; top: 1.25rem; display: grid; gap: 1rem; }
+  .side .card { padding: 1rem; }
+  .side h3 {
+    margin: 0 0 0.7rem;
+    font-size: 0.72rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .kv { display: flex; justify-content: space-between; gap: 1rem; font-size: 0.84rem; padding: 0.2rem 0; }
+  .kv .key { color: var(--text-muted); }
+  .kv .val { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--text); }
+  .kv .val.key-name { color: var(--accent); }
+
+  /* status state diagram */
+  .diagram { width: 100%; height: auto; display: block; margin-top: 0.2rem; }
+  .diagram .node circle { fill: var(--bg-elev-2); stroke: var(--border-strong); stroke-width: 1.5; transition: stroke 0.2s, fill 0.2s; }
+  .diagram .node text { fill: var(--text-dim); font-family: var(--mono); font-size: 9px; transition: fill 0.2s; }
+  .diagram .edge { stroke: var(--border-strong); stroke-width: 1.4; fill: none; marker-end: url(#ah); }
+  .diagram .node.active circle { fill: #0d2b2a; stroke: var(--accent); }
+  .diagram .node.active text { fill: var(--accent); }
+  .diagram .node.term-ok.active circle { stroke: var(--success); fill: #0c241c; }
+  .diagram .node.term-ok.active text { fill: var(--success); }
+  .diagram .node.term-err.active circle { stroke: var(--error); fill: #2a1414; }
+  .diagram .node.term-err.active text { fill: var(--error); }
+
+  .note {
+    margin-top: 0.9rem;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    border-left: 2px solid var(--border-strong);
+    padding-left: 0.7rem;
+  }
+  .note code { font-family: var(--mono); color: var(--text-muted); }
+  a { color: var(--accent); }
+  .foot { margin-top: 2rem; color: var(--text-dim); font-size: 0.8rem; }
+  .foot code { font-family: var(--mono); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="hero">
+    <div class="eyebrow">@zakkster/lite-query · /stream</div>
+    <h1>Streaming queries <span class="dim">— chunks in, reactive UI out</span></h1>
+    <p class="lede">
+      A chunked source — SSE frames, websocket messages, a paginated cursor — pumped through
+      <strong>lite-stream</strong> into the same <strong>lite-query</strong> cache a fetch query uses, driving the
+      UI at <strong>60&nbsp;fps</strong> with <strong>zero extra signals allocated</strong> and nothing concatenated on the hot path.
+      The latest value lands in the entry's own <code style="font-family:var(--mono)">data</code> signal; the entry stays monomorphic;
+      teardown closes the connection.
+    </p>
+  </header>
+
+  <div class="layout">
+    <main>
+      <nav id="tabs">
+        <button data-scene="latest" class="active">Latest · live telemetry</button>
+        <button data-scene="buffer">Buffer · event feed</button>
+        <button data-scene="life">Lifecycle · detach &amp; invalidate</button>
+      </nav>
+
+      <!-- Scene 1: latest -->
+      <section class="scene active" data-scene="latest">
+        <div class="card">
+          <h2>Latest mode — a 60 fps signal feed</h2>
+          <p class="desc">
+            The source yields one sample per animation frame. In <code style="font-family:var(--mono)">latest</code> mode each
+            frame is a single write into the entry's <code style="font-family:var(--mono)">data</code> signal — the
+            transform returns the raw value, allocating nothing. The trace below is plotted from a pre-allocated
+            <code style="font-family:var(--mono)">Float64Array</code> ring; watch the heap readout stay flat while it runs.
+          </p>
+          <canvas id="scope" class="scope" width="900" height="280"></canvas>
+          <div class="readouts">
+            <div class="ro"><div class="k">status</div><div class="v"><span id="lat-badge" class="badge" data-s="idle">idle</span></div></div>
+            <div class="ro"><div class="k">latest value</div><div id="lat-val" class="v accent">—</div></div>
+            <div class="ro"><div class="k">frames ingested</div><div id="lat-count" class="v">0</div></div>
+            <div class="ro"><div class="k">throughput</div><div id="lat-rate" class="v amber">0 / s</div></div>
+          </div>
+          <p class="note">
+            Switching tabs unmounts this scene's reader. With no observers left, the stream is aborted
+            (<code>iterator.return()</code>) and the entry is GC-scheduled — lazy in, clean out.
+          </p>
+        </div>
+      </section>
+
+      <!-- Scene 2: buffer -->
+      <section class="scene" data-scene="buffer">
+        <div class="card">
+          <h2>Buffer mode — a bounded sliding window</h2>
+          <p class="desc">
+            The source emits log events. In <code style="font-family:var(--mono)">buffer</code> mode the entry holds a
+            window of the most recent <code style="font-family:var(--mono)">maxBuffer</code> values; once it fills, each new
+            event drops the oldest and bumps <code style="font-family:var(--mono)">droppedCount</code>. Memory is bounded by the
+            window, not by stream length.
+          </p>
+          <ul id="feed" class="feed empty"><li>waiting for events…</li></ul>
+          <div class="readouts">
+            <div class="ro"><div class="k">status</div><div class="v"><span id="buf-badge" class="badge" data-s="idle">idle</span></div></div>
+            <div class="ro"><div class="k">window size</div><div id="buf-size" class="v accent">0 / 8</div></div>
+            <div class="ro"><div class="k">received</div><div id="buf-count" class="v">0</div></div>
+            <div class="ro"><div class="k">dropped</div><div id="buf-dropped" class="v pink">0</div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Scene 3: lifecycle -->
+      <section class="scene" data-scene="life">
+        <div class="card">
+          <h2>Lifecycle — detach closes it, invalidate restarts it</h2>
+          <p class="desc">
+            A stream is lazy: nothing connects until a reader subscribes. The last reader leaving aborts the
+            iterator and resets the entry to idle; <code style="font-family:var(--mono)">invalidate</code> aborts the live
+            connection and re-establishes a fresh one (the count resets).
+          </p>
+          <div class="readouts" style="grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));">
+            <div class="ro"><div class="k">connection</div><div class="v"><span id="life-badge" class="badge" data-s="idle">closed</span></div></div>
+            <div class="ro"><div class="k">ticks this session</div><div id="life-count" class="v accent">0</div></div>
+            <div class="ro"><div class="k">last value</div><div id="life-val" class="v">—</div></div>
+          </div>
+          <div class="controls">
+            <button id="life-sub" class="btn primary">Subscribe</button>
+            <button id="life-unsub" class="btn" disabled>Unsubscribe</button>
+            <button id="life-inval" class="btn pink" disabled>Invalidate (restart)</button>
+          </div>
+          <ul id="life-log" class="log"><li><span class="ts">—</span>idle. press subscribe to open a connection.</li></ul>
+          <p class="note">
+            Open this page in a second tab and press <strong>Invalidate</strong>: the client broadcasts the invalidation,
+            and every tab observing this key reconnects its own stream. (In 1.1.0 the data itself does not cross tabs —
+            each tab owns its connection; shared connections are 1.2.)
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <aside class="side">
+      <div class="card">
+        <h3>Cache entry</h3>
+        <div class="kv"><span class="key">key</span><span id="insp-key" class="val key-name">—</span></div>
+        <div class="kv"><span class="key">status</span><span id="insp-status" class="val">idle</span></div>
+        <div class="kv"><span class="key">mode</span><span id="insp-mode" class="val">—</span></div>
+        <div class="kv"><span class="key">count</span><span id="insp-count" class="val">0</span></div>
+        <div class="kv"><span class="key">dropped</span><span id="insp-dropped" class="val">0</span></div>
+      </div>
+      <div class="card">
+        <h3>Status machine</h3>
+        <svg class="diagram" viewBox="0 0 240 150" id="diagram" aria-hidden="true">
+          <defs>
+            <marker id="ah" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+              <path d="M0,0 L7,3.5 L0,7 z" fill="var(--border-strong)"></path>
+            </marker>
+          </defs>
+          <path class="edge" d="M40,24 H96"></path>
+          <path class="edge" d="M120,34 V58"></path>
+          <path class="edge" d="M120,82 V106"></path>
+          <path class="edge" d="M138,118 H188"></path>
+          <path class="edge" d="M120,70 H40 V34"></path>
+          <g class="node" data-state="idle"><circle cx="24" cy="24" r="16"></circle><text x="24" y="27" text-anchor="middle">idle</text></g>
+          <g class="node" data-state="pending"><circle cx="120" cy="24" r="16"></circle><text x="120" y="27" text-anchor="middle">pend</text></g>
+          <g class="node" data-state="streaming"><circle cx="120" cy="70" r="17"></circle><text x="120" y="73" text-anchor="middle">strm</text></g>
+          <g class="node term-ok" data-state="success"><circle cx="120" cy="118" r="16"></circle><text x="120" y="121" text-anchor="middle">done</text></g>
+          <g class="node term-err" data-state="error"><circle cx="208" cy="118" r="16"></circle><text x="208" y="121" text-anchor="middle">err</text></g>
+        </svg>
+      </div>
+      <div class="card">
+        <h3>Runtime</h3>
+        <div class="kv"><span class="key">JS heap</span><span id="tel-heap" class="val">—</span></div>
+        <div class="kv"><span class="key">total frames</span><span id="tel-frames" class="val">0</span></div>
+        <div class="kv"><span class="key">active readers</span><span id="tel-readers" class="val">0</span></div>
+      </div>
+    </aside>
+  </div>
+
+  <p class="foot">
+    Served from local <code>./vendor</code> (one shared lite-signal 1.5.0-alpha — <code>createRoot</code>) +
+    <code>../Query.js</code> / <code>../StreamQuery.js</code>. Run with <code>npx serve demo</code>.
+  </p>
+</div>
+
+<script type="module">
+import { effect } from "@zakkster/lite-signal";
+import { queryClient } from "@zakkster/lite-query";
+import { streamQuery } from "@zakkster/lite-query/stream";
+
+// ── DOM cache (resolved once at init) ────────────────────────────────────────
+const $tabs      = document.getElementById("tabs");
+const $scenes    = document.querySelectorAll("section.scene");
+const $tabBtns   = $tabs.querySelectorAll("button");
+
+const $scope     = document.getElementById("scope");
+const $ctx       = $scope.getContext("2d");
+const $latBadge  = document.getElementById("lat-badge");
+const $latVal    = document.getElementById("lat-val");
+const $latCount  = document.getElementById("lat-count");
+const $latRate   = document.getElementById("lat-rate");
+
+const $feed      = document.getElementById("feed");
+const $bufBadge  = document.getElementById("buf-badge");
+const $bufSize   = document.getElementById("buf-size");
+const $bufCount  = document.getElementById("buf-count");
+const $bufDrop   = document.getElementById("buf-dropped");
+
+const $lifeBadge = document.getElementById("life-badge");
+const $lifeCount = document.getElementById("life-count");
+const $lifeVal   = document.getElementById("life-val");
+const $lifeSub   = document.getElementById("life-sub");
+const $lifeUnsub = document.getElementById("life-unsub");
+const $lifeInval = document.getElementById("life-inval");
+const $lifeLog   = document.getElementById("life-log");
+
+const $inspKey   = document.getElementById("insp-key");
+const $inspStat  = document.getElementById("insp-status");
+const $inspMode  = document.getElementById("insp-mode");
+const $inspCount = document.getElementById("insp-count");
+const $inspDrop  = document.getElementById("insp-dropped");
+
+const $telHeap   = document.getElementById("tel-heap");
+const $telFrames = document.getElementById("tel-frames");
+const $telReaders= document.getElementById("tel-readers");
+const $diagNodes = document.querySelectorAll("#diagram .node");
+
+// ── constants ────────────────────────────────────────────────────────────────
+const TAU       = Math.PI * 2;
+const RING_BITS = 9;
+const RING_SIZE = 1 << RING_BITS;       // 512
+const RING_MASK = RING_SIZE - 1;
+const BUF_WINDOW = 8;
+const TEXT_MASK = 7;                    // throttle textContent ~ every 8th frame (~7.5 Hz @ 60fps)
+
+// ── shared client (crossTab so invalidate propagates between tabs) ───────────
+const qc = queryClient({
+  defaultStaleTime: 0,
+  defaultCacheTime: 30_000,
+  crossTab: true,
+  crossTabChannel: "lite-query-stream-demo",
+});
+
+// telemetry shared across scenes
+let totalFrames = 0;
+let activeReaders = 0;
+
+// active stream descriptor drives the sidebar inspector + status diagram
+let inspKeyName = "—";
+let inspMode = "—";
+
+function setBadge(el, status) {
+  el.dataset.s = status;
+  el.textContent = status;
+}
+function setDiagram(status) {
+  for (let i = 0; i < $diagNodes.length; i++) {
+    const n = $diagNodes[i];
+    if (n.dataset.state === status) n.classList.add("active");
+    else n.classList.remove("active");
+  }
+}
+function setInspector(status, count, dropped) {
+  $inspKey.textContent = inspKeyName;
+  $inspMode.textContent = inspMode;
+  $inspStat.textContent = status;
+  $inspCount.textContent = count;
+  $inspDrop.textContent = dropped;
+  setDiagram(status);
+}
+
+// ── scene 1: latest-mode telemetry ───────────────────────────────────────────
+const ring = new Float64Array(RING_SIZE);   // pre-allocated, zero per-frame alloc
+let ringHead = 0;
+let ringFilled = 0;
+let latFrameTick = 0;
+
+const frame = () => new Promise((r) => requestAnimationFrame(r));
+
+async function* telemetrySource({ signal }) {
+  let t = 0;
+  try {
+    while (!signal.aborted) {
+      await frame();
+      t += 0.05;
+      // a synthesized "live signal": two sines + a little noise, in [0,100]
+      const v = 50
+        + 30 * Math.sin(t)
+        + 12 * Math.sin(t * 2.7 + 0.6)
+        + (Math.random() - 0.5) * 6;
+      yield v;
+    }
+  } finally { /* generator closed on abort-on-detach */ }
+}
+
+const latSq = streamQuery(qc, { key: ["telemetry"], stream: telemetrySource, mode: "latest" });
+
+function drawScope() {
+  const w = $scope.width;
+  const h = $scope.height;
+  $ctx.clearRect(0, 0, w, h);
+
+  // grid
+  $ctx.strokeStyle = "#16203a";
+  $ctx.lineWidth = 1;
+  $ctx.beginPath();
+  for (let x = 0; x <= w; x += 60) { $ctx.moveTo(x, 0); $ctx.lineTo(x, h); }
+  for (let y = 0; y <= h; y += 40) { $ctx.moveTo(0, y); $ctx.lineTo(w, y); }
+  $ctx.stroke();
+
+  if (ringFilled === 0) return;
+
+  // plot the most recent `count` samples across the width
+  const count = ringFilled < RING_SIZE ? ringFilled : RING_SIZE;
+  const span = count > 1 ? count - 1 : 1;
+  $ctx.strokeStyle = "#4dd2c8";
+  $ctx.lineWidth = 2;
+  $ctx.beginPath();
+  for (let i = 0; i < count; i++) {
+    const idx = (ringHead - count + i) & RING_MASK;
+    const val = ring[idx];
+    const x = (i / span) * w;
+    const y = h - (val / 100) * h;
+    if (i === 0) $ctx.moveTo(x, y); else $ctx.lineTo(x, y);
+  }
+  $ctx.stroke();
+
+  // leading dot
+  const lastIdx = (ringHead - 1) & RING_MASK;
+  const ly = h - (ring[lastIdx] / 100) * h;
+  $ctx.fillStyle = "#4dd2c8";
+  $ctx.beginPath();
+  $ctx.arc(w - 1, ly, 3, 0, TAU);
+  $ctx.fill();
+}
+
+// throughput tracking (sampled in the telemetry interval, not the hot path)
+let latLastCount = 0;
+let latRatePerSec = 0;
+
+function renderLatest() {
+  const v = latSq.data();                 // reactive: re-runs each frame
+  const status = latSq.status();
+  if (typeof v === "number") {
+    ring[ringHead & RING_MASK] = v;
+    ringHead = (ringHead + 1) & RING_MASK;
+    if (ringFilled < RING_SIZE) ringFilled++;
+    totalFrames++;
+  }
+  drawScope();
+
+  // text updates throttled to ~10 Hz
+  latFrameTick = (latFrameTick + 1) | 0;
+  if ((latFrameTick & TEXT_MASK) === 0) {
+    setBadge($latBadge, status);
+    if (typeof v === "number") $latVal.textContent = v.toFixed(1);
+    const c = latSq.count();
+    $latCount.textContent = c;
+    $latRate.textContent = latRatePerSec + " / s";
+    setInspector(status, c, latSq.droppedCount());
+  }
+}
+
+// ── scene 2: buffer-mode event feed ──────────────────────────────────────────
+const LEVELS = ["info", "info", "info", "warn", "info", "err", "info", "warn"];
+let evtSeq = 0;
+
+async function* logSource({ signal }) {
+  try {
+    while (!signal.aborted) {
+      await new Promise((r) => setTimeout(r, 280));
+      if (signal.aborted) return;
+      evtSeq++;
+      const level = LEVELS[evtSeq % LEVELS.length];
+      yield {
+        seq: evtSeq,
+        t: new Date().toLocaleTimeString("en-GB", { hour12: false }),
+        level,
+        msg: level === "err"
+          ? "upstream timeout, retrying"
+          : level === "warn"
+            ? "cache miss, cold read"
+            : "request served " + (80 + ((evtSeq * 7) % 120)) + "ms",
+      };
+    }
+  } finally { /* closed on detach */ }
+}
+
+const bufSq = streamQuery(qc, { key: ["events"], stream: logSource, mode: "buffer", maxBuffer: BUF_WINDOW });
+
+function renderBuffer() {
+  const win = bufSq.data();               // reactive: the windowed array
+  const status = bufSq.status();
+  setBadge($bufBadge, status);
+
+  if (Array.isArray(win) && win.length > 0) {
+    $feed.classList.remove("empty");
+    // rebuild the feed (fires ~3.5 Hz — not a hot path)
+    let html = "";
+    for (let i = win.length - 1; i >= 0; i--) {
+      const e = win[i];
+      html += '<li><span class="t">' + e.t + '</span>'
+        + '<span class="lvl ' + e.level + '">' + e.level.toUpperCase() + "</span>"
+        + '<span class="msg">' + e.msg + "</span></li>";
+    }
+    $feed.innerHTML = html;
+    $bufSize.textContent = win.length + " / " + BUF_WINDOW;
+  }
+  const c = bufSq.count();
+  $bufCount.textContent = c;
+  $bufDrop.textContent = bufSq.droppedCount();
+  setInspector(status, c, bufSq.droppedCount());
+}
+
+// ── scene 3: lifecycle ───────────────────────────────────────────────────────
+let lifeSeq = 0;
+
+async function* heartbeatSource({ signal }) {
+  logLife("connection opened", false);
+  try {
+    while (!signal.aborted) {
+      await new Promise((r) => setTimeout(r, 150));
+      if (signal.aborted) return;
+      lifeSeq++;
+      yield lifeSeq;
+    }
+  } finally {
+    logLife("connection closed", true);
+  }
+}
+
+const lifeSq = streamQuery(qc, { key: ["heartbeat"], stream: heartbeatSource, mode: "latest" });
+
+function logLife(ev, warn) {
+  const li = document.createElement("li");
+  const ts = new Date().toLocaleTimeString("en-GB", { hour12: false });
+  li.innerHTML = '<span class="ts">' + ts + '</span><span class="ev' + (warn ? " warn" : "") + '">' + ev + "</span>";
+  $lifeLog.prepend(li);
+  while ($lifeLog.children.length > 24) $lifeLog.lastChild.remove();
+}
+
+function renderLife() {
+  const v = lifeSq.data();
+  const status = lifeSq.status();
+  setBadge($lifeBadge, status === "streaming" ? "streaming" : status);
+  $lifeBadge.textContent = status === "streaming" ? "open" : status === "idle" ? "closed" : status;
+  if (typeof v === "number") $lifeVal.textContent = "#" + v;
+  $lifeCount.textContent = lifeSq.count();
+  setInspector(status, lifeSq.count(), lifeSq.droppedCount());
+}
+
+let lifeStop = null;
+$lifeSub.addEventListener("click", () => {
+  if (lifeStop) return;
+  inspKeyName = '["heartbeat"]'; inspMode = "latest";
+  lifeStop = effect(renderLife);
+  activeReaders++;
+  $lifeSub.disabled = true;
+  $lifeUnsub.disabled = false;
+  $lifeInval.disabled = false;
+});
+$lifeUnsub.addEventListener("click", () => {
+  if (!lifeStop) return;
+  lifeStop(); lifeStop = null;     // detach -> abort-on-detach
+  activeReaders--;
+  $lifeSub.disabled = false;
+  $lifeUnsub.disabled = true;
+  $lifeInval.disabled = true;
+});
+$lifeInval.addEventListener("click", () => {
+  logLife("invalidate -> restart", false);
+  qc.invalidate(["heartbeat"]);    // aborts + re-establishes; propagates cross-tab
+});
+
+// ── scene switching: mount the active reader, unmount the rest ───────────────
+const scenes = {
+  latest: { render: renderLatest, key: '["telemetry"]', mode: "latest", stop: null },
+  buffer: { render: renderBuffer, key: '["events"]',    mode: "buffer", stop: null },
+  life:   { manual: true },
+};
+let current = "latest";
+
+function mount(name) {
+  const s = scenes[name];
+  if (s.manual || s.stop) return;
+  inspKeyName = s.key; inspMode = s.mode;
+  s.stop = effect(s.render);       // first accessor read subscribes -> stream starts
+  activeReaders++;
+}
+function unmount(name) {
+  const s = scenes[name];
+  if (s.manual || !s.stop) return;
+  s.stop(); s.stop = null;         // detach -> abort -> iterator.return()
+  activeReaders--;
+}
+
+function activate(name) {
+  if (name === current) return;
+  unmount(current);
+  // tearing down scene 3's subscription too when leaving it
+  if (current === "life" && lifeStop) { lifeStop(); lifeStop = null; activeReaders--; $lifeSub.disabled = false; $lifeUnsub.disabled = true; $lifeInval.disabled = true; }
+  current = name;
+
+  for (let i = 0; i < $scenes.length; i++) {
+    const el = $scenes[i];
+    if (el.dataset.scene === name) el.classList.add("active");
+    else el.classList.remove("active");
+  }
+  for (let i = 0; i < $tabBtns.length; i++) {
+    const b = $tabBtns[i];
+    if (b.dataset.scene === name) b.classList.add("active");
+    else b.classList.remove("active");
+  }
+  if (name === "life") { inspKeyName = '["heartbeat"]'; inspMode = "latest"; setInspector("idle", 0, 0); }
+  else mount(name);
+}
+
+for (let i = 0; i < $tabBtns.length; i++) {
+  $tabBtns[i].addEventListener("click", () => activate($tabBtns[i].dataset.scene));
+}
+
+// ── runtime telemetry (heap + throughput), ~2 Hz, off the hot path ───────────
+const hasMem = typeof performance !== "undefined" && performance.memory != null;
+setInterval(() => {
+  if (hasMem) {
+    const mb = performance.memory.usedJSHeapSize / 1048576;
+    $telHeap.textContent = mb.toFixed(1) + " MB";
+  } else {
+    $telHeap.textContent = "n/a (Chrome)";
+  }
+  $telFrames.textContent = totalFrames;
+  $telReaders.textContent = activeReaders;
+
+  // throughput for the latest scene
+  const c = latSq.count();
+  latRatePerSec = Math.max(0, (c - latLastCount) * 2);   // per 500ms -> per second
+  latLastCount = c;
+}, 500);
+
+// ── boot ─────────────────────────────────────────────────────────────────────
+drawScope();
+mount("latest");
+</script>
+</body>
+</html>

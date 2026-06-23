@@ -1,0 +1,74 @@
+{
+  "name": "@zakkster/lite-await",
+  "version": "1.0.0",
+  "description": "Zero-GC bridge between @zakkster/lite-signal and Promise/async-await. Wait for signal values, race multi-source predicates, AbortSignal-first cancellation, bidirectional promise<->signal conversion. The missing async-coordination primitive for the lite-signal ecosystem.",
+  "author": "Zahary Shinikchiev <shinikchiev@yahoo.com>",
+  "license": "MIT",
+  "type": "module",
+  "main": "./Await.js",
+  "module": "./Await.js",
+  "types": "./Await.d.ts",
+  "exports": {
+    ".": {
+      "node": "./Await.js",
+      "import": "./Await.js",
+      "types": "./Await.d.ts",
+      "default": "./Await.js"
+    }
+  },
+  "files": [
+    "Await.js",
+    "Await.d.ts",
+    "README.md",
+    "llms.txt",
+    "LICENSE.txt",
+    "CHANGELOG.md",
+    "ROADMAP.md"
+  ],
+  "scripts": {
+    "test": "node --test --test-reporter=spec",
+    "test:gc": "node --expose-gc --test --test-reporter=spec",
+    "bench": "node --expose-gc bench/bench.mjs",
+    "verify": "npm test && npm run test:gc && npm run bench"
+  },
+  "keywords": [
+    "await",
+    "async",
+    "promise",
+    "signal",
+    "signals",
+    "reactive",
+    "abortcontroller",
+    "abortsignal",
+    "timeout",
+    "all",
+    "any",
+    "race",
+    "zero-gc",
+    "esm",
+    "no-dependencies"
+  ],
+  "homepage": "https://github.com/PeshoVurtoleta/lite-await#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PeshoVurtoleta/lite-await.git"
+  },
+  "bugs": {
+    "url": "https://github.com/PeshoVurtoleta/lite-await/issues",
+    "email": "shinikchiev@yahoo.com"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/PeshoVurtoleta"
+  },
+  "sideEffects": false,
+  "peerDependencies": {
+    "@zakkster/lite-signal": "^1.2.2"
+  },
+  "devDependencies": {
+    "@zakkster/lite-signal": "^1.2.2"
+  }
+}

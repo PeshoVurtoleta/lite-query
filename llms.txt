@@ -1,0 +1,154 @@
+# @zakkster/lite-query
+
+Reactive async cache with cross-tab coherence. Built on @zakkster/lite-signal (>=1.5.0). ~6KB min+gzip core. Framework-agnostic. 152 deterministic tests (120 core incl. zero-GC hot-path contract + 18 await + 15 stream). TypeScript types shipped for every entry point (Query.d.ts, StreamQuery.d.ts, Awaitable.d.ts). Three entry points: `.` (core), `./stream` (streamQuery, optional peer lite-stream), `./await` (async coordination, optional peer lite-await).
+
+## Performance vs @tanstack/query-core (5.101)
+
+Measured Node 22, same fetcher/keys/observer pattern, both libraries running full lookup+observer+cleanup paths. Reproduce: `npm run bench`. Numbers vary ~10-15% run-to-run; the ratios are stable.
+
+- Cold attach → resolve → dispose: ~25k ops/sec, ~1.25× faster than query-core
+- Warm cache hit: ~400k ops/sec, ~1.2× faster (both libraries have tight warm paths)
+- **Invalidate 50 observed queries: ~10k ops/sec, ~3.9× faster, 60-85% less transient memory**
+- **Mutation w/ optimistic + rollback: ~68k ops/sec, ~3.7× faster, ~87% less transient memory**
+- **1000 parallel queries per cycle: ~110 ops/sec, ~2.5× faster, ~70% less transient memory**
+
+Memory: lite-query allocates 4×-10× less per-operation transient memory on the high-allocation scenarios (invalidate, mutation, 1000-parallel) thanks to lite-signal's zero-GC primitives, proper entry-signal disposal on cache removal, and a hoisted-cleanup-closure hot-path optimization (one closure per query(), not per accessor read). Warm reads are within noise of each other. SWR is React-coupled (no framework-agnostic core), excluded from bench.
+
+## What it is
+
+A query/mutation cache layer like TanStack Query or SWR, but signals-based and framework-agnostic. The differentiator is built-in cross-tab cache coherence via BroadcastChannel.
+
+## Public API
+
+### queryClient(options)
+Creates a cache client. Returns { options, getQueryData, setQueryData, invalidate, removeQueries, clear, dispose }.
+
+Options:
+- defaultStaleTime: number (default 0) — ms before cache entries are considered stale
+- defaultCacheTime: number (default 5*60_000) — ms entry kept after last observer leaves
+- defaultTimeout: number (default Infinity) — ms before fetch is aborted with TIMEOUT reason
+- retry: number | (attempt, err) => boolean (default 3)
+- retryDelay: (attempt) => number (default exponential backoff capped at 30s)
+- crossTab: boolean (default false) — opt-in BroadcastChannel propagation
+- crossTabChannel: string (default 'lite-query')
+- now / setTimeout / clearTimeout / broadcastChannel — injectable for tests
+
+### query(qc, opts)
+Creates a reactive query. Returns { data, error, loading, fetching, status, refetch, dispose } — all functions, not properties.
+
+Opts:
+- key: any[] | () => any[] — static or reactive
+- fetcher: async ({ key, signal }) => any
+- staleTime / cacheTime / timeout / retry / retryDelay — per-query overrides
+- enabled: boolean | () => boolean — gate
+- equals: (a, b) => boolean (default Object.is) — opt-in structural sharing
+
+### mutation(qc, opts)
+Creates a mutation. Returns { data, error, loading, status, mutate, reset }.
+
+Opts:
+- fn: async (vars) => any — the mutation itself
+- onMutate: async (vars) => ctx — runs first, return value threaded through
+- onSuccess: async (data, vars, ctx) => void
+- onError: async (err, vars, ctx) => void
+- onSettled: async (data, err, vars, ctx) => void — ALWAYS fires
+
+### streamQuery(qc, opts) — subpath @zakkster/lite-query/stream (optional peer @zakkster/lite-stream)
+Multi-shot sibling of query(): subscribes a cache key to an async iterable (SSE/websocket/cursor/pubsub) instead of a one-shot fetch. Values are pumped via lite-stream pipeToSignal into the SAME cache entry query() uses — getQueryData/invalidate/removeQueries work uniformly. Returns { data, error, status, loading, done, count, droppedCount, restart, dispose }.
+
+Opts:
+- key: any[] | () => any[] — static or reactive (a key change aborts+restarts)
+- stream: ({ key, signal }) => AsyncIterable | AsyncIterator — must stop when signal aborts
+- mode: "latest" (default) | "buffer"
+- maxBuffer: number — required (positive int) when mode is "buffer"
+- enabled: boolean | () => boolean — gate
+- cacheTime: per-entry override
+
+Semantics:
+- status: idle → pending (subscribed, 0 values) → streaming (>=1 value) → success (iterator done) | error. loading()=pending, done()=success.
+- latest mode: data() is the most recent value; one signal write per frame, ZERO allocation (the transform returns the raw value). buffer mode: data() is a sliding window array of the last maxBuffer values; droppedCount() counts values that fell off; one snapshot array allocated per value (accumulation, not the frame hot path).
+- count()/droppedCount() are NON-reactive snapshots — read alongside data() in one effect to see them advance.
+- ZERO extra signals allocated per stream entry: the pump writes the entry's existing data/error/status signals. Uniform stream slots (isStream/streamStop/streamRestart/streamCount/streamDropped) keep the entry monomorphic; a plain query() entry allocates no stream node. Teardown (detach on last observer / removeQueries / clear / GC) calls streamStop → iterator.return(), closing the connection.
+- Lazy + abort-on-detach + reactive-key restart + enabled gate, same as query(). invalidate() aborts and re-establishes the stream. Streaming data does NOT cross tabs in 1.1.0 (each tab owns its connection); only invalidate propagates (all tabs reconnect). One-connection-shared is 1.2.
+
+### @zakkster/lite-query/await (optional peer @zakkster/lite-await)
+Bridges a reactive query to a one-shot promise (imperative flows, route loaders, tests). Re-exports lite-await primitives verbatim (whenSignal, whenTruthy, whenEquals, allOf, anyOf, raceOf, withTimeout, withAbort, fromPromise, TimeoutError) plus two query-native bridges:
+- whenQuery(q, predicate?, opts?) → Promise — resolves with q.data() when predicate(status) is truthy (default status==='success'); rejects with q.error() on error status, or TimeoutError/AbortError per opts {timeout?, signal?}. Overload: whenQuery(q, opts). Works with a streamQuery handle too (e.g. await status==='streaming').
+- whenAllQueries(queries, opts?) → Promise<any[]> — resolves when every query reaches success, data in input order; fail-fast (rejects on first error / timeout / abort).
+
+## Key semantics
+
+- **Lazy query**: no observers reading accessors inside an effect → no fetch. Reading q.data() inside an effect attaches; effect disposal detaches via onCleanup.
+- **Observer refcount**: explicit count per cache entry. Shared observers don't kill fetches when one disposes — fetch continues for the remaining. Count → 0 aborts in-flight + schedules cacheTime GC.
+- **Same-entry watcher re-runs**: if a reactive key produces the same entry on re-run, no detach/re-attach. Prevents thrashing when key fn reads multiple signals.
+- **Mid-flight invalidation**: let-finish + refetch (option b). The in-flight completes, then an immediate refetch fires. Not abort+restart.
+- **Generation guard on fetches AND mutations**: fetchGen + mutationGen prevent stale resolutions from overwriting fresh state.
+- **Mutation phases**: fetch → state update (under gen guard) → side-effect callback (onSuccess/onError, errors contained) → onSettled (always fires).
+- **Abort reasons** on signal.reason: 'lite-query:detach' | 'lite-query:refetch' | 'lite-query:removed' | 'lite-query:timeout'
+
+## Cross-tab cache coherence
+
+Opt-in via crossTab: true. Propagates: setQueryData, invalidate, removeQueries, clear. Does NOT propagate: background fetch results. Echo suppression via processingRemote flag on receiving end. Caveat: setQueryData with large payloads incurs structuredClone cost on every tab — use invalidate for batches.
+
+## Cross-tab fetch deduplication (the unique differentiator)
+
+Opt-in via sharedFetch: true + isLeader: () => boolean (wire from lite-channel's sync.isLeader). Requires crossTab: true and a channel; inert otherwise (each tab fetches independently — safe default).
+
+Mechanism:
+- Follower (isLeader() === false) broadcasts { type: 'fetch-req', key } instead of fetching, shows loading, arms a fallback timer (sharedFetchTimeout, default 3000ms).
+- Leader receives fetch-req, fetches if it has the query alive with a fetcher (dedups via entry.promise), then broadcasts the result via setData. runFetch resolves async so the result-broadcast is NOT suppressed by processingRemote.
+- Leader's OWN observed fetches also broadcast results in sharedFetch mode, so followers observing the same key get them free.
+- setQueryData clears the follower's fetching state + fallback timer (the arriving result fulfils the awaiting follower). Guarded by entry.promise === null so it never clobbers a genuine in-flight fetch.
+- Liveness: if no leader serves within sharedFetchTimeout, the follower self-fetches. Correctness never depends on election state.
+
+Constraint (honest): the leader only fulfils requests for queries it currently has alive (observed or within cacheTime). If GC'd, follower falls back to self-fetch. Dedup benefit is best-effort during leader transitions; correctness is always preserved.
+
+No other query library (TanStack, SWR) ships cross-tab fetch dedup.
+
+## Peer dependencies
+
+@zakkster/lite-signal ^1.1.3 (the reactive primitive)
+@zakkster/lite-store ^1.0.0 (used internally for benches/demo, not in public API)
+@zakkster/lite-channel ^1.0.0 (cross-tab BC patterns)
+
+Optional companion:
+@zakkster/lite-watch-ex (watchOnce / watchUntil / watchEffect) — for composing query state with imperative flows
+
+## What it doesn't do (intentional v1 scope)
+
+- No focus/reconnect revalidation triggers (deferred to 1.x as injectable hooks)
+- No built-in pagination (cookbook recipe instead — keeps the core lean)
+- No devtools (roadmap for 1.x)
+- No SSR hydration (use snapshot/restore from lite-store if needed)
+- No infinite query helper (composition recipe)
+
+## Test approach
+
+120 deterministic tests using:
+- Controlled fetcher (test resolves/rejects manually)
+- Mock clock (now/setTimeout injectable)
+- Mock BroadcastChannel (cross-tab simulated without spawning workers)
+- A zero-GC contract test that locks in the hoisted-cleanup hot-path optimization
+
+See test/harness.js + test/query.test.js + test/edge-cases.test.js + test/zero-gc.test.js. Run `npm run test:gc` to include the zero-GC contract test (auto-skipped under plain `npm test`).
+
+## File map
+
+- Query.js — implementation (~890 lines)
+- Query.d.ts — TypeScript declarations (full surface: QueryClient, Query, Mutation, AbortReason, all option/return interfaces)
+- test/query.test.js — 106 deterministic tests
+- test/harness.js — Mock fetcher, clock, BroadcastChannel
+- bench/bench.mjs — comparative bench vs @tanstack/query-core (run `npm run bench`)
+- README.md — public docs + facts comparison + bench headline
+- QuickStart.md — 5-step intro
+- Cookbook.md — 13 recipes (polling, debounce, pagination, prefetch, optimistic, cross-tab, dependent queries, etc.)
+- CHANGELOG.md — version history
+- demo/index.html — interactive showcase with cross-tab demo
+
+## Pool discipline
+
+Each cache entry uses 4 lite-signal nodes (data, error, status, fetching); each `query()` adds 1 (currentEntry); each `mutation()` adds 3. All are released back to lite-signal's pool on entry removal / query.dispose() / mutation.dispose(). Apps with thousands of CONCURRENT live queries can install a grow-policy registry if they exceed the default 1024-node cap; typical apps (dozens of concurrent queries) don't need this.
+
+## Design philosophy
+
+Brand promise: zero-GC, lazy allocation, honest benchmarks, lean API, single-purpose. Lite-query inherits these from the rest of the @zakkster/* family. The cross-tab feature is the unique differentiator — TanStack Query/SWR don't ship this and require manual plugins.
