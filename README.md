@@ -11,7 +11,7 @@ Reactive async cache with cross-tab coherence. Built on `@zakkster/lite-signal`.
 ![TypeScript](https://img.shields.io/badge/TypeScript-Types-informational?style=flat-square)
 [![lite-signal peer](https://img.shields.io/npm/dependency-version/@zakkster/lite-query/peer/@zakkster/lite-signal?style=for-the-badge&color=blue)](https://github.com/PeshoVurtoleta/lite-signal)
 ![Dependencies](https://img.shields.io/badge/runtime%20deps-0-brightgreen?style=flat-square)
-[![license](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE.txt)
+[![license](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 
 **~3.9× faster on invalidate, ~3.7× faster on mutations, ~2.5× faster at 1000-concurrent-query scaling, with up to 10× less transient memory** vs `@tanstack/query-core` ([see Performance](#performance)). Cross-tab cache coherence and cross-tab fetch dedup built in.
 
@@ -87,10 +87,10 @@ Reproduce: `npm install && npm run bench` (Node 18+, includes warmup, transient 
 ## Install
 
 ```sh
-npm install @zakkster/lite-query @zakkster/lite-signal @zakkster/lite-store @zakkster/lite-channel
+npm install @zakkster/lite-query @zakkster/lite-signal
 ```
 
-Three peer dependencies. They're all in the same family and play together by design. See [Ecosystem](#ecosystem) below for what each one does and why.
+One required peer dependency: `@zakkster/lite-signal` (`^1.5.0` -- the query and stream watchers use `createRoot`).
 
 Two subpath entry points are **optional** and pull one extra peer each, only if you use them:
 
@@ -99,7 +99,7 @@ npm install @zakkster/lite-stream   # for @zakkster/lite-query/stream
 npm install @zakkster/lite-await    # for @zakkster/lite-query/await
 ```
 
-The core (`@zakkster/lite-query`) does not import either, so core-only installs see no extra requirement and no peer warnings. lite-query 1.1.0 requires `@zakkster/lite-signal >= 1.5.0` (the query/stream watcher uses `createRoot`).
+The core (`@zakkster/lite-query`) imports neither, so core-only installs see no extra requirement and no peer warnings. The rest of the `@zakkster/*` family composes with lite-query -- see [Ecosystem](#ecosystem) below -- but nothing else is required.
 
 ## Quick taste
 
@@ -146,7 +146,7 @@ const updateUser = mutation(qc, {
 await updateUser.mutate({ id: 1, name: 'Zahary' });
 ```
 
-For more, see [QuickStart.md](./QuickStart.md) and [Cookbook.md](./Cookbook.md).
+For more, see [QuickStart.md](https://github.com/PeshoVurtoleta/lite-query/blob/main/QuickStart.md) and [Cookbook.md](https://github.com/PeshoVurtoleta/lite-query/blob/main/Cookbook.md).
 
 ## Core concepts
 
@@ -334,15 +334,16 @@ If you're new to the family, start with lite-signal — every other library here
 npm test
 ```
 
-152 deterministic tests. Run output:
+153 deterministic tests. Run output:
 
 ```
 # tests 153
-# pass 152
+# pass 153
 # fail 0
+# skipped 0
 ```
 
-The core suite (120, incl. one pre-existing skip) uses a controlled fetcher, mock clock, and mock `BroadcastChannel` so every test is deterministic — no real timers, no real network. The optional entry points add 18 (`/await`) and 15 (`/stream`) tests, the latter driving a manually-pumped async iterator through every termination path. See `test/harness.js` for the mocks.
+The core suite (120) uses a controlled fetcher, mock clock, and mock `BroadcastChannel` so every test is deterministic -- no real timers, no real network. The optional entry points add 18 (`/await`) and 15 (`/stream`) tests, the latter driving a manually-pumped async iterator through every termination path. See `test/harness.js` for the mocks.
 
 ## Browser support
 

@@ -5,7 +5,75 @@ All notable changes to `@zakkster/lite-query` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.0] — Unreleased
+## [1.1.1] -- 2026-08-31
+
+A gates-and-truth patch. No runtime code changed -- no `.js` source file is
+touched by this release. The diff is scripts, metadata, docs, and the torture
+suite that was written but never committed.
+
+### Fixed
+
+- **The default test gate now runs the zero-GC identity test.** `npm test`
+  was `node --test test/*.test.js`, while `test/zero-gc.test.js` gates itself
+  on `--expose-gc` -- so every run printed `skipped 1` and the package's
+  headline claim went unexercised. The script is now
+  `node --expose-gc --test test/*.test.js`: 153 pass, 0 fail, 0 skipped. The
+  README Tests section is updated to match.
+- **The README install section now matches the manifest.** It listed
+  `@zakkster/lite-store` and `@zakkster/lite-channel` as two of "three peer
+  dependencies". Neither is a peer: the manifest declares
+  `@zakkster/lite-signal` (required) plus `@zakkster/lite-stream` and
+  `@zakkster/lite-await` (optional, reached only through the `/stream` and
+  `/await` subpaths), and `Query.js` imports only `lite-signal`. The
+  Ecosystem section keeps the cross-reference -- those packages compose with
+  lite-query, they are not required by it.
+- **llms.txt's peer block told a consumer to install a signal version on
+  which `/stream` cannot run.** It said `@zakkster/lite-signal ^1.1.3` (the
+  real floor is `^1.5.0`; the query/stream watchers use `createRoot`, which
+  does not exist in 1.1.x) and repeated the lite-store / lite-channel peer
+  claim. The block now mirrors `package.json` name-for-name.
+- **llms.txt's headline test count disagreed with its own breakdown** ("152
+  deterministic tests" vs a parenthetical summing to 153). It counted passes
+  under the gate that skipped one test; both now say 153.
+- **Dead documentation links in the published tarball.** The README pointed
+  at `./QuickStart.md` and `./Cookbook.md`; `files[]` ships neither, so both
+  links were broken on the npm page. Both now point at absolute GitHub blob
+  URLs on `main`. Decision: link out now rather than ship the files, because
+  QuickStart.md still documents the 1.0 surface; the ship-in-tarball decision
+  is deferred until it is refreshed. Rejected alternative -- adding
+  Cookbook.md to `files[]` immediately: it would leave the two links
+  inconsistent for a release with no reader benefit. The license badge also
+  pointed at `LICENSE.txt`; the file is `LICENSE`.
+- **The `[1.1.0]` heading carried no release date** in the tarball npm serves
+  as `latest` -- it still claimed the shipped version was pending. It is now
+  stamped with its actual publish date (2026-06-23).
+
+### Changed
+
+- **Peer floor stabilized.** `@zakkster/lite-signal` moves from
+  `>=1.5.0-alpha` to `^1.5.0` in both `peerDependencies` and
+  `devDependencies`. 1.5.0 stable is published; README and llms.txt already
+  said `>= 1.5.0`.
+
+### Added
+
+- **Torture suite landed** under `bench/torture/`: `query-soak.mjs`
+  (cache-lifecycle churn), `cache-fuzzer.mjs` (two-tab coherence including
+  streamQuery handles), `shared-fetch-soak.mjs` (leader/follower dedup under
+  churn), plus the `torture`, `torture:soak`, `torture:fuzz` and
+  `torture:shared` scripts. Seeded PRNG (`TORTURE_SEED`), deterministic mock
+  clock and mock `BroadcastChannel`, and hard invariants: zero errors, entry
+  map drains, no dangling timers, signal registry back to baseline
+  (`activeLinks === 0`), exit 1 on any violation. `npm run torture` ->
+  3x PASS, exit 0.
+- **`prepublishOnly`: `npm test && npm run torture`** -- the gate is now
+  structurally in front of every publish, not a step someone remembers.
+- **`.gitignore`** (`node_modules/`, `*.tgz`, `package-lock.json` --
+  re-affirming the repo's deliberate no-lockfile stance). Its absence let a
+  partial `node_modules` survive in the tree; every test file failed with
+  `ERR_MODULE_NOT_FOUND` until `npm install`.
+
+## [1.1.0] -- 2026-06-23
 
 Integration release: **streaming queries** (via `@zakkster/lite-stream`) and
 **async coordination** (via `@zakkster/lite-await`). The core `@zakkster/lite-query`
