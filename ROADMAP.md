@@ -695,9 +695,15 @@ TASKS
     container open and each entry parses on first observer attach instead
     of one monolithic JSON.parse over the whole dehydrated cache. Store is
     IndexedDB/CacheStorage Blobs (LBK1 is bytes; localStorage would pay a
-    base64 tax). Task: MEASURE the JSON-vs-bake crossover size and print
-    the number in the recipe -- below it plain JSON wins, and the recipe
-    says so. Discipline unchanged: lite-query keeps zero runtime deps;
+    base64 tax). Floors (cross-repo, scheduled 2026-08-31): the recipe
+    requires bake-stream's M2 release or later -- its BS-06 means an
+    unpatched PreserveReader can hand back short bytes from corrupted
+    storage instead of refusing at open, and a persistence adapter must
+    fail closed to fresh-fetch. The JSON-vs-bake crossover number is
+    measured ONCE, by bake-stream's MQ2 session (see
+    ../LiteBakeStream/ROADMAP.md), and this recipe cites it -- below the
+    crossover the recipe says "use plain JSON", in those words.
+    Discipline unchanged: lite-query keeps zero runtime deps;
     bake lives entirely in the caller-wired adapter thunks (an
     optional-peer subpath only if a real consumer demands it, per the
     /stream and /await precedent).
@@ -939,7 +945,13 @@ scripts; Q4 onward: the law harness). No gate output is a FAIL.
   via HTTP Range + zone-map pruning, no full download; (2) `ingestStream`'s
   `onProgress` as a `streamQuery` source -- reactive ingest-progress UI in
   ~10 lines. Recipe-grade, zero core change; candidates to ride Q5 or Q6's
-  docs pass. Explicitly NOT for the hot cache path: entries hold live
+  docs pass. Bake-stream's side is scheduled (2026-08-31) as sessions MQ1
+  and MQ2 in ../LiteBakeStream/ROADMAP.md: recipe (1) requires MQ1's
+  v1.4.0 (abortable range reads -- probed: its RangeAdapter contract has
+  no AbortSignal today, and streamQuery's abort-on-detach law cannot
+  compose with an uncancellable reader); the persistence recipe's
+  conformance suite and crossover number are MQ2's v1.4.1. Explicitly NOT
+  for the hot cache path: entries hold live
   values read by signals, and a serialize/deserialize toll between a
   signal read and its data would break law 4 -- bake belongs at
   boundaries (disk, network, boot).
