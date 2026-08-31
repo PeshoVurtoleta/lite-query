@@ -86,7 +86,7 @@ function streamQuery(qc, streamOpts) {
 
     const { ensureEntry, attach, detach, opts } = qc._internal;
 
-    // ── stream pump ─────────────────────────────────────────────────────────
+    // -- stream pump ---------------------------------------------------------
     // Pumps the iterator into entry.data via pipeToSignal. Aborts and restarts
     // any existing pump first (used by restart() / invalidate). Writes status
     // transitions into the entry's existing status/error signals; tracks count
@@ -168,7 +168,7 @@ function streamQuery(qc, streamOpts) {
         return false;
     }
 
-    // ── observer / watcher (mirrors query(); see Query.js for the rationale) ──
+    // -- observer / watcher (mirrors query(); see Query.js for the rationale) --
     const currentEntry = signal(null);
     let watcher = null;
     let attachedEntry = null;

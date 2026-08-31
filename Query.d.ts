@@ -1,5 +1,5 @@
 /**
- * @zakkster/lite-query — type declarations
+ * @zakkster/lite-query -- type declarations
  *
  * Reactive async cache with cross-tab coherence, built on @zakkster/lite-signal.
  * Three exports: `queryClient` (cache + lifecycle owner), `query` (reactive
@@ -11,29 +11,29 @@
  * follower fallback). See `QueryClientOptions.crossTab` and `sharedFetch`.
  */
 
-// ─── Abort reasons (string literals) ─────────────────────────────────────────
+// --- Abort reasons (string literals) -----------------------------------------
 
 /**
  * Reasons attached to `AbortSignal.reason` when lite-query aborts a fetch.
  * Surface these to the user's fetcher for logging / alternative recovery.
  */
 export type AbortReason =
-    | "lite-query:detach"   // last observer left — fetch aborted as wasted work
+    | "lite-query:detach"   // last observer left -- fetch aborted as wasted work
     | "lite-query:refetch"  // a newer fetch is starting on the same entry
     | "lite-query:removed"  // entry removed via removeQueries / clear
     | "lite-query:timeout"; // per-query or default `timeout` elapsed
 
-// ─── Status + lifecycle ──────────────────────────────────────────────────────
+// --- Status + lifecycle ------------------------------------------------------
 
 export type QueryStatus = "idle" | "pending" | "success" | "error";
 export type MutationStatus = "idle" | "pending" | "success" | "error";
 
-// ─── Reactive accessor (lite-signal shape — function call, no `.value`) ──────
+// --- Reactive accessor (lite-signal shape -- function call, no `.value`) ------
 
-/** A read-only reactive accessor — call as `fn()` to read; tracks in effects. */
+/** A read-only reactive accessor -- call as `fn()` to read; tracks in effects. */
 export type ReadAccessor<T> = () => T;
 
-// ─── Fetcher contract ────────────────────────────────────────────────────────
+// --- Fetcher contract --------------------------------------------------------
 
 /** Argument passed to every `query` fetcher. */
 export interface FetcherContext<K extends readonly unknown[] = readonly unknown[]> {
@@ -49,15 +49,15 @@ export interface FetcherContext<K extends readonly unknown[] = readonly unknown[
 export type Fetcher<T, K extends readonly unknown[] = readonly unknown[]>
     = (ctx: FetcherContext<K>) => Promise<T>;
 
-// ─── Retry policy ────────────────────────────────────────────────────────────
+// --- Retry policy ------------------------------------------------------------
 
 /** Constant retry count, or a per-attempt decision function. */
 export type RetryPolicy = number | ((attempt: number, error: unknown) => boolean);
 
-/** Delay between retries — receives the attempt number (1-indexed). */
+/** Delay between retries -- receives the attempt number (1-indexed). */
 export type RetryDelay = (attempt: number) => number;
 
-// ─── QueryClient ─────────────────────────────────────────────────────────────
+// --- QueryClient -------------------------------------------------------------
 
 /** Options accepted by `queryClient(...)`. */
 export interface QueryClientOptions {
@@ -83,7 +83,7 @@ export interface QueryClientOptions {
 
     /**
      * Enable cross-tab fetch deduplication. Requires `crossTab: true` and
-     * `isLeader` to be useful (otherwise inert — each tab fetches itself,
+     * `isLeader` to be useful (otherwise inert -- each tab fetches itself,
      * which is the safe default). When active, follower tabs broadcast
      * `{ type: "fetch-req", key }` instead of hitting the network; the leader
      * answers from its own observed/cached entry and broadcasts the result.
@@ -94,7 +94,7 @@ export interface QueryClientOptions {
     /** Ms a follower waits before falling back to self-fetch. Default 3000. */
     sharedFetchTimeout?: number;
 
-    // ── Injectables for tests ──
+    // -- Injectables for tests --
     /** Inject a deterministic clock. Default `Date.now`. */
     now?: () => number;
     /** Inject a setTimeout (e.g., a mock clock's). */
@@ -144,7 +144,7 @@ export interface QueryClient {
 
 export function queryClient(options?: QueryClientOptions): QueryClient;
 
-// ─── query() ─────────────────────────────────────────────────────────────────
+// --- query() -----------------------------------------------------------------
 
 /** Options for a single `query(qc, opts)`. */
 export interface QueryOptions<
@@ -152,7 +152,7 @@ export interface QueryOptions<
     K extends readonly unknown[] = readonly unknown[],
 > {
     /**
-     * Cache key — static array OR a function reading reactive signals. When
+     * Cache key -- static array OR a function reading reactive signals. When
      * the function form returns a different key, the previous fetch is
      * aborted with `lite-query:refetch` and a new one is issued.
      */
@@ -183,7 +183,7 @@ export interface QueryOptions<
     equals?: (a: T | undefined, b: T) => boolean;
 }
 
-/** Returned by `query(...)`. All accessors are functions — call to read. */
+/** Returned by `query(...)`. All accessors are functions -- call to read. */
 export interface Query<T = unknown> {
     /** Latest data, or `undefined` if never resolved. */
     data: ReadAccessor<T | undefined>;
@@ -206,7 +206,7 @@ export function query<
     K extends readonly unknown[] = readonly unknown[],
 >(qc: QueryClient, opts: QueryOptions<T, K>): Query<T>;
 
-// ─── mutation() ──────────────────────────────────────────────────────────────
+// --- mutation() --------------------------------------------------------------
 
 export interface MutationOptions<TData = unknown, TVars = unknown, TCtx = unknown> {
     /** The mutation itself. Should call the network and return server data. */
@@ -216,11 +216,11 @@ export interface MutationOptions<TData = unknown, TVars = unknown, TCtx = unknow
      * value is passed as `ctx` to the later callbacks.
      */
     onMutate?: (vars: TVars) => TCtx | Promise<TCtx>;
-    /** Runs on fn success. Errors here are CONTAINED — they do NOT propagate. */
+    /** Runs on fn success. Errors here are CONTAINED -- they do NOT propagate. */
     onSuccess?: (data: TData, vars: TVars, ctx: TCtx) => void | Promise<void>;
     /** Runs on fn error. Roll back from `ctx` here. Errors here CONTAINED. */
     onError?: (error: unknown, vars: TVars, ctx: TCtx) => void | Promise<void>;
-    /** Runs LAST — success or error. ALWAYS fires, even if onSuccess threw. */
+    /** Runs LAST -- success or error. ALWAYS fires, even if onSuccess threw. */
     onSettled?: (
         data: TData | undefined,
         error: unknown,

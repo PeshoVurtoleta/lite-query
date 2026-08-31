@@ -11,7 +11,7 @@ import { createControlledFetcher, createMockClock } from "./harness.js";
 beforeEach(() => setDefaultRegistry(createRegistry({ maxNodes: 16384 })));
 const tick = () => new Promise((r) => queueMicrotask(r));
 
-// ── query.dispose semantics ──────────────────────────────────────────────────
+// -- query.dispose semantics --------------------------------------------------
 
 test("query.dispose is idempotent", () => {
     const qc = queryClient();
@@ -41,7 +41,7 @@ test("accessors after query.dispose return idle defaults (no throw)", async () =
     qc.dispose();
 });
 
-// ── mutation.dispose semantics ──────────────────────────────────────────────
+// -- mutation.dispose semantics ----------------------------------------------
 
 test("mutation.dispose is idempotent", () => {
     const qc = queryClient();
@@ -61,7 +61,7 @@ test("mutation.dispose during in-flight call: awaiter still gets result; state w
     assert.equal(m.loading(), true);
     m.dispose();              // dispose mid-flight
     f.resolve("done");
-    // The original awaiter still gets fn's result — fn is the network call;
+    // The original awaiter still gets fn's result -- fn is the network call;
     // disposing the mutation doesn't cancel network in-flight, it just stops
     // state writes (since gen was bumped) and releases signal nodes.
     const result = await p;
@@ -69,7 +69,7 @@ test("mutation.dispose during in-flight call: awaiter still gets result; state w
     qc.dispose();
 });
 
-// ── client.dispose contract ─────────────────────────────────────────────────
+// -- client.dispose contract -------------------------------------------------
 
 test("queryClient.dispose is idempotent", () => {
     const qc = queryClient();
@@ -89,7 +89,7 @@ test("setQueryData after qc.dispose creates an orphan entry but doesn't crash", 
     assert.equal(qc.getQueryData(["after-dispose"]), 1);
 });
 
-// ── abort-reason surface ─────────────────────────────────────────────────────
+// -- abort-reason surface -----------------------------------------------------
 
 test("abort reasons: detach reason reaches the fetcher when last observer leaves", async () => {
     const qc = queryClient();
@@ -183,7 +183,7 @@ test("abort reasons: timeout reason reaches the fetcher when per-query timeout f
     qc.dispose();
 });
 
-// ── reactive-key churn ──────────────────────────────────────────────────────
+// -- reactive-key churn ------------------------------------------------------
 
 test("reactive key flipping rapidly: prior fetch is superseded, latest wins", async () => {
     const qc = queryClient();
@@ -212,7 +212,7 @@ test("reactive key flipping rapidly: prior fetch is superseded, latest wins", as
     qc.dispose();
 });
 
-// ── empty key ───────────────────────────────────────────────────────────────
+// -- empty key ---------------------------------------------------------------
 
 test("empty key array works (uncommon but legal)", async () => {
     const qc = queryClient();

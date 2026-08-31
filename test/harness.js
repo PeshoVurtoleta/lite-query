@@ -23,7 +23,7 @@
  * and assert that the other "tab" got the invalidation broadcast.
  */
 
-// ── Controlled fetcher ──────────────────────────────────────────────────────
+// -- Controlled fetcher ------------------------------------------------------
 
 /**
  * One-shot fetcher: every call returns a fresh pending promise that the test
@@ -84,7 +84,7 @@ export function createQueuedFetcher() {
     };
 }
 
-// ── Mock clock ──────────────────────────────────────────────────────────────
+// -- Mock clock --------------------------------------------------------------
 
 /**
  * A deterministic clock. `advance(ms)` fires every scheduled callback whose
@@ -97,7 +97,7 @@ export function createQueuedFetcher() {
 export function createMockClock(initial = 0) {
     let current = initial;
     let nextId = 1;
-    const timers = new Map();  // id → { at, fn }
+    const timers = new Map();  // id -> { at, fn }
 
     return {
         now: () => current,
@@ -140,14 +140,14 @@ export function createMockClock(initial = 0) {
     };
 }
 
-// ── Mock BroadcastChannel ───────────────────────────────────────────────────
+// -- Mock BroadcastChannel ---------------------------------------------------
 
 /**
  * Returns a fresh BroadcastChannel constructor + a `reset()` that wipes all
  * channel state between tests. Channels with the same name share messages.
  */
 export function createMockBroadcastChannel() {
-    const channelsByName = new Map();    // name → Set<MockBC>
+    const channelsByName = new Map();    // name -> Set<MockBC>
 
     class MockBC {
         constructor(name) {
@@ -193,7 +193,7 @@ export function createMockBroadcastChannel() {
     };
 }
 
-// ── Convenience: a queryClient configured against a mock environment ───────
+// -- Convenience: a queryClient configured against a mock environment -------
 
 /**
  * Build a queryClient pre-wired to a mock clock and (optionally) a mock

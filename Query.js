@@ -1,10 +1,10 @@
 /**
- * @zakkster/lite-query — async cache + reactive queries built on lite-signal.
+ * @zakkster/lite-query -- async cache + reactive queries built on lite-signal.
  *
  * Design pillars:
  *   - Explicit observer reference counting per cache entry. attach() ++count,
- *     detach() --count; count → 0 aborts in-flight fetch + schedules cacheTime
- *     GC; count: 0 → ≥1 cancels the pending GC timer. Shared-observer correctness
+ *     detach() --count; count -> 0 aborts in-flight fetch + schedules cacheTime
+ *     GC; count: 0 -> >=1 cancels the pending GC timer. Shared-observer correctness
  *     (one dispose doesn't starve the others) falls out of this.
  *   - Generation guard on every fetch. Each runFetch increments entry.fetchGen;
  *     resolutions check gen before mutating state. Aborted-but-still-resolving
@@ -12,7 +12,7 @@
  *   - Cross-tab: BroadcastChannel-backed, opt-in. Cache writes / invalidations /
  *     removals propagate; background fetch results do NOT (otherwise tabs cross-
  *     talk forever). A `processingRemote` flag suppresses echo loops.
- *   - Mid-flight invalidation: option (b) — let the in-flight finish, then
+ *   - Mid-flight invalidation: option (b) -- let the in-flight finish, then
  *     immediately refetch. We set `pendingRefetchAfterCurrent` and the
  *     resolution path drains it.
  *   - Reactive `enabled`: when it flips to false, the watcher effect re-runs,
@@ -35,14 +35,14 @@ import {
 
 const noop = () => {};
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Key hashing & matching
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /**
  * Stable hash for query keys. Objects are serialized with sorted property
  * order so `{a:1, b:2}` and `{b:2, a:1}` hash identically. Arrays preserve
- * order — array indices are meaningful in query keys.
+ * order -- array indices are meaningful in query keys.
  */
 function hashKey(key) {
     return JSON.stringify(key, (_, v) => {
@@ -72,9 +72,9 @@ function keyMatches(entryKey, pattern, exact) {
     return true;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Option resolution
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 function resolveOptions(o) {
     return {
@@ -87,7 +87,7 @@ function resolveOptions(o) {
         crossTab: o.crossTab ?? false,
         crossTabChannel: o.crossTabChannel ?? "lite-query",
         // Cross-tab fetch deduplication. When sharedFetch is on AND a valid
-        // isLeader function is supplied, follower tabs don't fetch — they ask
+        // isLeader function is supplied, follower tabs don't fetch -- they ask
         // the leader (via fetch-req broadcast) and receive the result. Wire
         // isLeader from @zakkster/lite-channel's leader signal.
         sharedFetch: o.sharedFetch ?? false,
@@ -102,7 +102,7 @@ function resolveOptions(o) {
 }
 
 // Abort reasons exposed on AbortSignal.reason. Users' fetchers can inspect
-// these to decide whether to retry — e.g., a user-initiated detach (component
+// these to decide whether to retry -- e.g., a user-initiated detach (component
 // unmounting) is non-retryable, but a timeout might be.
 const ABORT_REASON = Object.freeze({
     DETACH:   "lite-query:detach",       // last observer left (or reactive key changed)
@@ -111,12 +111,12 @@ const ABORT_REASON = Object.freeze({
     TIMEOUT:  "lite-query:timeout",      // per-query timeout exceeded
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // queryClient
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /**
- * Create a query client — the cache + lifecycle owner. Make one per app (or
+ * Create a query client -- the cache + lifecycle owner. Make one per app (or
  * one per logical scope, e.g. per logged-in user session).
  *
  * The returned object exposes both cache operations (`getQueryData`,
@@ -152,7 +152,7 @@ export function queryClient(options = {}) {
     const sharedFetchActive =
         opts.sharedFetch && typeof opts.isLeader === "function" && !!channel;
 
-    // ── cross-tab ──
+    // -- cross-tab --
 
     function broadcast(msg) {
         if (!channel || processingRemote) return;
@@ -184,7 +184,7 @@ export function queryClient(options = {}) {
         }
     }
 
-    // ── entries ──
+    // -- entries --
 
     function createEntry(key) {
         return {
@@ -202,14 +202,14 @@ export function queryClient(options = {}) {
             gcTimerId: null,
             pendingRefetchAfterCurrent: false,
             sharedFallbackTimer: null,
-            // Stream slots — uniform on every entry to keep the shape
+            // Stream slots -- uniform on every entry to keep the shape
             // monomorphic (no second hidden class at the hot attach/detach/GC
             // sites). A query entry leaves these at their null/false/0 defaults;
             // only a streamQuery entry populates them. No stream signal node is
             // allocated for a plain query.
             isStream: false,
-            streamStop: null,            // () => void  — abort the iterator / close the connection
-            streamRestart: null,         // () => void  — abort + re-establish (invalidate)
+            streamStop: null,            // () => void  -- abort the iterator / close the connection
+            streamRestart: null,         // () => void  -- abort + re-establish (invalidate)
             streamCount: 0,              // non-reactive: values seen this session
             streamDropped: 0,            // non-reactive: values dropped (buffer mode)
             fetcher: null,
@@ -229,7 +229,7 @@ export function queryClient(options = {}) {
         if (!e) {
             e = createEntry(key);
             entries.set(h, e);
-            // Entry has no observers yet — schedule GC immediately. attach()
+            // Entry has no observers yet -- schedule GC immediately. attach()
             // will cancel this if an observer arrives before the timer fires.
             scheduleGc(e);
         }
@@ -240,7 +240,7 @@ export function queryClient(options = {}) {
     // this, an app that creates + removes many query keys over its lifetime
     // (route-mounted queries in an SPA, long-running diagnostic dashboards)
     // accumulates entries' signal handles in the registry until the next GC
-    // run — eventually tripping the registry capacity cap. Called from the
+    // run -- eventually tripping the registry capacity cap. Called from the
     // three entry-removal sites: GC timer, removeQueries, clear.
     function disposeEntry(entry) {
         // Stop any live stream first (abort the iterator -> iterator.return(),
@@ -275,7 +275,7 @@ export function queryClient(options = {}) {
         // In Node, unref'd timers don't prevent process exit. This means a
         // test that creates entries but never calls qc.clear() / removeQueries
         // doesn't hang the runner. In browsers, gcTimerId is a number and
-        // .unref doesn't exist — the guard makes this a no-op there.
+        // .unref doesn't exist -- the guard makes this a no-op there.
         if (entry.gcTimerId && typeof entry.gcTimerId.unref === "function") {
             entry.gcTimerId.unref();
         }
@@ -288,13 +288,13 @@ export function queryClient(options = {}) {
         }
     }
 
-    // ── attach / detach ──
+    // -- attach / detach --
 
     function attach(entry, queryOpts) {
         // First observer to attach configures the entry's per-query options.
-        // Subsequent attaches don't override — first wins. (A common gotcha
+        // Subsequent attaches don't override -- first wins. (A common gotcha
         // in TanStack too: two queries with the same key + different
-        // staleTimes — first one wins, document it.)
+        // staleTimes -- first one wins, document it.)
         if (entry.observerCount === 0) {
             if (queryOpts.fetcher)                       entry.fetcher    = queryOpts.fetcher;
             if (queryOpts.staleTime  !== undefined)      entry.staleTime  = queryOpts.staleTime;
@@ -318,7 +318,7 @@ export function queryClient(options = {}) {
     function detach(entry) {
         entry.observerCount--;
         if (entry.observerCount === 0) {
-            // Last observer gone — abort in-flight if any. Resolution paths
+            // Last observer gone -- abort in-flight if any. Resolution paths
             // gate on the generation guard, so a late resolution is harmless.
             if (entry.abortController) {
                 entry.abortController.abort(ABORT_REASON.DETACH);
@@ -327,7 +327,7 @@ export function queryClient(options = {}) {
                 entry.fetching.set(false);
                 if (entry.status() === "pending") entry.status.set("idle");
             }
-            // Last observer gone on a stream — close the connection. The entry
+            // Last observer gone on a stream -- close the connection. The entry
             // stays cached (scheduleGc); a re-attach before GC re-establishes a
             // fresh stream via the watcher. Cached data() survives until GC.
             if (entry.streamStop) {
@@ -342,7 +342,7 @@ export function queryClient(options = {}) {
         }
     }
 
-    // ── fetch lifecycle ──
+    // -- fetch lifecycle --
 
     // Pure predicate: does this entry need a (re)fetch right now? Used by both
     // the leader path (runFetch) and the follower path (requestSharedFetch).
@@ -373,7 +373,7 @@ export function queryClient(options = {}) {
     // Follower path under sharedFetch: broadcast a request, show loading, and
     // arm a fallback timer. If the leader broadcasts a result before the timer
     // fires, setQueryData clears the timer. Otherwise we self-fetch so the UI
-    // never hangs — liveness guarantee during leader elections or when the
+    // never hangs -- liveness guarantee during leader elections or when the
     // leader doesn't have the query defined.
     function requestSharedFetch(entry) {
         entry.fetching.set(true);
@@ -384,7 +384,7 @@ export function queryClient(options = {}) {
         clearSharedTimer(entry);
         entry.sharedFallbackTimer = opts.setTimeout(() => {
             entry.sharedFallbackTimer = null;
-            // The timer firing means no leader fulfilled the request — the
+            // The timer firing means no leader fulfilled the request -- the
             // arrival path (setQueryData) would have cleared it otherwise.
             // Self-fetch so the UI never hangs.
             if (entry.observerCount > 0 && entry.promise === null) {
@@ -510,12 +510,12 @@ export function queryClient(options = {}) {
         return promise;
     }
 
-    // ── public cache API ──
+    // -- public cache API --
 
     function getQueryData(key) {
         const e = entries.get(hashKey(key));
         if (!e) return undefined;
-        // Peek without subscribing — getQueryData is an imperative read.
+        // Peek without subscribing -- getQueryData is an imperative read.
         return untrack(() => e.data());
     }
 
@@ -529,7 +529,7 @@ export function queryClient(options = {}) {
         e.status.set("success");
         e.lastCompletedAt = opts.now();
         // If a shared-fetch follower was awaiting the leader's result, this IS
-        // that result — stop the loading state and cancel the fallback timer.
+        // that result -- stop the loading state and cancel the fallback timer.
         // The promise===null guard avoids clobbering a genuine in-flight fetch.
         if (e.promise === null) e.fetching.set(false);
         clearSharedTimer(e);
@@ -553,7 +553,7 @@ export function queryClient(options = {}) {
                 } else if (sharedFetchActive && !opts.isLeader()) {
                     // Follower: defer to the leader rather than fetching locally.
                     // (If this invalidate arrived as a broadcast, the fetch-req
-                    // is suppressed during remote processing — but the leader
+                    // is suppressed during remote processing -- but the leader
                     // invalidated too and will broadcast its result, which
                     // clears our fallback timer. Liveness still holds.)
                     requestSharedFetch(e);
@@ -591,7 +591,7 @@ export function queryClient(options = {}) {
 
     // Dispose the entire client. Releases the BroadcastChannel listener which
     // would otherwise keep the client + its entire cache map alive in
-    // scenarios where clients are created and discarded — testing,
+    // scenarios where clients are created and discarded -- testing,
     // micro-frontends, dev hot-reload. After dispose(), further mutations are
     // no-ops (cache is cleared, channel is closed).
     function dispose() {
@@ -618,12 +618,12 @@ export function queryClient(options = {}) {
     };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // query()
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /**
- * Define a reactive query — the read-side primitive. Lazy: no fetch fires
+ * Define a reactive query -- the read-side primitive. Lazy: no fetch fires
  * until something reads one of the returned accessors inside an effect. When
  * the last effect that reads them disposes, the in-flight fetch (if any) is
  * aborted with `lite-query:detach` and the entry is scheduled for GC after
@@ -645,12 +645,12 @@ export function queryClient(options = {}) {
 export function query(qc, queryOpts) {
     const { ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, opts } = qc._internal;
 
-    // currentEntry is itself a signal — accessors subscribe to it so they
+    // currentEntry is itself a signal -- accessors subscribe to it so they
     // refire when the key changes (reactive key) or attach/detach flips.
     const currentEntry = signal(null);
 
     // Lazy watcher: only running when outer subscribers exist. This is the
-    // "no observers → no fetch" property — query() alone doesn't fetch; the
+    // "no observers -> no fetch" property -- query() alone doesn't fetch; the
     // first read of an accessor inside an effect starts the engine.
     let watcher = null;
     let observerCount = 0;
@@ -673,7 +673,7 @@ export function query(qc, queryOpts) {
         // watcher's lifecycle explicitly (stopWatcher / dispose), so detaching
         // it from the owner tree loses nothing.
         watcher = createRoot(() => effect(() => {
-            // ONLY key and enabled are tracked here — internal entry state
+            // ONLY key and enabled are tracked here -- internal entry state
             // (status, data, fetching) is read inside untrack so it doesn't
             // cause the watcher to re-run and call attach() again.
             const keyVal = typeof queryOpts.key === "function"
@@ -707,7 +707,7 @@ export function query(qc, queryOpts) {
                 untrack(() => maybeFetch(entry));
             }
             // Same entry: leave attach state alone, no maybeFetch. The user's
-            // key didn't actually change — refetch only happens on explicit
+            // key didn't actually change -- refetch only happens on explicit
             // .refetch(), invalidate(), or a true key change.
         }));
     }
@@ -748,10 +748,10 @@ export function query(qc, queryOpts) {
      * Called from each accessor. If we're inside a reactive context, register
      * an observer reference (++count, start watcher if first). The matching
      * decrement happens via onCleanup of the calling effect (the shared
-     * `cleanupObserver` closure above — no per-read allocation).
+     * `cleanupObserver` closure above -- no per-read allocation).
      *
      * Critical: between an effect's re-run cleanup and body, observerCount
-     * transits N → 0 → N. Naïvely stopping the watcher when count hits zero
+     * transits N -> 0 -> N. Naively stopping the watcher when count hits zero
      * would tear down the entry between re-runs. We defer the stop to a
      * microtask; if a re-attach happens first (the usual case), the deferred
      * stop becomes a no-op.
@@ -807,7 +807,7 @@ export function query(qc, queryOpts) {
         dispose() {
             disposed = true;
             stopWatcher();
-            // Return currentEntry's signal node to lite-signal's pool — without
+            // Return currentEntry's signal node to lite-signal's pool -- without
             // this, an app that creates + disposes many queries (e.g. many
             // routes over an SPA lifetime) leaks one signal per query() call.
             try { disposeNode(currentEntry); } catch {}
@@ -815,21 +815,21 @@ export function query(qc, queryOpts) {
     };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // mutation()
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 /**
- * Define a mutation — the write-side primitive. Composes the canonical
- * `onMutate` → `fn` → (`onSuccess` | `onError`) → `onSettled` chain with
+ * Define a mutation -- the write-side primitive. Composes the canonical
+ * `onMutate` -> `fn` -> (`onSuccess` | `onError`) -> `onSettled` chain with
  * per-call generation tracking so concurrent `mutate(varsB)` after slow
  * `mutate(varsA)` doesn't corrupt A's awaited result.
  *
- * Callback errors in `onSuccess` / `onError` / `onSettled` are CONTAINED —
+ * Callback errors in `onSuccess` / `onError` / `onSettled` are CONTAINED --
  * they're logged but don't propagate to `mutate()`'s awaited promise. The
  * caller's `await mutate(vars)` always reflects `fn`'s outcome.
  *
- * `onSettled` is guaranteed to fire — success path, error path, even if
+ * `onSettled` is guaranteed to fire -- success path, error path, even if
  * `onSuccess` or `onError` throws.
  *
  * @template TData, TVars, TCtx
@@ -855,7 +855,7 @@ export function mutation(qc, mutOpts) {
     const status = signal("idle");
 
     // mutationGen mirrors the fetchGen pattern used in queries. Two rapid
-    // mutate() calls — slow first, fast second — must not let the first one
+    // mutate() calls -- slow first, fast second -- must not let the first one
     // overwrite the second's settled state. Gen-guarding the SIGNAL writes
     // (not the promises or callbacks) preserves the right semantics:
     //   - each mutate() promise resolves/rejects with its own outcome
@@ -877,7 +877,7 @@ export function mutation(qc, mutOpts) {
 
         // Phase 1: run the mutation (onMutate + fn).
         // We collect outcome into local variables and DON'T let onSuccess /
-        // onError be inside this try — those are callbacks, and a throw in a
+        // onError be inside this try -- those are callbacks, and a throw in a
         // callback shouldn't flip mutation state from success to error or
         // vice-versa.
         try {
@@ -899,7 +899,7 @@ export function mutation(qc, mutOpts) {
             }
         }
 
-        // Phase 3: side-effect callbacks. Errors are contained — a buggy
+        // Phase 3: side-effect callbacks. Errors are contained -- a buggy
         // onSuccess should not abort the rest of the chain or flip state.
         // (This is the deliberate deviation from the reviewer's pattern,
         // which has onSuccess throws cascading to the catch block and firing
@@ -942,7 +942,7 @@ export function mutation(qc, mutOpts) {
         },
         // Releases data/error/status signal nodes back to lite-signal's pool.
         // Mutations are usually long-lived (one per logical action), so most
-        // apps never call this — but for ephemeral mutations or tests that
+        // apps never call this -- but for ephemeral mutations or tests that
         // build + tear down many in a row, calling dispose() prevents pool
         // pressure on the default registry.
         dispose() {

@@ -1,5 +1,5 @@
 /**
- * @zakkster/lite-query — test suite (the implementation spec).
+ * @zakkster/lite-query -- test suite (the implementation spec).
  *
  * Patterns adopted from prior art:
  *   - TanStack Query: dedup, stale-time semantics, cache-time GC, retry with
@@ -39,9 +39,9 @@ beforeEach(() => setDefaultRegistry(createRegistry({ maxNodes: 16384 })));
 // Helper: flush microtasks so awaited fetcher resolutions chain out.
 const tick = () => new Promise((r) => queueMicrotask(r));
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Section 1 — queryClient: construction & defaults
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Section 1 -- queryClient: construction & defaults
+// -----------------------------------------------------------------------------
 
 test("queryClient: creates a client with sensible defaults", () => {
     const qc = queryClient();
@@ -86,9 +86,9 @@ test("queryClient: clear() releases all entries", () => {
     assert.equal(qc.getQueryData(["b"]), undefined);
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Section 2 — query: basic lifecycle
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Section 2 -- query: basic lifecycle
+// -----------------------------------------------------------------------------
 
 test("query: fires fetcher on first observer attach", async () => {
     const { qc } = setupMockEnv(queryClient);
@@ -114,7 +114,7 @@ test("query: loading is true before resolution, false after", async () => {
     q.dispose();
 });
 
-test("query: status transitions idle → pending → success", async () => {
+test("query: status transitions idle -> pending -> success", async () => {
     const { qc } = setupMockEnv(queryClient);
     const f = createControlledFetcher();
     const seen = [];
@@ -180,7 +180,7 @@ test("query: fetcher receives { key, signal } argument", async () => {
     q.dispose();
 });
 
-test("query: no observers → no fetch", async () => {
+test("query: no observers -> no fetch", async () => {
     const { qc } = setupMockEnv(queryClient);
     const f = createControlledFetcher();
     query(qc, { key: ["k"], fetcher: f.fetcher });               // no effect attached
@@ -200,7 +200,7 @@ test("query: fetching() is true on initial AND on background revalidations", asy
     await tick();
     assert.equal(q.fetching(), false, "settled");
 
-    q.refetch();                                              // background revalidation — don't await
+    q.refetch();                                              // background revalidation -- don't await
     await tick();
     assert.equal(q.fetching(), true, "fetching during background revalidation");
     f.resolveNth(1, "second");
@@ -220,7 +220,7 @@ test("query: data persists across observer reattach within cacheTime", async () 
     stop1();
     q1.dispose();
 
-    // Within cacheTime AND staleTime — new observer reads from cache, no new fetch
+    // Within cacheTime AND staleTime -- new observer reads from cache, no new fetch
     clock.advance(5_000);
     const q2 = query(qc, { key: ["k"], fetcher: f.fetcher });
     effect(() => q2.data());
@@ -230,9 +230,9 @@ test("query: data persists across observer reattach within cacheTime", async () 
     q2.dispose();
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Section 3 — query: dedup (concurrent fetch sharing)
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Section 3 -- query: dedup (concurrent fetch sharing)
+// -----------------------------------------------------------------------------
 
 test("dedup: two queries with the same key share the same in-flight fetch", async () => {
     const { qc } = setupMockEnv(queryClient);
@@ -286,9 +286,9 @@ test("dedup: object key order doesn't affect dedup (stable hashing)", async () =
     q1.dispose(); q2.dispose();
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Section 4 — query: reactive key
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Section 4 -- query: reactive key
+// -----------------------------------------------------------------------------
 
 test("reactive key: key change triggers a new fetch", async () => {
     const { qc } = setupMockEnv(queryClient);
@@ -360,7 +360,7 @@ test("reactive key: data from old key not reflected when new key resolves", asyn
     userId.set(2);
     await tick();
 
-    // Resolve the OLD fetch — should be discarded (it was aborted)
+    // Resolve the OLD fetch -- should be discarded (it was aborted)
     f.resolveNth(0, "stale");
     f.resolveNth(1, "fresh");
     await tick();
@@ -392,9 +392,9 @@ test("reactive key: data() reflects the cache entry for the *current* key", asyn
     q.dispose();
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Section 5 — query: stale time
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Section 5 -- query: stale time
+// -----------------------------------------------------------------------------
 
 test("staleTime: fresh data does NOT trigger refetch on reobserve", async () => {
     const { qc, clock } = setupMockEnv(queryClient, { defaultStaleTime: 10_000 });
@@ -410,7 +410,7 @@ test("staleTime: fresh data does NOT trigger refetch on reobserve", async () => 
     const q2 = query(qc, { key: ["k"], fetcher: f.fetcher });
     effect(() => q2.data());
     await tick();
-    assert.equal(f.callCount, 1, "no refetch — data is fresh");
+    assert.equal(f.callCount, 1, "no refetch -- data is fresh");
     q2.dispose();
 });
 
@@ -487,9 +487,9 @@ test("staleTime: Infinity means never refetch from staleness", async () => {
     q2.dispose();
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Section 6 — query: cache time / GC
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Section 6 -- query: cache time / GC
+// -----------------------------------------------------------------------------
 
 test("cacheTime: entry survives observer detach within cacheTime", async () => {
     const { qc, clock } = setupMockEnv(queryClient, { defaultCacheTime: 10_000 });
@@ -565,9 +565,9 @@ test("cacheTime: cacheTime: Infinity pins the entry forever", async () => {
     assert.equal(qc.getQueryData(["k"]), "v");
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Section 7 — query: enabled flag
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Section 7 -- query: enabled flag
+// -----------------------------------------------------------------------------
 
 test("enabled: false skips the initial fetch", async () => {
     const { qc } = setupMockEnv(queryClient);
@@ -579,7 +579,7 @@ test("enabled: false skips the initial fetch", async () => {
     q.dispose();
 });
 
-test("enabled: transitioning false → true triggers a fetch", async () => {
+test("enabled: transitioning false -> true triggers a fetch", async () => {
     const { qc } = setupMockEnv(queryClient);
     const f = createControlledFetcher();
     const en = signal(false);
@@ -603,7 +603,7 @@ test("enabled: while disabled, status stays 'idle'", async () => {
     q.dispose();
 });
 
-test("enabled: transitioning true → false aborts in-flight fetch and reverts to idle", async () => {
+test("enabled: transitioning true -> false aborts in-flight fetch and reverts to idle", async () => {
     const { qc } = setupMockEnv(queryClient);
     const f = createControlledFetcher();
     const en = signal(true);
@@ -614,14 +614,14 @@ test("enabled: transitioning true → false aborts in-flight fetch and reverts t
     const ac = f.lastCall.signal;
     en.set(false);
     await tick();
-    assert.equal(ac.aborted, true, "fetch aborted on enabled→false");
+    assert.equal(ac.aborted, true, "fetch aborted on enabled->false");
     assert.equal(q.status(), "idle", "reverts to idle, not 'error'");
     q.dispose();
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Section 8 — query: retry & error
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Section 8 -- query: retry & error
+// -----------------------------------------------------------------------------
 
 test("retry: failed fetch retries up to N times then errors", async () => {
     const { qc, clock } = setupMockEnv(queryClient, { retry: 2, retryDelay: () => 100 });
@@ -709,9 +709,9 @@ test("retry: function form can return false to abort retries", async () => {
     q.dispose();
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Section 9 — query: abort & race safety
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Section 9 -- query: abort & race safety
+// -----------------------------------------------------------------------------
 
 test("abort: dispose aborts in-flight fetch", async () => {
     const { qc } = setupMockEnv(queryClient);
@@ -752,9 +752,9 @@ test("abort: aborted fetch's eventual resolution is ignored", async () => {
     q.dispose();
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Section 10 — query: refetch
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Section 10 -- query: refetch
+// -----------------------------------------------------------------------------
 
 test("refetch: returns a promise that resolves with the new data", async () => {
     const { qc } = setupMockEnv(queryClient);
@@ -772,7 +772,7 @@ test("refetch: returns a promise that resolves with the new data", async () => {
     q.dispose();
 });
 
-test("refetch: ignores staleTime — always fetches", async () => {
+test("refetch: ignores staleTime -- always fetches", async () => {
     const { qc } = setupMockEnv(queryClient, { defaultStaleTime: 100_000 });
     const f = createQueuedFetcher();
     const q = query(qc, { key: ["k"], fetcher: f.fetcher });
@@ -801,9 +801,9 @@ test("refetch: rejects with the error if fetch fails", async () => {
     q.dispose();
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Section 11 — query: dispose
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Section 11 -- query: dispose
+// -----------------------------------------------------------------------------
 
 test("dispose: detaches observers; observer count drops to 0", async () => {
     const { qc } = setupMockEnv(queryClient);
@@ -815,7 +815,7 @@ test("dispose: detaches observers; observer count drops to 0", async () => {
     q.dispose();
     f.resolve("v");
     await tick();
-    // No effect re-fires; this is structural — q.dispose() is idempotent
+    // No effect re-fires; this is structural -- q.dispose() is idempotent
     assert.doesNotThrow(() => q.dispose());
 });
 
@@ -860,18 +860,18 @@ test("refcount: GC timer does NOT start while any observer is still active", asy
     f.resolve("v");
     await tick();
 
-    stop1(); q1.dispose();                                      // count: 2 → 1
+    stop1(); q1.dispose();                                      // count: 2 -> 1
     clock.advance(5000);                                        // way past cacheTime
     assert.equal(qc.getQueryData(["k"]), "v", "entry alive while q2 observing");
 
-    stop2(); q2.dispose();                                      // count: 1 → 0; timer starts
+    stop2(); q2.dispose();                                      // count: 1 -> 0; timer starts
     clock.advance(1100);
     assert.equal(qc.getQueryData(["k"]), undefined, "GC fired only after last observer left");
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Section 11.5 — structural sharing / zero-GC assertions
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Section 11.5 -- structural sharing / zero-GC assertions
+// -----------------------------------------------------------------------------
 
 test("structural sharing: refetch returning the cached reference does not re-fire observers", async () => {
     const { qc } = setupMockEnv(queryClient);
@@ -889,7 +889,7 @@ test("structural sharing: refetch returning the cached reference does not re-fir
     await tick();
     f.resolveNth(1, value);                                     // SAME reference
     await tick();
-    assert.equal(runs, after, "no re-fire — value is referentially equal (Object.is)");
+    assert.equal(runs, after, "no re-fire -- value is referentially equal (Object.is)");
     q.dispose();
 });
 
@@ -912,7 +912,7 @@ test("structural sharing: `equals` opt-in skips re-fire on structurally-equal da
     await tick();
     f.resolveNth(1, { items: [1, 2, 3] });                      // structurally equal, NEW reference
     await tick();
-    assert.equal(runs, after, "no re-fire — opt-in `equals` matched");
+    assert.equal(runs, after, "no re-fire -- opt-in `equals` matched");
     q.dispose();
 });
 
@@ -937,9 +937,9 @@ test("structural sharing: signal count does not inflate across redundant refetch
     q.dispose();
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Section 12 — cache: getQueryData / setQueryData
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Section 12 -- cache: getQueryData / setQueryData
+// -----------------------------------------------------------------------------
 
 test("setQueryData: writes data accessible via getQueryData", () => {
     const { qc } = setupMockEnv(queryClient);
@@ -980,9 +980,9 @@ test("getQueryData: returns undefined for unknown keys", () => {
     assert.equal(qc.getQueryData(["never-set"]), undefined);
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Section 13 — cache: invalidate
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Section 13 -- cache: invalidate
+// -----------------------------------------------------------------------------
 
 test("invalidate: exact match triggers refetch on active queries", async () => {
     const { qc } = setupMockEnv(queryClient, { defaultStaleTime: 100_000 });
@@ -1061,7 +1061,7 @@ test("invalidate: while a fetch is in flight, queues a follow-up refetch after i
     f.resolveNth(0, "first");
     await tick();
     // The invalidation queues a refetch that fires AFTER the in-flight settles.
-    // Locked-in semantic: option (b) — let finish + refetch. Not abort+restart.
+    // Locked-in semantic: option (b) -- let finish + refetch. Not abort+restart.
     assert.equal(f.callCount, 2, "exactly two fetches: in-flight + follow-up");
     q.dispose();
 });
@@ -1071,9 +1071,9 @@ test("invalidate: no matching keys is a silent no-op", () => {
     assert.doesNotThrow(() => qc.invalidate(["nonexistent"]));
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Section 14 — cache: removeQueries / clear
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Section 14 -- cache: removeQueries / clear
+// -----------------------------------------------------------------------------
 
 test("removeQueries: prefix match drops entries from the cache", async () => {
     const { qc } = setupMockEnv(queryClient);
@@ -1106,9 +1106,9 @@ test("clear: nukes every cache entry", () => {
     assert.equal(qc.getQueryData(["nested", "deep"]), undefined);
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Section 15 — mutation: basic flow
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Section 15 -- mutation: basic flow
+// -----------------------------------------------------------------------------
 
 test("mutation: calling .mutate() triggers fn with the vars", async () => {
     const { qc } = setupMockEnv(queryClient);
@@ -1122,7 +1122,7 @@ test("mutation: calling .mutate() triggers fn with the vars", async () => {
     await p;
 });
 
-test("mutation: status transitions idle → pending → success", async () => {
+test("mutation: status transitions idle -> pending -> success", async () => {
     const { qc } = setupMockEnv(queryClient);
     const f = createControlledFetcher();
     const m = mutation(qc, { fn: () => f.fetcher({ key: ["m"] }) });
@@ -1175,9 +1175,9 @@ test("mutation: reset() clears data, error, and status", async () => {
     assert.equal(m.status(), "idle");
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Section 16 — mutation: callbacks
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Section 16 -- mutation: callbacks
+// -----------------------------------------------------------------------------
 
 test("mutation: onMutate fires before fn with the vars", async () => {
     const { qc } = setupMockEnv(queryClient);
@@ -1255,9 +1255,9 @@ test("mutation: onSettled fires after both success and error paths", async () =>
     assert.equal(settledTimes, 2, "onSettled fires on errors too");
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Section 17 — mutation: optimistic updates + rollback
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Section 17 -- mutation: optimistic updates + rollback
+// -----------------------------------------------------------------------------
 
 test("optimistic: onMutate's setQueryData is visible immediately", async () => {
     const { qc } = setupMockEnv(queryClient);
@@ -1323,18 +1323,18 @@ test("optimistic: invalidate in onSuccess triggers refetch", async () => {
     q.dispose();
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Section 18 — cross-tab: opt-in
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Section 18 -- cross-tab: opt-in
+// -----------------------------------------------------------------------------
 
-test("crossTab: off by default — no BroadcastChannel created", () => {
+test("crossTab: off by default -- no BroadcastChannel created", () => {
     let bcInstances = 0;
     class TBC { constructor() { bcInstances++; } postMessage() {} addEventListener() {} close() {} }
     queryClient({ broadcastChannel: TBC });
     assert.equal(bcInstances, 0);
 });
 
-test("crossTab: on — exactly one channel per client instance", () => {
+test("crossTab: on -- exactly one channel per client instance", () => {
     let bcInstances = 0;
     class TBC { constructor() { bcInstances++; } postMessage() {} addEventListener() {} close() {} }
     queryClient({ crossTab: true, broadcastChannel: TBC });
@@ -1342,9 +1342,9 @@ test("crossTab: on — exactly one channel per client instance", () => {
     assert.equal(bcInstances, 2, "one channel per client");
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Section 19 — cross-tab: invalidate broadcasts
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Section 19 -- cross-tab: invalidate broadcasts
+// -----------------------------------------------------------------------------
 
 test("crossTab: invalidate in tab A causes tab B to refetch matching queries", async () => {
     const mockBC = createMockBroadcastChannel();
@@ -1456,7 +1456,7 @@ test("crossTab: simultaneous fetch in two tabs resolves last-wins; no broadcast 
     const qcA = queryClient(opts);
     const qcB = queryClient(opts);
 
-    // Both tabs mount the same key — independent caches, each fetches separately
+    // Both tabs mount the same key -- independent caches, each fetches separately
     const fA = createControlledFetcher();
     const fB = createControlledFetcher();
     const qA = query(qcA, { key: ["k"], fetcher: fA.fetcher });
@@ -1468,9 +1468,9 @@ test("crossTab: simultaneous fetch in two tabs resolves last-wins; no broadcast 
     assert.equal(fA.callCount, 1, "each tab fetches independently");
     assert.equal(fB.callCount, 1);
 
-    // Resolve A first, then B — neither broadcasts background fetch results,
+    // Resolve A first, then B -- neither broadcasts background fetch results,
     // so each tab's local cache holds its own value (no last-wins overwrite for
-    // background fetches — that's the locked-in semantic).
+    // background fetches -- that's the locked-in semantic).
     fA.resolve("from-A");
     await tick(); await tick();
     fB.resolve("from-B");
@@ -1491,11 +1491,11 @@ test("crossTab: simultaneous fetch in two tabs resolves last-wins; no broadcast 
     qA.dispose(); qB.dispose();
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Section 20 — sanity & integration
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Section 20 -- sanity & integration
+// -----------------------------------------------------------------------------
 
-test("mutation: concurrent mutate() calls — latest wins on state, but each promise reflects its own outcome", async () => {
+test("mutation: concurrent mutate() calls -- latest wins on state, but each promise reflects its own outcome", async () => {
     const { qc } = setupMockEnv(queryClient);
     const f = createQueuedFetcher();
     const m = mutation(qc, { fn: (vars) => f.fetcher({ vars }) });
@@ -1512,7 +1512,7 @@ test("mutation: concurrent mutate() calls — latest wins on state, but each pro
     assert.equal(m.data(), "second");
     assert.equal(m.status(), "success");
 
-    // Now resolve the older one — its result is for p1's promise, but state
+    // Now resolve the older one -- its result is for p1's promise, but state
     // must NOT regress to it.
     f.resolveNth(0, "first");
     const r1 = await p1;
@@ -1524,7 +1524,7 @@ test("mutation: concurrent mutate() calls — latest wins on state, but each pro
     assert.equal(m.status(), "success");
 });
 
-test("mutation: concurrent mutate() — fast success then slow error: state stays success", async () => {
+test("mutation: concurrent mutate() -- fast success then slow error: state stays success", async () => {
     const { qc } = setupMockEnv(queryClient);
     const f = createQueuedFetcher();
     const m = mutation(qc, { fn: () => f.fetcher({}) });
@@ -1558,7 +1558,7 @@ test("mutation: onSuccess throw does NOT flip status to error, onSettled still f
     const p = m.mutate({});
     await tick();
     f.resolve("data");
-    await p;                                                 // resolves successfully — callback errors contained
+    await p;                                                 // resolves successfully -- callback errors contained
     assert.equal(m.status(), "success", "status preserved despite onSuccess throw");
     assert.equal(m.data(), "data");
     assert.equal(settledFired, true, "onSettled fires even when onSuccess threw");
@@ -1609,7 +1609,7 @@ test("timeout: client default timeout applies when no per-query override", async
         ctx.signal.addEventListener("abort", () => { abortReason = ctx.signal.reason; });
         return f.fetcher(ctx);
     };
-    const q = query(qc, { key: ["k"], fetcher });            // no timeout — inherits 1000
+    const q = query(qc, { key: ["k"], fetcher });            // no timeout -- inherits 1000
     effect(() => q.data());
     await tick();
     clock.advance(1000);
@@ -1700,9 +1700,9 @@ test("queryClient.dispose(): clears cache and detaches BroadcastChannel listener
     assert.equal(closed, true, "channel closed");
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Section 21 — cross-tab fetch deduplication (sharedFetch + leader election)
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Section 21 -- cross-tab fetch deduplication (sharedFetch + leader election)
+// -----------------------------------------------------------------------------
 
 function setupSharedFetch({ leaderHasQuery = true } = {}) {
     const mockBC = createMockBroadcastChannel();
@@ -1723,7 +1723,7 @@ function setupSharedFetch({ leaderHasQuery = true } = {}) {
     return { qcLeader, qcFollower, mockBC, clock };
 }
 
-test("sharedFetch: follower does NOT call its own fetcher — receives the leader's broadcast", async () => {
+test("sharedFetch: follower does NOT call its own fetcher -- receives the leader's broadcast", async () => {
     const { qcLeader, qcFollower } = setupSharedFetch();
     const leaderF = createControlledFetcher();
     const followerF = createControlledFetcher();
@@ -1740,7 +1740,7 @@ test("sharedFetch: follower does NOT call its own fetcher — receives the leade
     assert.equal(leaderF.callCount, 1, "leader fetched once");
     assert.equal(followerF.callCount, 0, "follower did NOT fetch");
 
-    // Leader resolves → broadcasts result → follower receives it.
+    // Leader resolves -> broadcasts result -> follower receives it.
     leaderF.resolve({ value: 42 });
     await tick(); await tick();
 
@@ -1777,7 +1777,7 @@ test("sharedFetch: follower request is fulfilled by leader that isn't currently 
 });
 
 test("sharedFetch: follower self-fetches (fallback) when no leader can fulfill", async () => {
-    // Only a follower exists — no leader on the channel at all.
+    // Only a follower exists -- no leader on the channel at all.
     const mockBC = createMockBroadcastChannel();
     const clock = createMockClock();
     const qcFollower = queryClient({
@@ -1796,7 +1796,7 @@ test("sharedFetch: follower self-fetches (fallback) when no leader can fulfill",
     effect(() => q.data());
     await tick();
 
-    assert.equal(followerF.callCount, 0, "no immediate self-fetch — waiting for leader");
+    assert.equal(followerF.callCount, 0, "no immediate self-fetch -- waiting for leader");
 
     // No leader responds. Advance past the fallback timeout.
     clock.advance(3000);
@@ -1833,7 +1833,7 @@ test("sharedFetch: leader's own observed fetch broadcasts to followers (no fetch
     qL.dispose(); qF.dispose();
 });
 
-test("sharedFetch: disabled when no isLeader supplied — each tab fetches independently", async () => {
+test("sharedFetch: disabled when no isLeader supplied -- each tab fetches independently", async () => {
     const mockBC = createMockBroadcastChannel();
     const clock = createMockClock();
     const base = {
@@ -1844,7 +1844,7 @@ test("sharedFetch: disabled when no isLeader supplied — each tab fetches indep
         now: clock.now,
         setTimeout: clock.setTimeout,
         clearTimeout: clock.clearTimeout,
-        // ...no isLeader → sharedFetch is inert, falls back to per-tab fetch
+        // ...no isLeader -> sharedFetch is inert, falls back to per-tab fetch
     };
     const qcA = queryClient(base);
     const qcB = queryClient(base);
@@ -1878,7 +1878,7 @@ test("sharedFetch: follower.refetch() defers to the leader (no local network cal
     assert.equal(qF.data(), "v1");
     assert.equal(followerF.callCount, 0);
 
-    // Follower explicitly refetches — must go through the leader, not locally.
+    // Follower explicitly refetches -- must go through the leader, not locally.
     qF.refetch();
     await tick();
     assert.equal(followerF.callCount, 0, "follower.refetch did NOT self-fetch");
@@ -1890,7 +1890,7 @@ test("sharedFetch: follower.refetch() defers to the leader (no local network cal
     qL.dispose(); qF.dispose();
 });
 
-test("integration: full flow — fetch, mutate, optimistic, rollback, invalidate", async () => {
+test("integration: full flow -- fetch, mutate, optimistic, rollback, invalidate", async () => {
     const { qc } = setupMockEnv(queryClient, { defaultStaleTime: 100_000 });
     const qf = createQueuedFetcher();
     const mf = createControlledFetcher();

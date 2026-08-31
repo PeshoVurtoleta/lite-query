@@ -1,5 +1,5 @@
 /**
- * @zakkster/lite-query/await — type declarations
+ * @zakkster/lite-query/await -- type declarations
  *
  * Async coordination for lite-query. Re-exports the @zakkster/lite-await
  * primitives verbatim (single source of truth) and adds two query-native
@@ -40,7 +40,7 @@ export interface QueryHandleLike<T = unknown> {
  * with the query's `data()`. Rejects with the query's `error()` if it reaches
  * `"error"` first, or with `TimeoutError` / the abort reason per `opts`.
  *
- * Works with a `streamQuery` handle too — e.g. await the `"streaming"` status:
+ * Works with a `streamQuery` handle too -- e.g. await the `"streaming"` status:
  * `whenQuery(s, (st) => st === "streaming")`.
  */
 export function whenQuery<T = unknown>(

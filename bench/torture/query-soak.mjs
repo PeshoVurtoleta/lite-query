@@ -1,7 +1,7 @@
 /**
- * bench/torture/query-soak.mjs — high-volume cache-lifecycle churn soak.
+ * bench/torture/query-soak.mjs -- high-volume cache-lifecycle churn soak.
  *
- * Not a benchmark — a soak. Continuously mounts/unmounts observers, rewires
+ * Not a benchmark -- a soak. Continuously mounts/unmounts observers, rewires
  * reactive keys, writes/invalidates/removes cache entries, and forces refetches
  * against a fixed keyspace for a few seconds. Fetchers resolve on a microtask,
  * resolve on a deferred mock-clock timer (to exercise in-flight abort), or
@@ -12,14 +12,14 @@
  *   - after teardown the entry map fully drains (every entry GC'd)
  *   - after teardown no timers remain pending on the mock clock
  *   - after teardown lite-signal's node/link pool returns to its pre-soak
- *     baseline — i.e. every entry's data/error/status/fetching signal node and
+ *     baseline -- i.e. every entry's data/error/status/fetching signal node and
  *     every observer link was released. This is the zero-GC contract under
- *     churn: the refcount → GC → disposeEntry chain leaks nothing.
+ *     churn: the refcount -> GC -> disposeEntry chain leaks nothing.
  *
  * The pool assertion is the sharp one. If a single detach were dropped, its
  * entry keeps observerCount > 0, never GCs, and activeNodes stays above
- * baseline → FAIL. If a disposeEntry path forgot a signal, activeNodes drifts
- * up → FAIL. If an observer link were orphaned, activeLinks != 0 → FAIL.
+ * baseline -> FAIL. If a disposeEntry path forgot a signal, activeNodes drifts
+ * up -> FAIL. If an observer link were orphaned, activeLinks != 0 -> FAIL.
  *
  * Exit code: 0 on a clean run, 1 on any error or stability assertion failure.
  *
@@ -37,7 +37,7 @@ import {createRegistry, setDefaultRegistry, signal, effect, dispose as disposeNo
 import {queryClient, query} from "../../Query.js";
 import {createMockClock} from "../../test/harness.js";
 
-// ── knobs ────────────────────────────────────────────────────────────────────
+// -- knobs --------------------------------------------------------------------
 const SECONDS      = Number(process.env.TORTURE_SECONDS || 5);
 const SEED         = (Number(process.env.TORTURE_SEED || 0x9e3779b9) >>> 0) || 1;
 const N_KEYS       = 400;    // static keyspace
@@ -45,11 +45,11 @@ const N_HANDLES    = 400;    // one query() handle per static key
 const N_REACTIVE   = 48;     // handles whose key is a signal (reactive-key churn)
 const N_OBSERVERS  = 256;    // observer slots (effects reading a random handle)
 const OPS_PER_TICK = 1500;
-const CACHE_TIME   = 800;    // ms — finite so unobserved entries actually GC
+const CACHE_TIME   = 800;    // ms -- finite so unobserved entries actually GC
 const STALE_TIME   = 0;      // every fresh attach is eligible to refetch
-const DEFER_MAX    = 400;    // ms — max deferred-fetch delay on the mock clock
+const DEFER_MAX    = 400;    // ms -- max deferred-fetch delay on the mock clock
 
-// ── deterministic PRNG (mulberry32) — reproducible op streams for triage ─────
+// -- deterministic PRNG (mulberry32) -- reproducible op streams for triage -----
 let _s = SEED;
 function rnd() {
     _s |= 0; _s = (_s + 0x6D2B79F5) | 0;
@@ -59,7 +59,7 @@ function rnd() {
 }
 const randInt = (n) => (rnd() * n) | 0;
 
-// ── registry + baseline ──────────────────────────────────────────────────────
+// -- registry + baseline ------------------------------------------------------
 const reg = createRegistry({
     maxNodes: (N_HANDLES + N_OBSERVERS + N_KEYS) * 8,
     maxLinks: (N_HANDLES + N_OBSERVERS + N_KEYS) * 32,
@@ -69,7 +69,7 @@ const reg = createRegistry({
 setDefaultRegistry(reg);
 const baseline = reg.stats();
 
-// ── mock environment ─────────────────────────────────────────────────────────
+// -- mock environment ---------------------------------------------------------
 const clock = createMockClock();
 let fetchCalls = 0;
 let rejectCalls = 0;
@@ -105,10 +105,10 @@ const qc = queryClient({
 });
 const entries = qc._internal.entries;
 
-// ── handles ──────────────────────────────────────────────────────────────────
+// -- handles ------------------------------------------------------------------
 // Static handles: fixed key ["k", i]. Reactive handles: key reads a per-handle
 // signal, so flipping that signal moves the handle across entries (detach old /
-// attach new inside the watcher — the reactive-key path).
+// attach new inside the watcher -- the reactive-key path).
 const handles = new Array(N_HANDLES);
 for (let i = 0; i < N_HANDLES; i++) {
     handles[i] = query(qc, {key: ["k", i], fetcher: torFetcher});
@@ -125,8 +125,8 @@ function anyHandle() {
     return r < N_HANDLES ? handles[r] : reactiveHandles[r - N_HANDLES];
 }
 
-// ── observer slots ───────────────────────────────────────────────────────────
-// Each slot is an effect that reads a random handle's accessors — that read is
+// -- observer slots -----------------------------------------------------------
+// Each slot is an effect that reads a random handle's accessors -- that read is
 // what attaches an observer to the entry. Rewiring a slot to a new handle
 // exercises detach-old / attach-new; toggling a slot off exercises last-observer
 // teardown + GC scheduling.
@@ -135,7 +135,7 @@ function mountSlot(i) {
     if (slots[i]) slots[i]();
     const h = anyHandle();
     slots[i] = effect(() => {
-        // Four accessor reads per run — the hoisted-cleanup zero-GC path.
+        // Four accessor reads per run -- the hoisted-cleanup zero-GC path.
         h.data(); h.status(); h.fetching(); h.error();
     });
 }
@@ -144,7 +144,7 @@ function unmountSlot(i) {
 }
 for (let i = 0; i < N_OBSERVERS; i++) mountSlot(i);
 
-// ── op mix ───────────────────────────────────────────────────────────────────
+// -- op mix -------------------------------------------------------------------
 let ops = 0;
 let errors = 0;
 let lastError = null;
@@ -191,7 +191,7 @@ function step() {
     }
 }
 
-// ── driver ───────────────────────────────────────────────────────────────────
+// -- driver -------------------------------------------------------------------
 const nextTick = () => new Promise((r) => setImmediate(r));
 
 async function run() {
@@ -246,7 +246,7 @@ if (errors > 0) {
     exitCode = 1;
 }
 if (entries.size !== 0) {
-    console.error("  FAIL: entry map didn't drain — leaked", entries.size, "entries");
+    console.error("  FAIL: entry map didn't drain -- leaked", entries.size, "entries");
     exitCode = 1;
 }
 if (clock.pendingCount !== 0) {
@@ -254,7 +254,7 @@ if (clock.pendingCount !== 0) {
     exitCode = 1;
 }
 if (after.activeNodes > baseline.activeNodes + 8) {
-    console.error("  FAIL: node pool leak — expected ≤", baseline.activeNodes + 8, "got", after.activeNodes);
+    console.error("  FAIL: node pool leak -- expected <=", baseline.activeNodes + 8, "got", after.activeNodes);
     exitCode = 1;
 }
 if (after.activeLinks !== 0) {

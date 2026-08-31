@@ -1,5 +1,5 @@
 /**
- * @zakkster/lite-query/stream — type declarations
+ * @zakkster/lite-query/stream -- type declarations
  *
  * One export: `streamQuery` (the read-side primitive for an iterator-backed,
  * multi-shot query). Values are pumped through @zakkster/lite-stream into the
@@ -34,7 +34,7 @@ export interface StreamQueryOptions<
     K extends readonly unknown[] = readonly unknown[],
 > {
     /**
-     * Cache key — static array OR a function reading reactive signals. A new
+     * Cache key -- static array OR a function reading reactive signals. A new
      * key aborts the current stream and establishes one for the new key.
      */
     key: K | (() => K);

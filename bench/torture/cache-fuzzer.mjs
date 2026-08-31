@@ -1,7 +1,7 @@
 /**
- * bench/torture/cache-fuzzer.mjs — two-tab cross-tab coherence fuzzer.
+ * bench/torture/cache-fuzzer.mjs -- two-tab cross-tab coherence fuzzer.
  *
- * Not a benchmark — a CRASH + COHERENCE soak. Two queryClients ("tabs") share
+ * Not a benchmark -- a CRASH + COHERENCE soak. Two queryClients ("tabs") share
  * one mock BroadcastChannel with crossTab:true, and both tabs fuzz the same
  * cache concurrently: setQueryData / invalidate / removeQueries / clear, plus
  * observed queries and streamQueries that mount, restart, and tear down under
@@ -12,7 +12,7 @@
  *     remotely-applied mutation broadcasts zero times (the processingRemote
  *     guard suppresses the echo). So total postMessages MUST equal the number
  *     of mutations we issued. An echo-loop regression makes this strictly
- *     greater — and, being self-amplifying, runs away fast.
+ *     greater -- and, being self-amplifying, runs away fast.
  *   - CONVERGENCE. After the fuzz, tab A writes a sentinel to each "sync" key;
  *     once messages drain, BOTH tabs read that sentinel back. Cross-tab
  *     propagation of writes still works after all the churn.
@@ -38,7 +38,7 @@ import {queryClient, query} from "../../Query.js";
 import {streamQuery} from "../../StreamQuery.js";
 import {createMockClock, createMockBroadcastChannel} from "../../test/harness.js";
 
-// ── knobs ────────────────────────────────────────────────────────────────────
+// -- knobs --------------------------------------------------------------------
 const SECONDS      = Number(process.env.TORTURE_SECONDS || 5);
 const SEED         = (Number(process.env.TORTURE_SEED || 0x1234567) >>> 0) || 1;
 const N_WORK       = 160;   // shared work keyspace (both tabs mutate)
@@ -48,7 +48,7 @@ const N_STREAM_PER = 4;     // stream handles per tab
 const OPS_PER_TICK = 900;
 const CACHE_TIME   = 600;
 
-// ── deterministic PRNG ───────────────────────────────────────────────────────
+// -- deterministic PRNG -------------------------------------------------------
 let _s = SEED;
 function rnd() {
     _s |= 0; _s = (_s + 0x6D2B79F5) | 0;
@@ -58,7 +58,7 @@ function rnd() {
 }
 const randInt = (n) => (rnd() * n) | 0;
 
-// ── registry + baseline ──────────────────────────────────────────────────────
+// -- registry + baseline ------------------------------------------------------
 const reg = createRegistry({
     maxNodes: (N_WORK + N_SYNC + (N_OBS_PER + N_STREAM_PER) * 2) * 16,
     maxLinks: (N_WORK + N_SYNC + (N_OBS_PER + N_STREAM_PER) * 2) * 48,
@@ -68,7 +68,7 @@ const reg = createRegistry({
 setDefaultRegistry(reg);
 const baseline = reg.stats();
 
-// ── shared mock channel, instrumented to count every real broadcast ──────────
+// -- shared mock channel, instrumented to count every real broadcast ----------
 const {BroadcastChannel: BaseBC} = createMockBroadcastChannel();
 let broadcasts = 0;
 class CountingBC extends BaseBC {
@@ -93,8 +93,8 @@ const tabA = makeTab();
 const tabB = makeTab();
 const tabs = [tabA, tabB];
 
-// ── fetchers + stream source ─────────────────────────────────────────────────
-// Each tab fetches independently (results do NOT cross tabs — by design).
+// -- fetchers + stream source -------------------------------------------------
+// Each tab fetches independently (results do NOT cross tabs -- by design).
 let fetchCalls = 0;
 function torFetcher(ctx) {
     fetchCalls++;
@@ -114,7 +114,7 @@ function makeStreamSource() {
     };
 }
 
-// ── per-tab handles + observer slots ─────────────────────────────────────────
+// -- per-tab handles + observer slots -----------------------------------------
 function tabState(qc) {
     const handles = new Array(N_WORK);
     for (let i = 0; i < N_WORK; i++) handles[i] = query(qc, {key: ["w", i], fetcher: torFetcher});
@@ -140,7 +140,7 @@ function mountObs(st, i) {
 function unmountObs(st, i) { if (st.slots[i]) { st.slots[i](); st.slots[i] = null; } }
 for (const st of [A, B]) for (let i = 0; i < N_OBS_PER; i++) mountObs(st, i);
 
-// ── op mix ───────────────────────────────────────────────────────────────────
+// -- op mix -------------------------------------------------------------------
 let ops = 0;
 let localMutations = 0;   // setData + invalidate + remove + clear we ISSUE (each broadcasts once)
 let errors = 0;
@@ -190,7 +190,7 @@ function step() {
     }
 }
 
-// ── driver ───────────────────────────────────────────────────────────────────
+// -- driver -------------------------------------------------------------------
 const nextTick = () => new Promise((r) => setImmediate(r));
 async function drain(rounds = 24) { for (let i = 0; i < rounds; i++) await Promise.resolve(); }
 
@@ -207,11 +207,11 @@ async function run() {
     return (performance.now() - start) / 1000;
 }
 
-// ── convergence probe: tab A stamps a sentinel per sync key, both tabs must see it
+// -- convergence probe: tab A stamps a sentinel per sync key, both tabs must see it
 const SENTINEL = 0xC0FFEE;
 async function convergeCheck() {
     for (let j = 0; j < N_SYNC; j++) { tabA.setQueryData(["s", j], SENTINEL); localMutations++; }
-    await drain(64);                      // NB: no clock.advance — sync entries must not GC before we read
+    await drain(64);                      // NB: no clock.advance -- sync entries must not GC before we read
     let mismatches = 0;
     for (let j = 0; j < N_SYNC; j++) {
         if (tabA.getQueryData(["s", j]) !== SENTINEL) mismatches++;
@@ -241,7 +241,7 @@ async function teardown() {
 const elapsed = await run();
 const mismatches = await convergeCheck();
 // Snapshot before teardown: qc.dispose() calls clear(), which legitimately
-// broadcasts one {clear} per tab — not an echo, so it's outside the invariant.
+// broadcasts one {clear} per tab -- not an echo, so it's outside the invariant.
 const broadcastsDuringFuzz = broadcasts;
 await teardown();
 
@@ -270,16 +270,16 @@ if (errors > 0) {
     exitCode = 1;
 }
 if (broadcastsDuringFuzz !== localMutations) {
-    console.error("  FAIL: echo storm — expected", localMutations, "broadcasts, got", broadcastsDuringFuzz,
+    console.error("  FAIL: echo storm -- expected", localMutations, "broadcasts, got", broadcastsDuringFuzz,
         broadcastsDuringFuzz > localMutations ? "(re-broadcast leak)" : "(dropped a broadcast)");
     exitCode = 1;
 }
 if (mismatches !== 0) {
-    console.error("  FAIL: cross-tab convergence — ", mismatches, "sync reads didn't match the sentinel");
+    console.error("  FAIL: cross-tab convergence -- ", mismatches, "sync reads didn't match the sentinel");
     exitCode = 1;
 }
 if (entriesA !== 0 || entriesB !== 0) {
-    console.error("  FAIL: entry maps didn't drain — A:", entriesA, "B:", entriesB);
+    console.error("  FAIL: entry maps didn't drain -- A:", entriesA, "B:", entriesB);
     exitCode = 1;
 }
 if (clock.pendingCount !== 0) {
@@ -287,7 +287,7 @@ if (clock.pendingCount !== 0) {
     exitCode = 1;
 }
 if (after.activeNodes > baseline.activeNodes + 8) {
-    console.error("  FAIL: node pool leak — expected ≤", baseline.activeNodes + 8, "got", after.activeNodes);
+    console.error("  FAIL: node pool leak -- expected <=", baseline.activeNodes + 8, "got", after.activeNodes);
     exitCode = 1;
 }
 if (after.activeLinks !== 0) {

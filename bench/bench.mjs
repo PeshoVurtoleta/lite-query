@@ -1,8 +1,8 @@
-// @zakkster/lite-query — comparative benchmark vs @tanstack/query-core.
+// @zakkster/lite-query -- comparative benchmark vs @tanstack/query-core.
 //
 // Run: node --expose-gc bench/bench.mjs
 //
-// Why no SWR? SWR is React-coupled — it has no framework-agnostic core to
+// Why no SWR? SWR is React-coupled -- it has no framework-agnostic core to
 // compare apples-to-apples against. (Its primitive is `useSWR(key, fetcher)`
 // which depends on React hooks.) TanStack's `@tanstack/query-core` IS
 // framework-agnostic, which makes it the right baseline for a signals-based
@@ -22,7 +22,7 @@ import {effect, createRegistry, setDefaultRegistry} from "@zakkster/lite-signal"
 // Scenario E mounts 1000 concurrent queries; at peak that's ~5000 active
 // lite-signal nodes (4 per cache entry + 1 per query observer), which
 // exceeds the default registry's 1024-node cap. Install a grow-policy
-// registry once at startup. Scenarios A–D stay well under 1024 and don't
+// registry once at startup. Scenarios A-D stay well under 1024 and don't
 // need this; it's only for the high-concurrency stress case.
 setDefaultRegistry(createRegistry({
     maxNodes: 8192,
@@ -36,7 +36,7 @@ const N_MUTATE = 5_000;
 const N_PARALLEL = 1_000;
 const WARMUP_RATIO = 0.05;
 
-// ── Memory + timing helpers ─────────────────────────────────────────────
+// -- Memory + timing helpers ---------------------------------------------
 function gc() {
     if (global.gc) global.gc();
 }
@@ -46,7 +46,7 @@ function mem() {
 }
 
 function fmtBytes(n) {
-    if (!isFinite(n)) return "—";
+    if (!isFinite(n)) return "--";
     const a = Math.abs(n);
     if (a >= 1_000_000) return (n / 1_000_000).toFixed(2) + " MB";
     if (a >= 1_000) return (n / 1_000).toFixed(2) + " KB";
@@ -65,7 +65,7 @@ function pad(s, w) {
     return String(s).padEnd(w);
 }
 
-// Synchronous-resolution fetcher pair — same observable behavior, both libs.
+// Synchronous-resolution fetcher pair -- same observable behavior, both libs.
 let counter = 0;
 
 function makeFetcher() {
@@ -108,13 +108,13 @@ function reportPair(name, lite, tan) {
     const speedup = lite.ops / tan.ops;
     const allocRatio = lite.transient / Math.max(1, tan.transient);
     console.log("");
-    console.log(`▶ ${name}`);
+    console.log(`> ${name}`);
     console.log(`  lite-query:    ${fmtOps(lite.ops).trim()} ops/sec, ${fmtBytes(lite.transient)}/op transient, ${fmtBytes(lite.retained)}/op retained`);
     console.log(`  query-core:    ${fmtOps(tan.ops).trim()} ops/sec, ${fmtBytes(tan.transient)}/op transient, ${fmtBytes(tan.retained)}/op retained`);
-    console.log(`  lite is ${speedup.toFixed(2)}× ${speedup > 1 ? "FASTER" : "slower"}, allocates ${allocRatio.toFixed(2)}× ${allocRatio < 1 ? "LESS" : "more"} transient memory`);
+    console.log(`  lite is ${speedup.toFixed(2)}x ${speedup > 1 ? "FASTER" : "slower"}, allocates ${allocRatio.toFixed(2)}x ${allocRatio < 1 ? "LESS" : "more"} transient memory`);
 }
 
-// ─── A) Cold attach → resolve → dispose ──────────────────────────────────
+// --- A) Cold attach -> resolve -> dispose ----------------------------------
 // The full mount/unmount cycle on a unique key each iteration. Measures the
 // cost of allocating an entry, attaching an observer, awaiting resolution,
 // detaching, and scheduling GC.
@@ -133,7 +133,7 @@ async function liteColdScenario() {
             await Promise.resolve();
             stop();
             q.dispose();
-            // Synchronous cleanup — disposes entry signals back to the pool.
+            // Synchronous cleanup -- disposes entry signals back to the pool.
             // Mirrors a typical "route unmount" cleanup in real apps; also
             // keeps the bench independent of macrotask-based GC timing.
             qc.removeQueries(key, {exact: true});
@@ -164,7 +164,7 @@ async function tanstackColdScenario() {
     };
 }
 
-// ─── B) Warm cache hit ───────────────────────────────────────────────────
+// --- B) Warm cache hit ---------------------------------------------------
 // Pre-resolve a single key; then repeatedly attach a fresh observer and read
 // the cached value. Measures the read-through fast path.
 
@@ -219,7 +219,7 @@ async function tanstackWarmScenario() {
     };
 }
 
-// ─── C) Invalidation + refetch on N observed queries ─────────────────────
+// --- C) Invalidation + refetch on N observed queries ---------------------
 // Pre-attach M observers on distinct keys. Call invalidate() on all.
 // Each iteration measures one full invalidate+refetch sweep.
 
@@ -240,7 +240,7 @@ async function liteInvalidateScenario() {
     await Promise.resolve();
     return {
         tick: async () => {
-            qc.invalidate(["inv"]);     // prefix match → all M re-fetch
+            qc.invalidate(["inv"]);     // prefix match -> all M re-fetch
             await Promise.resolve();
             await Promise.resolve();
         },
@@ -278,7 +278,7 @@ async function tanstackInvalidateScenario() {
     };
 }
 
-// ─── D) Mutation with optimistic update + rollback ───────────────────────
+// --- D) Mutation with optimistic update + rollback -----------------------
 // onMutate snapshots + writes, fn rejects, onError rolls back. Full pipeline.
 
 async function liteMutationScenario() {
@@ -332,7 +332,7 @@ async function tanstackMutationScenario() {
     };
 }
 
-// ─── E) Many parallel queries — cache-map scaling ────────────────────────
+// --- E) Many parallel queries -- cache-map scaling ------------------------
 
 async function liteParallelScenario() {
     return {
@@ -377,10 +377,10 @@ async function tanstackParallelScenario() {
     };
 }
 
-// ─── Main ───────────────────────────────────────────────────────────────
+// --- Main ---------------------------------------------------------------
 console.log("");
 console.log("@zakkster/lite-query  vs  @tanstack/query-core");
-console.log(`Node: ${process.version} · ${new Date().toISOString()}`);
+console.log(`Node: ${process.version} * ${new Date().toISOString()}`);
 console.log("");
 console.log(
     pad("scenario", 60),
@@ -390,12 +390,12 @@ console.log(
     "  transient/op",
     "    retained/op",
 );
-console.log("─".repeat(125));
+console.log("-".repeat(125));
 
 const rows = {};
-rows.coldL = await measure("A) cold attach → resolve → dispose  [lite-query]", N_COLD, liteColdScenario);
+rows.coldL = await measure("A) cold attach -> resolve -> dispose  [lite-query]", N_COLD, liteColdScenario);
 reportRow(rows.coldL);
-rows.coldT = await measure("A) cold attach → resolve → dispose  [query-core]", N_COLD, tanstackColdScenario);
+rows.coldT = await measure("A) cold attach -> resolve -> dispose  [query-core]", N_COLD, tanstackColdScenario);
 reportRow(rows.coldT);
 
 rows.warmL = await measure("B) warm cache hit (already resolved) [lite-query]", N_WARM, liteWarmScenario);
@@ -419,9 +419,9 @@ rows.parT = await measure("E) 1000 parallel queries per cycle   [query-core]", 5
 reportRow(rows.parT);
 
 console.log("");
-console.log("─".repeat(125));
+console.log("-".repeat(125));
 console.log("Pairwise comparison:");
-reportPair("A) cold attach → resolve → dispose", rows.coldL, rows.coldT);
+reportPair("A) cold attach -> resolve -> dispose", rows.coldL, rows.coldT);
 reportPair("B) warm cache hit", rows.warmL, rows.warmT);
 reportPair("C) invalidate 50 observed queries", rows.invL, rows.invT);
 reportPair("D) mutation w/ optimistic + rollback", rows.mutL, rows.mutT);
@@ -429,8 +429,8 @@ reportPair("E) 1000 parallel queries per cycle", rows.parL, rows.parT);
 
 console.log("");
 console.log("Notes:");
-console.log("  • SWR is React-coupled (no framework-agnostic core); excluded for honest apples-to-apples.");
-console.log("  • TanStack version: " + JSON.parse(await import("node:fs").then(f => f.promises.readFile("./node_modules/@tanstack/query-core/package.json", "utf8"))).version);
-console.log("  • Same fetcher, same keys, same observer pattern. lite-query uses lite-signal effect, query-core uses observer.subscribe.");
-console.log("  • Both libraries run their cache lookups, observer machinery, and cleanup paths in full — no skipping or stubbing.");
+console.log("  * SWR is React-coupled (no framework-agnostic core); excluded for honest apples-to-apples.");
+console.log("  * TanStack version: " + JSON.parse(await import("node:fs").then(f => f.promises.readFile("./node_modules/@tanstack/query-core/package.json", "utf8"))).version);
+console.log("  * Same fetcher, same keys, same observer pattern. lite-query uses lite-signal effect, query-core uses observer.subscribe.");
+console.log("  * Both libraries run their cache lookups, observer machinery, and cleanup paths in full -- no skipping or stubbing.");
 console.log("");

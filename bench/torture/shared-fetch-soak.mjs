@@ -1,7 +1,7 @@
 /**
- * bench/torture/shared-fetch-soak.mjs — leader/follower shared-fetch dedup soak.
+ * bench/torture/shared-fetch-soak.mjs -- leader/follower shared-fetch dedup soak.
  *
- * Not a benchmark — a coherence soak for the cross-tab fetch-dedup protocol.
+ * Not a benchmark -- a coherence soak for the cross-tab fetch-dedup protocol.
  * One leader tab and four follower tabs share a mock BroadcastChannel with
  * sharedFetch:true. Followers mount/unmount observers on shared keys while the
  * leader invalidates and writes them, for a few seconds. The ops/sec is
@@ -11,13 +11,13 @@
  *   - THE DEDUP INVARIANT: follower tabs issue ZERO local fetches for shared
  *     keys. A follower needing data broadcasts a fetch-req and defers to the
  *     leader; as long as the leader answers before the fallback timer fires
- *     (it always does — the leader resolves on a microtask, the fallback is a
+ *     (it always does -- the leader resolves on a microtask, the fallback is a
  *     mock-clock timer we never advance past mid-run), the follower's own
  *     fetcher is never called. Each follower fetcher is a spy; the sum of their
  *     call counts must be 0.
  *   - LIVENESS: the leader actually fetched (leaderFetches > 0), and a follower
  *     ends up holding the leader's fetched value for a probe key it never
- *     fetched itself — proving the result travelled leader → follower over the
+ *     fetched itself -- proving the result travelled leader -> follower over the
  *     channel, not via a local network call.
  *   - every tab's entry map drains after teardown, no timers dangle, and the
  *     shared lite-signal pool returns to its pre-soak baseline.
@@ -32,7 +32,7 @@
  * fetch-req always finds a live leader entry to fulfill. sharedFetchTimeout is
  * set far beyond any mid-run clock advance, so a follower fallback self-fetch
  * (the one path that would break the invariant) is structurally impossible
- * until teardown — by which point all observers are detached and their fallback
+ * until teardown -- by which point all observers are detached and their fallback
  * timers cleared.
  */
 import {performance} from "node:perf_hooks";
@@ -40,7 +40,7 @@ import {createRegistry, setDefaultRegistry, effect} from "@zakkster/lite-signal"
 import {queryClient, query} from "../../Query.js";
 import {createMockClock, createMockBroadcastChannel} from "../../test/harness.js";
 
-// ── knobs ────────────────────────────────────────────────────────────────────
+// -- knobs --------------------------------------------------------------------
 const SECONDS       = Number(process.env.TORTURE_SECONDS || 5);
 const SEED          = (Number(process.env.TORTURE_SEED || 0xABCDEF) >>> 0) || 1;
 const N_FOLLOWERS   = Number(process.env.FOLLOWERS || 4);
@@ -48,10 +48,10 @@ const N_SHARED      = 96;    // shared keyspace, all observed by the leader
 const N_OBS_PER_FOL = 40;    // follower observer slots
 const OPS_PER_TICK  = 700;
 const CACHE_TIME    = 10_000;      // long; entries persist through the run, drain at teardown
-const SHARED_TO     = 1_000_000;   // sharedFetchTimeout — never advanced past mid-run
+const SHARED_TO     = 1_000_000;   // sharedFetchTimeout -- never advanced past mid-run
 const PROBE_KEY     = ["w", N_SHARED];   // a key outside the churned range, for the liveness probe
 
-// ── deterministic PRNG ───────────────────────────────────────────────────────
+// -- deterministic PRNG -------------------------------------------------------
 let _s = SEED;
 function rnd() {
     _s |= 0; _s = (_s + 0x6D2B79F5) | 0;
@@ -61,7 +61,7 @@ function rnd() {
 }
 const randInt = (n) => (rnd() * n) | 0;
 
-// ── registry + baseline ──────────────────────────────────────────────────────
+// -- registry + baseline ------------------------------------------------------
 const reg = createRegistry({
     maxNodes: (N_SHARED * (N_FOLLOWERS + 2) + N_OBS_PER_FOL * N_FOLLOWERS) * 16,
     maxLinks: (N_SHARED * (N_FOLLOWERS + 2) + N_OBS_PER_FOL * N_FOLLOWERS) * 48,
@@ -71,7 +71,7 @@ const reg = createRegistry({
 setDefaultRegistry(reg);
 const baseline = reg.stats();
 
-// ── shared channel ───────────────────────────────────────────────────────────
+// -- shared channel -----------------------------------------------------------
 const {BroadcastChannel: BC} = createMockBroadcastChannel();
 const clock = createMockClock();
 
@@ -92,7 +92,7 @@ function makeTab(isLeaderTab) {
     });
 }
 
-// ── leader: real fetcher + permanent observer on every shared key ────────────
+// -- leader: real fetcher + permanent observer on every shared key ------------
 let leaderFetches = 0;
 function leaderFetcher(ctx) {
     leaderFetches++;
@@ -104,10 +104,10 @@ const leaderObservers = new Array(N_SHARED + 1);
 for (let i = 0; i <= N_SHARED; i++) {   // includes PROBE_KEY at index N_SHARED
     const h = query(leader, {key: ["w", i], fetcher: leaderFetcher});
     leaderHandles[i] = h;
-    leaderObservers[i] = effect(() => { h.data(); h.status(); });   // permanent — leader always holds the entry
+    leaderObservers[i] = effect(() => { h.data(); h.status(); });   // permanent -- leader always holds the entry
 }
 
-// ── followers: spy fetchers that MUST never fire for shared keys ─────────────
+// -- followers: spy fetchers that MUST never fire for shared keys -------------
 const followerFetches = new Array(N_FOLLOWERS).fill(0);
 function makeFollower(fi) {
     const qc = makeTab(false);
@@ -131,7 +131,7 @@ function mountFol(f, i) {
 function unmountFol(f, i) { if (f.slots[i]) { f.slots[i](); f.slots[i] = null; } }
 for (const f of followers) for (let i = 0; i < N_OBS_PER_FOL; i++) mountFol(f, i);
 
-// ── op mix ───────────────────────────────────────────────────────────────────
+// -- op mix -------------------------------------------------------------------
 let ops = 0;
 let errors = 0;
 let lastError = null;
@@ -160,7 +160,7 @@ function step() {
     }
 }
 
-// ── driver ───────────────────────────────────────────────────────────────────
+// -- driver -------------------------------------------------------------------
 const nextTick = () => new Promise((r) => setImmediate(r));
 async function drain(rounds = 24) { for (let i = 0; i < rounds; i++) await Promise.resolve(); }
 
@@ -177,8 +177,8 @@ async function run() {
     return (performance.now() - start) / 1000;
 }
 
-// ── liveness probe: a follower must hold the leader's fetched value for a key
-//    it never fetched itself ─────────────────────────────────────────────────
+// -- liveness probe: a follower must hold the leader's fetched value for a key
+//    it never fetched itself -------------------------------------------------
 async function livenessProbe() {
     const f0 = followers[0];
     const s = effect(() => { f0.probe.data(); f0.probe.status(); });   // follower observes PROBE_KEY
@@ -243,19 +243,19 @@ if (errors > 0) {
     exitCode = 1;
 }
 if (followerTotal !== 0) {
-    console.error("  FAIL: dedup broken — followers self-fetched", followerTotal, "times:", followerFetches.join(","));
+    console.error("  FAIL: dedup broken -- followers self-fetched", followerTotal, "times:", followerFetches.join(","));
     exitCode = 1;
 }
 if (leaderFetches === 0) {
-    console.error("  FAIL: leader never fetched — soak did no shared-fetch work");
+    console.error("  FAIL: leader never fetched -- soak did no shared-fetch work");
     exitCode = 1;
 }
 if (!probe.ok) {
-    console.error("  FAIL: liveness — a follower did not receive the leader's fetched value for the probe key");
+    console.error("  FAIL: liveness -- a follower did not receive the leader's fetched value for the probe key");
     exitCode = 1;
 }
 if (leftoverEntries !== 0) {
-    console.error("  FAIL: entry maps didn't drain — leftover:", leftoverEntries);
+    console.error("  FAIL: entry maps didn't drain -- leftover:", leftoverEntries);
     exitCode = 1;
 }
 if (clock.pendingCount !== 0) {
@@ -263,7 +263,7 @@ if (clock.pendingCount !== 0) {
     exitCode = 1;
 }
 if (after.activeNodes > baseline.activeNodes + 8) {
-    console.error("  FAIL: node pool leak — expected ≤", baseline.activeNodes + 8, "got", after.activeNodes);
+    console.error("  FAIL: node pool leak -- expected <=", baseline.activeNodes + 8, "got", after.activeNodes);
     exitCode = 1;
 }
 if (after.activeLinks !== 0) {
