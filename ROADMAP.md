@@ -119,7 +119,7 @@ all ran clean.
 | **Q-04** | S2 | **The README's install section documents a dependency set the package does not have.** It says "Three peer dependencies" and tells users to `npm install ... @zakkster/lite-store @zakkster/lite-channel`. `package.json` peers are `lite-signal` (required) + `lite-stream`/`lite-await` (optional); `Query.js` imports only `lite-signal`. Published README contradicts published manifest. | README `## Install` vs `package.json` `peerDependencies`; `grep "^import" Query.js` -> lite-signal only |
 | **Q-05** | S3 | **Dead links in the npm tarball.** README links `./QuickStart.md` and `./Cookbook.md`; `files[]` ships neither (tarball = 11 files, verified from the registry tarball listing). The facts table also leans on "pagination is a Cookbook recipe" -- a claim whose evidence npm consumers cannot open. | `tar -tzf <tarball>` -> no QuickStart.md, no Cookbook.md; README line ~149 |
 | **Q-06** | S3 | **Alpha peer floor in a stable release.** `"@zakkster/lite-signal": ">=1.5.0-alpha"` in `peerDependencies` and `devDependencies`, while 1.5.0 stable is published and README/llms.txt both say `>= 1.5.0`. Three documents, two vocabularies. | `package.json` lines 51, 65 |
-| **Q-07** | S3 | **/await re-export drift: 6 of 16 upstream exports missing.** `Awaitable.js` re-exports 10 primitives (`whenSignal, whenTruthy, whenEquals, allOf, anyOf, raceOf, withTimeout, withAbort, fromPromise, TimeoutError`). lite-await 1.2.0 (published 2026-08-30) also ships `allSettledOf, withResolvers, tryFn, delay, withRetry, mapLimit` -- none re-exported, none mentioned in any lite-query doc. The `^1.0.0` peer range already resolves to 1.2.0, so the gap is invisible until a user imports from the subpath and gets `undefined`. | diff `Awaitable.js` import block vs `node_modules/@zakkster/lite-await/Await.js` export block |
+| **Q-07** | S3 | **/await re-export drift: SEVEN of 17 upstream named exports missing** (corrected 2026-08-31 from six -- the original count was diffed against a truncated read of the upstream export block). `Awaitable.js` re-exports 10 (`whenSignal, whenTruthy, whenEquals, allOf, anyOf, raceOf, withTimeout, withAbort, fromPromise, TimeoutError`). lite-await 1.2.0 also ships `allSettledOf, withResolvers, tryFn, delay, withRetry, mapLimit` AND the 1.0.0-era `whenStatechart` -- none re-exported, none in any lite-query doc. Upstream additionally exports `VERSION`, which consumers deliberately do NOT re-export (it names lite-await's version; the convention is now stated in lite-await's llms.txt). The `^1.0.0` peer range already resolves to 1.2.0, so the gap is invisible until a user imports from the subpath and gets `undefined`. | full export block `sed -n '1699,1725p' ../LiteAwait/Await.js` vs `Awaitable.js` import block |
 | **Q-08** | S3 | **~1,400 ASCII-law violations across shipped files.** Counted per file: `Query.js` 790x U+2500 box-drawing + 37 em-dashes + 8 arrows + 1 U+2265 + 1 `i`-diaeresis; `Query.d.ts` 433x U+2500 + 10 em; `StreamQuery.js` 63x U+2500; `llms.txt` 38 em + 13 arrows; `README.md` 41 em + 13 arrows + misc (`(c)` sign, middle dots, en-dashes, left arrow); `CHANGELOG.md` 18 em + 6 arrows; both other d.ts 2 em each. The 21 U+00D7 (`x`) occurrences in README/llms.txt sit inside the law's source exception but the docs law prescribes literal `x`. | `grep -oP '[^\x00-\x7F]' <file> \| sort \| uniq -c` per file |
 | **Q-09** | S3 | **The torture harness deviates from suite law and is not landed.** Law: every change proven by `node --expose-gc test/torture.mjs` with `@zakkster/lite-leak` + `@zakkster/lite-gc-profiler`. Reality: three scripts under `bench/torture/` using a signal-registry pool snapshot as the leak oracle (deliberately no `--expose-gc`), neither law package in devDeps, no `test/torture.mjs`, and the whole suite plus its `package.json` script wiring is **staged but uncommitted**. The pool oracle is good -- and blind to JS-heap retention outside pooled nodes (closures, arrays, Maps held past teardown), which is exactly the blind-spot class the profiler exists to close. All three scripts PASS exit 0 today. | `git status` -> staged `bench/torture/*`, modified `package.json`; `npm run torture` -> 3x PASS, exit 0 |
 | **Q-10** | S3 | **No `.gitignore`, no lockfile.** Root cause of Q-01 (section 0 tells the story). `package-lock.json` was deleted from tracking and never ignored; `node_modules` shows as `??`. | `ls -a \| grep gitignore` -> nothing |
@@ -431,8 +431,15 @@ PURPOSE
   list tracks upstream deliberately.
 
 TASKS
-  - Re-export the six: `allSettledOf`, `withResolvers`, `tryFn`, `delay`,
-    `withRetry`, `mapLimit` -- verbatim, alongside the existing ten.
+  - Re-export the seven: `allSettledOf`, `withResolvers`, `tryFn`, `delay`,
+    `withRetry`, `mapLimit`, `whenStatechart` -- verbatim, alongside the
+    existing ten. Full named-export parity with upstream (17), which the
+    surface guard then holds automatically.
+  - DECISION (record): `VERSION` is NOT re-exported -- upstream's VERSION
+    names lite-await's version and would read as lite-query's from this
+    subpath. Convention agreed with upstream (its llms.txt states it);
+    the surface guard's parity check excludes VERSION by name with a
+    comment citing this decision.
   - Peer + devDep floor: `"@zakkster/lite-await": "^1.2.0"` -- the floor
     matches the surface actually re-exported, per the old roadmap's own
     rule.
@@ -443,15 +450,21 @@ TASKS
         one-shot flows outside the cache. One sentence each, one example.
       * `delay` vs the test harness mock clock: delay is wall-clock; inside
         tests use the harness clock. Prevents the first confused issue.
-  - fromPromise vocabulary deferral RE-VERIFIED and restated: lite-await
-    1.1/1.2 shipped no vocabulary option (checked in its CHANGELOG), so the
-    pending/resolved/rejected -> pending/success/error mapping table stays
-    docs-only. Revisit only if upstream adds an option.
-  - Tests (~7 new in test/awaitable.test.js): re-export identity for all six
-    (`assert.equal(reexported, upstream)` against the installed package --
-    the strongest possible smoke test), plus one integration each for
-    withRetry (rejecting fetcher, succeeds on 3rd try) and mapLimit
-    (concurrency ceiling observed via in-flight counter).
+  - fromPromise vocabulary: the deferral now has an owner. lite-await's V1
+    session decides accept-or-reject ON THE RECORD
+    (../LiteAwait/decisions/0009, recommendation REJECT -- three releases
+    of the docs-only mapping produced zero friction). If REJECT: locked
+    decision #4 closes permanently and the mapping table is the final
+    answer -- say so in the /await docs. If ACCEPT: adopt the option here
+    with a named test. Do not ship Q3 without reading the verdict.
+  - Tests (~8 new in test/awaitable.test.js): re-export identity for all
+    seven (`assert.equal(reexported, upstream)` against the installed
+    package -- the strongest possible smoke test), plus one integration
+    each for withRetry (rejecting fetcher, succeeds on 3rd try) and
+    mapLimit (concurrency ceiling observed via in-flight counter).
+    whenStatechart gets identity only -- its integration home is upstream
+    (which gains a real-machine test in its V1 via the lite-statechart
+    devDep).
   - Awaitable.d.ts: re-export the six types. The Q2 surface guard enforces
     llms.txt + d.ts completeness automatically -- this session is its first
     real test.
@@ -466,8 +479,9 @@ HOT PATH
   query path. The two bridges (whenQuery/whenAllQueries) are untouched.
 
 ASSERTIONS
-  - All 16 upstream exports importable from `@zakkster/lite-query/await`;
-    identity-equal to the upstream bindings.
+  - All 17 upstream named exports importable from
+    `@zakkster/lite-query/await`; identity-equal to the upstream bindings;
+    VERSION deliberately absent and the exclusion tested by name.
   - Surface guard (Q2) green with the six added -- and it FAILED before
     llms.txt was updated during development (record that it fired; that is
     the guard's control in the wild).
@@ -936,9 +950,15 @@ scripts; Q4 onward: the law harness). No gate output is a FAIL.
 - **Devtools PANEL**: lite-studio's, consuming Q7's feed. Out of this
   package's scope by design.
 - **whenAnyQuery / further bridges**: no consumer yet (Q3 NON-GOALS).
+- **createAwaitScope re-export**: lite-await's C1 session (its
+  AWAIT_ROADMAP.md) is gated with OUR Q5 as its named tripwire --
+  route-loader work makes scoped awaiter defaults real. When C1 ships,
+  `/await` re-exports `createAwaitScope` in the next minor here.
 - **fetchPreviousPage / bidirectional infinite**: no consumer yet (Q5).
-- **fromPromise vocabulary normalization**: upstream decision; re-verified
-  absent through lite-await 1.2.0 (Q3 restates the mapping-table stance).
+- **fromPromise vocabulary normalization**: upstream decision -- now
+  scheduled: lite-await V1 records accept-or-reject in its decisions/0009
+  (recommendation there: REJECT, closing this permanently). Q3 reads the
+  verdict before shipping; this entry retires either way.
 - **lite-bake-stream composition recipes** (added 2026-08-31, surface read
   from its llms.txt at 1.0.0): (1) `streamQuery` + `RangeReader` -- a
   reactive, cached, abortable window over a remote multi-GB LBK1 container
