@@ -688,6 +688,19 @@ TASKS
     version mismatch -> drop everything, fetch fresh (fail closed; null is
     not zero). Storage-agnostic save/load thunks; lite-persist recipe in
     the Cookbook shows localStorage and IndexedDB.
+  - Bake-backed persistence recipe (added 2026-08-31): a second Cookbook
+    variant wires the thunks to `@zakkster/lite-bake-stream@1.0.0` preserve
+    mode -- one cache entry per record, `PreserveReader.getJSON(i)` for
+    lazy per-entry materialization, so boot becomes a sync zero-alloc
+    container open and each entry parses on first observer attach instead
+    of one monolithic JSON.parse over the whole dehydrated cache. Store is
+    IndexedDB/CacheStorage Blobs (LBK1 is bytes; localStorage would pay a
+    base64 tax). Task: MEASURE the JSON-vs-bake crossover size and print
+    the number in the recipe -- below it plain JSON wins, and the recipe
+    says so. Discipline unchanged: lite-query keeps zero runtime deps;
+    bake lives entirely in the caller-wired adapter thunks (an
+    optional-peer subpath only if a real consumer demands it, per the
+    /stream and /await precedent).
   - infiniteQuery entries: pages arrays serialize like any success entry
     (decided here, tested here).
   - Cross-tab note: persistence + crossTab both restoring on boot must not
@@ -920,6 +933,21 @@ scripts; Q4 onward: the law harness). No gate output is a FAIL.
 - **fetchPreviousPage / bidirectional infinite**: no consumer yet (Q5).
 - **fromPromise vocabulary normalization**: upstream decision; re-verified
   absent through lite-await 1.2.0 (Q3 restates the mapping-table stance).
+- **lite-bake-stream composition recipes** (added 2026-08-31, surface read
+  from its llms.txt at 1.0.0): (1) `streamQuery` + `RangeReader` -- a
+  reactive, cached, abortable window over a remote multi-GB LBK1 container
+  via HTTP Range + zone-map pruning, no full download; (2) `ingestStream`'s
+  `onProgress` as a `streamQuery` source -- reactive ingest-progress UI in
+  ~10 lines. Recipe-grade, zero core change; candidates to ride Q5 or Q6's
+  docs pass. Explicitly NOT for the hot cache path: entries hold live
+  values read by signals, and a serialize/deserialize toll between a
+  signal read and its data would break law 4 -- bake belongs at
+  boundaries (disk, network, boot).
+- **Baked torture fixtures** (optional, Q4+): a deterministic LBK1 fixture
+  for large-payload churn would keep JSON.parse allocation noise out of
+  the profiler-gated phase H measurement, borrowing lite-bake-stream's
+  8 GB-soak methodology. Only if phase H ever needs large payloads;
+  otherwise padding.
 
 ### Locked decisions carried forward from the 1.1.0 roadmap
 
