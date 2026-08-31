@@ -1,6 +1,6 @@
 # @zakkster/lite-query
 
-Reactive async cache with cross-tab coherence. Built on `@zakkster/lite-signal`. ~6KB minified+gzipped, framework-agnostic, 106 tests, zero runtime dependencies outside the lite ecosystem.
+Reactive async cache with cross-tab coherence. Built on `@zakkster/lite-signal`. ~6KB minified+gzipped, framework-agnostic, 153 tests, zero runtime dependencies outside the lite ecosystem.
 
 [![npm version](https://img.shields.io/npm/v/@zakkster/lite-query.svg?style=for-the-badge&color=latest)](https://www.npmjs.com/package/@zakkster/lite-query)
 ![Zero-GC](https://img.shields.io/badge/Zero--GC-Hot%20path-00C853?style=for-the-badge&logo=leaf&logoColor=white)
@@ -61,7 +61,7 @@ The honest comparison. Numbers are min+gzip, current as of writing.
 | Abort reason vocabulary | Yes (`signal.reason`) | No | No |
 | Per-query timeout | Yes | No (manual via fetcher) | No (manual via fetcher) |
 | Devtools UI | Roadmap | Yes (mature) | Yes |
-| Tests | 152 | ~hundreds | ~hundreds |
+| Tests | 153 | ~hundreds | ~hundreds |
 | Foundation | Signals (lite-signal) | Observer pattern | SWR algo + hooks |
 
 Where lite-query trails: pagination is a Cookbook recipe rather than a built-in API, and the devtools panel is on the roadmap. Where it leads: cross-tab and the signal-native composition story.

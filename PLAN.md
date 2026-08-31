@@ -408,3 +408,10 @@ Verify the artifact, not the working tree (Q-03/Q-04's lesson).
     (2) CHANGELOG's `.gitignore` bullet parenthetical now lists all three
         ignored patterns including `package-lock.json` (the b56eb
         no-lockfile stance), instead of reading as complete at two.
+- **OR-6 (post-qa amendment, 2026-08-31):** QA passed all 25 checks and
+  observed two further stale test counts outside every assertion's scope:
+  README line 3 tagline said "106 tests" (a 1.0-era number) and the facts
+  table said "Tests | 152". Both -> 153 in a follow-up commit before
+  /release, so 1.1.1 does not ship three different counts in one file.
+  Ledger: recorded as part of Q-14's closure (same finding class, same
+  fix).
