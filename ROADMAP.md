@@ -17,7 +17,7 @@ The package's state, honestly:
 
 | Axis | State |
 | --- | --- |
-| Published | `@zakkster/lite-query@1.1.0` is npm latest; local tree matches it plus uncommitted torture-suite wiring |
+| Published | `@zakkster/lite-query@1.1.1` is npm latest (Q1 shipped 2026-08-31; artifact gates G16-G19 verified against the registry tarball) |
 | Tests | 153 tests; 152 pass + **1 silently skipped** under `npm test`; 153/153 with `--expose-gc` (verified 2026-08-31) |
 | Torture | 3 soak/fuzz scripts, all PASS exit 0 -- but **staged, uncommitted**, and not the suite-law harness |
 | Docs | README/Cookbook/demo shipped and current for 1.1.0; QuickStart stale; install section factually wrong; npm tarball has dead links |
@@ -36,7 +36,7 @@ Registry state, checked with `npm view <pkg> version`:
 
 | Package | Latest | Relevant fact |
 | --- | --- | --- |
-| `@zakkster/lite-query` | 1.1.0 | matches local `package.json` |
+| `@zakkster/lite-query` | 1.1.1 | Q1 shipped; matches local `package.json` |
 | `@zakkster/lite-await` | 1.2.0 | published 2026-08-30; ships 6 exports lite-query does not re-export (Q-07) |
 | `@zakkster/lite-stream` | 1.1.0 | published 2026-07-10; additive `toAsyncIterable` enrichments; `^1.0.0` peer admits it; suite green against it |
 | `@zakkster/lite-signal` | 1.5.0 | stable; the `>=1.5.0-alpha` peer floor is now pointing below a released stable (Q-06) |
@@ -128,6 +128,7 @@ all ran clean.
 | **Q-13** | S2 | **llms.txt tells an LLM consumer to install a signal version on which /stream cannot run.** Its `## Peer dependencies` block (lines ~107-112) says `@zakkster/lite-signal ^1.1.3` -- the real floor is `^1.5.0` (`createRoot` does not exist in 1.1.x; StreamQuery imports it) -- and lists `lite-store` / `lite-channel` as peers, which is Q-04's contradiction reproduced in the one file the pipeline reads to learn a sibling's API. Found by the Q1 planner pass, verified by reading the lines. | `sed -n '107,112p' llms.txt` vs `package.json` peers; `grep createRoot StreamQuery.js` |
 | **Q-14** | S3 | **llms.txt's headline test count disagrees with its own parenthetical.** Line 3: "152 deterministic tests (120 core ... + 18 await + 15 stream)" -- the breakdown sums to 153; the headline counted passes under the gate that skips one (Q-02). | `sed -n '3p' llms.txt`; 120+18+15 = 153 |
 | **Q-15** | S3 | **README license badge links `LICENSE.txt`; the file is `LICENSE`.** Dead in repo and tarball both. | `sed -n '14p' README.md`; `ls LICENSE.txt` -> no such file |
+| **Q-16** | S3 | **No `VERSION` export -- the /release drill's expected sync site does not exist.** Never shipped one; version truth lives in two places (package.json + CHANGELOG head) plus informal header stamps in StreamQuery.js/Awaitable.js line 1 (and none in Query.js). Surfaced by the 1.1.1 release drill. Scheduled: Q3 ships `VERSION` from all three entry points (public surface -> minor). | `grep -n VERSION Query.js StreamQuery.js Awaitable.js` -> nothing |
 Positive results worth pinning (they bound the ledger): the full suite is green
 against the newest published peers; all three torture scripts pass; a missing
 optional peer fails at import with Node's `ERR_MODULE_NOT_FOUND` naming the
@@ -223,7 +224,7 @@ surface and semver makes that call, not sentiment.
 ---
 package: "@zakkster/lite-query"
 version_target: 1.1.1
-status: planned
+status: shipped (2026-08-31; commits e052fc0/ada4cc0/f5908e5/42b3bcc/646542d)
 tests_min: 153
 skip_max: 0
 torture: "npm run torture -> 3x PASS, exit 0"
@@ -413,7 +414,7 @@ status: planned
 tests_min: 160
 skip_max: 0
 torture: "3x PASS + controls fail"
-findings: [Q-07]
+findings: [Q-07, Q-16]
 depends_on: [Q2]
 blocks: [Q5]
 ---
@@ -454,6 +455,11 @@ TASKS
   - Awaitable.d.ts: re-export the six types. The Q2 surface guard enforces
     llms.txt + d.ts completeness automatically -- this session is its first
     real test.
+  - `VERSION` const (Q-16): export from Query.js, re-export from
+    StreamQuery.js and Awaitable.js; three-place sync check (package.json ==
+    CHANGELOG head == VERSION) joins the default test run, and the /release
+    drill's step-4 comparison finally has its site. Retire the informal
+    line-1 header stamps in favor of the const (one version, one source).
 
 HOT PATH
   None. Re-exports are module-scope bindings; zero runtime code added to any
