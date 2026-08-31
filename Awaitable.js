@@ -1,4 +1,4 @@
-// @zakkster/lite-query/await 1.1.1
+// @zakkster/lite-query/await 1.1.2
 //
 // Async coordination for lite-query. Re-exports the @zakkster/lite-await
 // primitives verbatim (single source of truth -- no reimplementation) and adds
