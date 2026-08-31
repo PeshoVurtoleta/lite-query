@@ -39,12 +39,17 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test test/*.test.js",
-    "bench": "node --expose-gc bench/bench.mjs"
+    "test": "node --expose-gc --test test/*.test.js",
+    "prepublishOnly": "npm test && npm run torture",
+    "bench": "node --expose-gc bench/bench.mjs",
+    "torture": "npm run torture:soak && npm run torture:fuzz && npm run torture:shared",
+    "torture:soak": "node bench/torture/query-soak.mjs",
+    "torture:fuzz": "node bench/torture/cache-fuzzer.mjs",
+    "torture:shared": "node bench/torture/shared-fetch-soak.mjs"
   },
   "peerDependencies": {
     "@zakkster/lite-await": "^1.0.0",
-    "@zakkster/lite-signal": ">=1.5.0-alpha",
+    "@zakkster/lite-signal": "^1.5.0",
     "@zakkster/lite-stream": "^1.0.0"
   },
   "peerDependenciesMeta": {
@@ -58,7 +63,7 @@
   "devDependencies": {
     "@tanstack/query-core": "^5.101.0",
     "@zakkster/lite-await": "^1.0.0",
-    "@zakkster/lite-signal": ">=1.5.0-alpha",
+    "@zakkster/lite-signal": "^1.5.0",
     "@zakkster/lite-stream": "^1.0.0"
   },
   "overrides": {
