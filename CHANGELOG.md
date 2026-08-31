@@ -5,6 +5,70 @@ All notable changes to `@zakkster/lite-query` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] -- 2026-08-31
+
+A docs-and-guards patch. Zero logic: no runtime token in `Query.js`,
+`StreamQuery.js`, or `Awaitable.js` changed -- every `.js`/`.d.ts` hunk is
+comment bytes only. `npm test` -> 158 pass, 0 fail, 0 skipped;
+`npm run torture` -> 3x PASS, exit 0. Version unchanged (the release drill
+owns the bump).
+
+### Added
+
+- **Two drift guards join the default `npm test`** (153 -> 158 tests):
+  `test/ascii-guard.test.js` walks the package.json `files[]` scope (parsed at
+  runtime, so future `files[]` changes are covered) plus `test/*.js` and
+  `bench/**/*.mjs`, asserting every byte is printable ASCII + LF. It carries an
+  allowlist mechanism for the source-law U+00D7/U+00B5 exception (empty today)
+  and two failing controls (an inline U+2014 fixture; the allowlist escape
+  hatch). `test/surface-guard.test.js` asserts every runtime export is
+  documented in `llms.txt` AND typed in its `.d.ts`, and every peer named in
+  `llms.txt` resolves to `package.json` peerDependencies, with a failing
+  control. Both are pure `node:test` + `node:fs`, zero new dependencies.
+- **Guides shipped.** `QuickStart.md` and `Cookbook.md` added to `files[]`;
+  `npm pack` -> 13 files (was 11).
+- **`demo/VENDOR.md`** documenting the pinned `demo/vendor/` copies
+  (`Signal.js`/`Watch.js` 1.5.0, `lite-await.js` 1.0.0, `lite-stream.js`
+  1.0.0) and the pre-bump `grep -c createRoot demo/vendor/Signal.js` check.
+  Not shipped (`demo/` is never in `files[]`).
+
+### Changed
+
+- **QuickStart 1.1 refresh.** Install line reduced to the one required peer
+  (`@zakkster/lite-signal`); added a `streamQuery` latest-mode taste and a
+  `whenQuery` route-guard taste (consistent with Cookbook 14 and 11); the
+  stale "five steps" closing claim corrected.
+- **README doc links flipped** from absolute GitHub URLs back to relative
+  `./QuickStart.md` / `./Cookbook.md`.
+- **SPEC.md reconciled with ROADMAP.md.** Marked as the historical 1.1.0
+  release-candidate document; its "Post-publish roadmap" body replaced by a
+  two-line pointer to ROADMAP.md.
+- **Wording riders.** README "peer deps in the lite ecosystem" -> the one
+  required peer; README lite-channel "powered by" / "engine behind" softened
+  to "the convenient `isLeader` source" (matching the no-hard-dependency note
+  already in the doc); README stream-demo path qualified "in the repo".
+
+### Fixed
+
+- **ASCII-law sweep** (Q-08) -- comment/prose punctuation only, no logic.
+  Per-file non-ASCII codepoints swept to 0: Query.js 837, Query.d.ts 443,
+  StreamQuery.js 63, StreamQuery.d.ts 2, Awaitable.d.ts 2; test/query.test.js
+  3449, test/edge-cases.test.js 328, test/harness.js 184; bench/bench.mjs 308,
+  bench/torture/cache-fuzzer.mjs 440, bench/torture/query-soak.mjs 476,
+  bench/torture/shared-fetch-soak.mjs 476, bench/torture/README.md 25;
+  README.md 75, llms.txt 57, CHANGELOG.md 23, Cookbook.md 30, QuickStart.md
+  13, SPEC.md 11. Mapping: U+2500 run -> `-` x N; em/en dash -> `--`/`-`;
+  arrows -> `->`/`<-`; U+2265/U+2264 -> `>=`/`<=`; middle dot and bullet ->
+  `*`; (c)-sign -> `(c)`; i-diaeresis -> `i`; U+00D7 -> `x`; U+25B6 -> `>`.
+- **Stale sequencing claim.** `llms.txt` said one-connection-shared streaming
+  lands in "1.2"; the roadmap moved that work to 2.0 -- corrected to "2.0
+  (see ROADMAP.md)".
+- **Doc test counts aligned to the runtime.** The guards raise `npm test` to
+  158, so the README tagline, facts-table row, and Tests section, and the
+  llms.txt headline, now say 158 (breakdown: 120 core + 18 await + 15 stream
+  + 5 repo drift guards). Per-section counts (120 core, 106 in
+  query.test.js) were verified still correct and left as-is.
+
 ## [1.1.1] -- 2026-08-31
 
 A gates-and-truth patch. No runtime code changed -- no `.js` source file is
@@ -77,45 +141,45 @@ suite that was written but never committed.
 
 Integration release: **streaming queries** (via `@zakkster/lite-stream`) and
 **async coordination** (via `@zakkster/lite-await`). The core `@zakkster/lite-query`
-entry point and its three peer dependencies are unchanged — all new capability
+entry point and its three peer dependencies are unchanged -- all new capability
 ships behind opt-in subpath exports with optional peer deps. See `ROADMAP.md`
 for the full design and rationale.
 
 ### Added
 
-- **Streaming queries** — `@zakkster/lite-query/stream` → `streamQuery(qc, opts)`.
+- **Streaming queries** -- `@zakkster/lite-query/stream` -> `streamQuery(qc, opts)`.
   A multi-shot, iterator-backed query: subscribe by key to an async iterable
   (SSE, websocket frames, paginated cursors, pubsub topics) and read its state
   as signals. Built on `lite-stream`'s `fromAsyncIterable`.
   - Modes: `"latest"` (signal holds the most recent value) and `"buffer"`
-    (signal holds a bounded ring of recent values; `maxBuffer` required —
+    (signal holds a bounded ring of recent values; `maxBuffer` required --
     unbounded buffering is rejected by design).
   - Accessors: `data()` / `error()` / `status()` / `done()` / `count()` /
     `droppedCount()`, plus `restart()` and `dispose()`.
-  - Lazy (no observers → no iterator pulled), structural abort-on-detach
+  - Lazy (no observers -> no iterator pulled), structural abort-on-detach
     (`iterator.return()` via the abort signal), reactive-key restart, and an
-    `enabled` gate — the same lifecycle guarantees as `query()`.
+    `enabled` gate -- the same lifecycle guarantees as `query()`.
   - Lives in the same `queryClient` cache: `getQueryData` / `invalidate` /
     `removeQueries` operate on stream entries uniformly.
 - **New status value `"streaming"`** for stream entries, extending the query
   vocabulary to `idle | pending | streaming | success | error`. `pending` =
   subscribed, no value yet; `streaming` = at least one value, not done;
   `success` = iterator completed naturally; `error` = iterator threw or aborted.
-- **Async coordination** — `@zakkster/lite-query/await`. Re-exports the
+- **Async coordination** -- `@zakkster/lite-query/await`. Re-exports the
   `lite-await` primitives verbatim (`whenSignal`, `whenTruthy`, `whenEquals`,
   `allOf`, `anyOf`, `raceOf`, `withTimeout`, `withAbort`, `fromPromise`,
   `TimeoutError`) plus two query-native bridges:
-  - `whenQuery(q, predicate?, opts?)` — resolves with `q.data()` when the query
+  - `whenQuery(q, predicate?, opts?)` -- resolves with `q.data()` when the query
     reaches `success` (or a custom predicate over `status()`); rejects with
     `q.error()` on `error`. Honors `timeout` and `signal`.
-  - `whenAllQueries(queries, opts?)` — resolves with the data array in input
+  - `whenAllQueries(queries, opts?)` -- resolves with the data array in input
     order when every query reaches `success`; rejects on the first error or
     timeout. Built on `allOf`.
-- **`fromPromise` re-export** — positioned as the "queryless query": one-shot
-  promise → reactive `{ status, data, error }` with no cache, for the cases
+- **`fromPromise` re-export** -- positioned as the "queryless query": one-shot
+  promise -> reactive `{ status, data, error }` with no cache, for the cases
   where caching is genuinely unwanted. Its native `pending/resolved/rejected`
   vocabulary is documented with an explicit mapping to lite-query's
-  `success/error` (`resolved → success`, `rejected → error`).
+  `success/error` (`resolved -> success`, `rejected -> error`).
 
 ### Changed
 
@@ -177,7 +241,7 @@ for the full design and rationale.
   underlying connection) fires on every teardown path. GC eviction and `clear()`
   also dispose the entry's `data`/`error`/`status`/`fetching` signals; the
   `/await` bridges allocate nothing requiring lite-query-side cleanup. Re-exported
-  `fromPromise` returns a consumer-owned signal — call `dispose()` on it per
+  `fromPromise` returns a consumer-owned signal -- call `dispose()` on it per
   lite-await's contract.
 - **Entry shape stays monomorphic.** The three stream slots (`isStream`,
   `streamStop`, `streamState`) are added uniformly to every entry as
@@ -186,23 +250,23 @@ for the full design and rationale.
 - **Streaming data does not cross-tab broadcast.** Each tab owns its own
   connection (SSE/websocket is per-document). `invalidate` and `removeQueries`
   still propagate cross-tab (every tab aborts and re-establishes its own stream).
-  Leader-election **shared streams** — one upstream connection per browser, frames
-  broadcast to follower tabs, the multi-shot dual of 1.0's shared fetch — are the
+  Leader-election **shared streams** -- one upstream connection per browser, frames
+  broadcast to follower tabs, the multi-shot dual of 1.0's shared fetch -- are the
   planned 1.2 headline.
 
-## [1.0.0] — 2026-05-28
+## [1.0.0] -- 2026-05-28
 
 Initial release.
 
 ### Added
 
-- `queryClient()` — cache and lifecycle owner; supports `defaultStaleTime`,
+- `queryClient()` -- cache and lifecycle owner; supports `defaultStaleTime`,
   `defaultCacheTime`, `defaultTimeout`, `retry`, `retryDelay`, `crossTab`,
   injectable `now` / `setTimeout` / `clearTimeout` / `broadcastChannel`.
-- `query(qc, opts)` — reactive query factory with lazy observer tracking, same-
+- `query(qc, opts)` -- reactive query factory with lazy observer tracking, same-
   entry detection on watcher re-runs, generation guard, retry-with-backoff,
   abort-on-detach, stale-while-revalidate.
-- `mutation(qc, opts)` — `onMutate` / `onSuccess` / `onError` / `onSettled`
+- `mutation(qc, opts)` -- `onMutate` / `onSuccess` / `onError` / `onSettled`
   callback chain with `mutationGen` race protection and callback-error
   containment (`onSettled` always fires).
 - Cache operations: `getQueryData` / `setQueryData` (value or updater fn) /
@@ -215,14 +279,14 @@ Initial release.
   injectable `isLeader`). Follower tabs broadcast a `fetch-req` instead of
   fetching; the leader fulfills it once and broadcasts the result. Each
   follower arms a fallback timer (`sharedFetchTimeout`, default 3000ms) and
-  self-fetches if no leader serves — a liveness guarantee independent of the
+  self-fetches if no leader serves -- a liveness guarantee independent of the
   election state. Composes with `@zakkster/lite-channel`'s leader signal with
   no hard dependency. The feature TanStack Query and SWR don't ship.
 - Per-query and client-default `timeout` option. Aborts the fetch with
   `ABORT_REASON.TIMEOUT` reason on the `AbortSignal`.
 - Abort reason vocabulary: `ABORT_REASON.DETACH | REFETCH | REMOVED | TIMEOUT`
   exposed via `signal.reason` for retry/logging decisions in user fetchers.
-- Mid-flight invalidation semantics: option (b) — let the in-flight finish,
+- Mid-flight invalidation semantics: option (b) -- let the in-flight finish,
   then refetch immediately.
 - Opt-in `equals` per query for structural sharing without re-firing effects
   on referentially-different-but-structurally-equal data.
@@ -232,7 +296,7 @@ Initial release.
 - 106 deterministic tests across 22 sections.
 - Adversarial cases: mutation race (slow first + fast second), `onSuccess`
   throw with `onSettled` still firing, shared-observer mid-fetch dispose,
-  cross-tab race conditions, reactive `enabled` → false abort, sparse-key
+  cross-tab race conditions, reactive `enabled` -> false abort, sparse-key
   cache hits, three forms of abort reasons.
 - Shared-fetch coverage: follower defers to leader broadcast; leader fulfils a
   follower request for a non-observed-but-cached query; follower fallback

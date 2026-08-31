@@ -36,6 +36,8 @@
     "README.md",
     "CHANGELOG.md",
     "llms.txt",
+    "QuickStart.md",
+    "Cookbook.md",
     "LICENSE"
   ],
   "scripts": {

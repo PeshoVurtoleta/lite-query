@@ -6,7 +6,7 @@ If you're new to lite-query, read [QuickStart.md](./QuickStart.md) first. This d
 
 ---
 
-## 1. Polling — refetch every N seconds while observed
+## 1. Polling -- refetch every N seconds while observed
 
 For a dashboard, a build status indicator, a notification badge. Want: refetch on a schedule, but only while someone is watching.
 
@@ -33,7 +33,7 @@ When the effect is disposed (component unmounts), `clearInterval` fires and the 
 
 ---
 
-## 2. Debounced reactive keys — search-as-you-type without spam
+## 2. Debounced reactive keys -- search-as-you-type without spam
 
 A search input that changes the query key on every keystroke would fire a fetch per keystroke. Wrap the key signal in a debounce.
 
@@ -65,7 +65,7 @@ The `enabled` gate prevents fetches for trivial queries. The debounce ensures on
 
 ---
 
-## 3. Dependent queries — fetch B after A resolves
+## 3. Dependent queries -- fetch B after A resolves
 
 User has to be loaded before we can fetch their posts. Use `enabled` to gate.
 
@@ -90,7 +90,7 @@ const userPosts = query(qc, {
 
 ---
 
-## 4. Pagination — accumulate pages into a single list
+## 4. Pagination -- accumulate pages into a single list
 
 lite-query doesn't ship a built-in `useInfiniteQuery` because the pattern is simple enough to compose. Hold a page signal, query per page, accumulate manually.
 
@@ -121,7 +121,7 @@ This pattern keeps you in control of the accumulator (reset on filter change, de
 
 ---
 
-## 5. Prefetch on hover — speculate before navigation
+## 5. Prefetch on hover -- speculate before navigation
 
 The user hovers a link. Start fetching the destination's data so it's cached when they click.
 
@@ -150,7 +150,7 @@ When the user actually clicks and the destination mounts a query with key `['use
 
 ---
 
-## 6. Optimistic updates with rollback — the canonical pattern
+## 6. Optimistic updates with rollback -- the canonical pattern
 
 Used in the QuickStart but worth a deeper recipe. Three pieces: `onMutate` snapshots + writes optimistic data, `onError` restores from snapshot, `onSuccess` invalidates for the server's truth.
 
@@ -180,7 +180,7 @@ The UI flips immediately when you call `toggleTodo.mutate(id)`. If the server sa
 
 ---
 
-## 7. Cross-tab optimistic updates — make the magic visible
+## 7. Cross-tab optimistic updates -- make the magic visible
 
 This is the unique feature. With `crossTab: true`, the optimistic update in tab A is broadcast to tab B and lands there instantly too. Demo for clients:
 
@@ -201,13 +201,13 @@ const addTodo = mutation(qc, {
 });
 ```
 
-Open the app in two windows side-by-side. Click "Add Todo" in window A. Window B's list updates instantly — the `setQueryData` from `onMutate` propagated via `BroadcastChannel`. The subsequent `invalidate` on success also propagates, so both tabs refetch in sync.
+Open the app in two windows side-by-side. Click "Add Todo" in window A. Window B's list updates instantly -- the `setQueryData` from `onMutate` propagated via `BroadcastChannel`. The subsequent `invalidate` on success also propagates, so both tabs refetch in sync.
 
-Caveat: large payloads (>1MB) in `setQueryData` will be `structuredClone`'d on the main thread of every tab. For batch operations like importing a CSV, use `invalidate` instead of `setQueryData` — that triggers a refetch in other tabs without copying the payload.
+Caveat: large payloads (>1MB) in `setQueryData` will be `structuredClone`'d on the main thread of every tab. For batch operations like importing a CSV, use `invalidate` instead of `setQueryData` -- that triggers a refetch in other tabs without copying the payload.
 
 ---
 
-## 8. Conditional fetching with `enabled` reactive — abort on view change
+## 8. Conditional fetching with `enabled` reactive -- abort on view change
 
 A modal opens; the modal fetches its data. The modal closes; we want to cancel the fetch immediately. Use a reactive `enabled`.
 
@@ -221,10 +221,10 @@ const modalData = query(qc, {
   enabled: () => modalOpen(),
 });
 
-// Open modal — fetch starts
+// Open modal -- fetch starts
 modalOpen.set(true);
 
-// Close modal before fetch resolves — fetch is aborted via AbortSignal,
+// Close modal before fetch resolves -- fetch is aborted via AbortSignal,
 // status reverts to 'idle', no work wasted.
 modalOpen.set(false);
 ```
@@ -233,7 +233,7 @@ The user's fetcher receives `signal.reason === 'lite-query:detach'`, so they can
 
 ---
 
-## 9. Smart retry — bail out on 4xx, keep retrying 5xx
+## 9. Smart retry -- bail out on 4xx, keep retrying 5xx
 
 The function-form `retry` lets you decide per-error.
 
@@ -246,7 +246,7 @@ const data = query(qc, {
     return res.json();
   },
   retry: (attempt, err) => {
-    // Don't retry 4xx — they won't succeed.
+    // Don't retry 4xx -- they won't succeed.
     if (err.status >= 400 && err.status < 500) return false;
     // Retry up to 3 times for everything else (5xx, network).
     return attempt < 3;
@@ -276,10 +276,10 @@ const data = query(qc, {
             console.warn('Fetch timed out; consider increasing the timeout option');
             break;
           case 'lite-query:detach':
-            // User left the page — no log needed
+            // User left the page -- no log needed
             break;
           case 'lite-query:refetch':
-            // A newer refetch superseded us — also no log
+            // A newer refetch superseded us -- also no log
             break;
           case 'lite-query:removed':
             console.warn('Query was removed mid-flight');
@@ -297,7 +297,7 @@ const data = query(qc, {
 
 ## 11. Wait for a query with `whenQuery`
 
-Sometimes you need a one-shot read that *awaits* the first success — a route guard, a setup script, a test. The `@zakkster/lite-query/await` entry point ships `whenQuery` for exactly this (and re-exports the whole `@zakkster/lite-await` toolkit).
+Sometimes you need a one-shot read that *awaits* the first success -- a route guard, a setup script, a test. The `@zakkster/lite-query/await` entry point ships `whenQuery` for exactly this (and re-exports the whole `@zakkster/lite-await` toolkit).
 
 ```js
 import { whenQuery, whenAllQueries } from '@zakkster/lite-query/await';
@@ -307,18 +307,18 @@ const user = query(qc, { /* ... */ });
 // Imperative: resolves with data() on success, rejects with error() on failure.
 const userData = await whenQuery(user, { timeout: 5000 });
 
-// Gate a screen on several queries at once — fail-fast, data in input order:
+// Gate a screen on several queries at once -- fail-fast, data in input order:
 const [profile, prefs, flags] = await whenAllQueries([profileQ, prefsQ, flagsQ]);
 
-// Any predicate over status — e.g. await a streamQuery's first frame:
+// Any predicate over status -- e.g. await a streamQuery's first frame:
 await whenQuery(ticks, (status) => status === 'streaming');
 ```
 
-`whenQuery` forwards `timeout` / `signal` to the underlying `whenSignal`, so a slow query rejects with `TimeoutError` and an aborted one rejects with the abort reason. Requires `@zakkster/lite-await`. lite-query keeps this in an optional subpath rather than the core — composability over feature-creep.
+`whenQuery` forwards `timeout` / `signal` to the underlying `whenSignal`, so a slow query rejects with `TimeoutError` and an aborted one rejects with the abort reason. Requires `@zakkster/lite-await`. lite-query keeps this in an optional subpath rather than the core -- composability over feature-creep.
 
 ---
 
-## 12. Cross-tab fetch deduplication — five tabs, one request
+## 12. Cross-tab fetch deduplication -- five tabs, one request
 
 The headline feature. With a leader oracle wired from `@zakkster/lite-channel`, only the leader tab fetches; followers receive the result over `BroadcastChannel`. For a dashboard users keep open in many tabs, this collapses N polling requests into one.
 
@@ -343,7 +343,7 @@ const metrics = query(qc, {
   staleTime: 0,
 });
 
-// Poll every 10s — in the leader only; followers get the broadcast.
+// Poll every 10s -- in the leader only; followers get the broadcast.
 effect(() => {
   metrics.data();
   const id = setInterval(() => metrics.refetch(), 10_000);
@@ -351,13 +351,13 @@ effect(() => {
 });
 ```
 
-Open the app in five tabs. Watch your server logs: one request per cycle, not five. Close the leader tab — `lite-channel` elects a new leader, and within `sharedFetchTimeout` the followers either get served by the new leader or self-fetch. No request is ever lost.
+Open the app in five tabs. Watch your server logs: one request per cycle, not five. Close the leader tab -- `lite-channel` elects a new leader, and within `sharedFetchTimeout` the followers either get served by the new leader or self-fetch. No request is ever lost.
 
 The trade-off to know: the leader can only serve a query it currently has alive. If the leader is on a different route where that query isn't mounted, the follower's fallback timer fires and it self-fetches. Correctness holds; you just lose the dedup benefit for that key until a tab with the query becomes leader.
 
 ---
 
-## 13. Testing your queries — the harness pattern
+## 13. Testing your queries -- the harness pattern
 
 For unit tests, inject a mock clock + controlled fetcher into the client. The harness from lite-query's own test suite is reusable.
 
@@ -397,9 +397,9 @@ No real network, no real timers, deterministic outcomes. The full harness with `
 
 ---
 
-## 14. Streaming — a live SSE feed in latest mode
+## 14. Streaming -- a live SSE feed in latest mode
 
-`streamQuery` (from `@zakkster/lite-query/stream`, peer `@zakkster/lite-stream`) subscribes a key to an async iterable. In `latest` mode `data()` is the most recent value — one signal write per frame, zero allocation.
+`streamQuery` (from `@zakkster/lite-query/stream`, peer `@zakkster/lite-stream`) subscribes a key to an async iterable. In `latest` mode `data()` is the most recent value -- one signal write per frame, zero allocation.
 
 ```js
 import { streamQuery } from '@zakkster/lite-query/stream';
@@ -434,7 +434,7 @@ When the effect disposes, the last observer is gone: the stream is aborted (`rea
 
 ---
 
-## 15. Streaming — paginated cursor in buffer mode
+## 15. Streaming -- paginated cursor in buffer mode
 
 `buffer` mode keeps a sliding window of the last `maxBuffer` values; `data()` is the window array and `droppedCount()` counts what fell off. Good for "last N events" or accumulating a bounded feed.
 
@@ -462,13 +462,13 @@ effect(() => {
 });
 ```
 
-Memory is bounded by the window, not the stream length — the 10,000th row costs the same as the 51st.
+Memory is bounded by the window, not the stream length -- the 10,000th row costs the same as the 51st.
 
 ---
 
-## 16. Streaming — websocket with invalidate-driven reconnect
+## 16. Streaming -- websocket with invalidate-driven reconnect
 
-A long-lived socket as a stream, plus cross-tab reconnect. `invalidate(key)` aborts the live connection and re-establishes a fresh one; with `crossTab: true` the invalidation reaches every tab, so they all reconnect (in 1.1.0 each tab owns its own socket — only the invalidate signal crosses tabs).
+A long-lived socket as a stream, plus cross-tab reconnect. `invalidate(key)` aborts the live connection and re-establishes a fresh one; with `crossTab: true` the invalidation reaches every tab, so they all reconnect (in 1.1.0 each tab owns its own socket -- only the invalidate signal crosses tabs).
 
 ```js
 async function* socket({ key, signal }) {
