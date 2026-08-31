@@ -11,6 +11,31 @@ A gates-and-truth patch. No runtime code changed -- no `.js` source file is
 touched by this release. The diff is scripts, metadata, docs, and the torture
 suite that was written but never committed.
 
+### Added
+
+- **Torture suite landed** under `bench/torture/`: `query-soak.mjs`
+  (cache-lifecycle churn), `cache-fuzzer.mjs` (two-tab coherence including
+  streamQuery handles), `shared-fetch-soak.mjs` (leader/follower dedup under
+  churn), plus the `torture`, `torture:soak`, `torture:fuzz` and
+  `torture:shared` scripts. Seeded PRNG (`TORTURE_SEED`), deterministic mock
+  clock and mock `BroadcastChannel`, and hard invariants: zero errors, entry
+  map drains, no dangling timers, signal registry back to baseline
+  (`activeLinks === 0`), exit 1 on any violation. `npm run torture` ->
+  3x PASS, exit 0.
+- **`prepublishOnly`: `npm test && npm run torture`** -- the gate is now
+  structurally in front of every publish, not a step someone remembers.
+- **`.gitignore`** (`node_modules/`, `*.tgz`, `package-lock.json` --
+  re-affirming the repo's deliberate no-lockfile stance). Its absence let a
+  partial `node_modules` survive in the tree; every test file failed with
+  `ERR_MODULE_NOT_FOUND` until `npm install`.
+
+### Changed
+
+- **Peer floor stabilized.** `@zakkster/lite-signal` moves from
+  `>=1.5.0-alpha` to `^1.5.0` in both `peerDependencies` and
+  `devDependencies`. 1.5.0 stable is published; README and llms.txt already
+  said `>= 1.5.0`.
+
 ### Fixed
 
 - **The default test gate now runs the zero-GC identity test.** `npm test`
@@ -47,31 +72,6 @@ suite that was written but never committed.
 - **The `[1.1.0]` heading carried no release date** in the tarball npm serves
   as `latest` -- it still claimed the shipped version was pending. It is now
   stamped with its actual publish date (2026-06-23).
-
-### Changed
-
-- **Peer floor stabilized.** `@zakkster/lite-signal` moves from
-  `>=1.5.0-alpha` to `^1.5.0` in both `peerDependencies` and
-  `devDependencies`. 1.5.0 stable is published; README and llms.txt already
-  said `>= 1.5.0`.
-
-### Added
-
-- **Torture suite landed** under `bench/torture/`: `query-soak.mjs`
-  (cache-lifecycle churn), `cache-fuzzer.mjs` (two-tab coherence including
-  streamQuery handles), `shared-fetch-soak.mjs` (leader/follower dedup under
-  churn), plus the `torture`, `torture:soak`, `torture:fuzz` and
-  `torture:shared` scripts. Seeded PRNG (`TORTURE_SEED`), deterministic mock
-  clock and mock `BroadcastChannel`, and hard invariants: zero errors, entry
-  map drains, no dangling timers, signal registry back to baseline
-  (`activeLinks === 0`), exit 1 on any violation. `npm run torture` ->
-  3x PASS, exit 0.
-- **`prepublishOnly`: `npm test && npm run torture`** -- the gate is now
-  structurally in front of every publish, not a step someone remembers.
-- **`.gitignore`** (`node_modules/`, `*.tgz`, `package-lock.json` --
-  re-affirming the repo's deliberate no-lockfile stance). Its absence let a
-  partial `node_modules` survive in the tree; every test file failed with
-  `ERR_MODULE_NOT_FOUND` until `npm install`.
 
 ## [1.1.0] -- 2026-06-23
 

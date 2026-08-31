@@ -1,4 +1,4 @@
-// @zakkster/lite-query/stream 1.1.0
+// @zakkster/lite-query/stream 1.1.1
 //
 // Streaming queries -- a multi-shot, iterator-backed query built on
 // @zakkster/lite-stream. Subscribe by key to an async iterable (SSE, websocket
