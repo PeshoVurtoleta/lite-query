@@ -38,7 +38,7 @@ Registry state, checked with `npm view <pkg> version`:
 | --- | --- | --- |
 | `@zakkster/lite-query` | 1.1.1 | Q1 shipped; matches local `package.json` |
 | `@zakkster/lite-await` | 1.2.0 | published 2026-08-30; ships 6 exports lite-query does not re-export (Q-07) |
-| `@zakkster/lite-stream` | 1.1.0 | published 2026-07-10; additive `toAsyncIterable` enrichments; `^1.0.0` peer admits it; suite green against it |
+| `@zakkster/lite-stream` | 1.1.0 | published 2026-07-10; additive `toAsyncIterable` enrichments; `^1.0.0` peer admits it; suite green against it. Roadmap enriched 2026-09-01 (`../LiteStream/ROADMAP.md`, LS1..LS4): its LS-01 (dispose-mid-pump pulls forever; llms claim false since 1.0.0) verified NOT to bite us -- `streamStop` aborts before any teardown (`StreamQuery.js:156`); its LS3 v1.3.0 targets our hand-rolled ring (see parking ledger) |
 | `@zakkster/lite-signal` | 1.5.0 | stable; the `>=1.5.0-alpha` peer floor is now pointing below a released stable (Q-06) |
 | `@zakkster/lite-store` | 1.2.0 | NOT a peer of lite-query 1.1.0, despite what the README says (Q-04) |
 | `@zakkster/lite-channel` | 1.0.1 | same (Q-04) |
@@ -878,6 +878,13 @@ DESIGN OBLIGATIONS (the brief's floor, not its ceiling)
     view discipline (maxBuffer, droppedCount) as a local stream; a slow
     follower cannot grow the leader's memory (law 4 -- bound it, count
     drops, assert the bound in torture).
+  - The spike also rules the lite-stream split: ../LiteStream/ROADMAP.md
+    LS4 (v1.4.0, status: gated) holds a candidate menu -- per-value
+    idleTimeout (the "leader hung, frames stop" detector), a push-writer
+    surface for follower frame projection, share/refcount primitives.
+    Decide which land in lite-stream vs in here vs nowhere; LS4's gate IS
+    this ruling (their gate is our spike -- record the verdict in both
+    roadmaps before designing).
   - Offline mutation queue: explicit opt-in per mutation (a default that
     queues silently is fail-open); durable via the Q6 persistence seam
     (version-stamped like everything else); replay preserves order per
@@ -955,6 +962,16 @@ scripts; Q4 onward: the law harness). No gate output is a FAIL.
   route-loader work makes scoped awaiter defaults real. When C1 ships,
   `/await` re-exports `createAwaitScope` in the next minor here.
 - **fetchPreviousPage / bidirectional infinite**: no consumer yet (Q5).
+- **StreamQuery hand-ring collapse** (added 2026-09-01): lite-stream LS3
+  (v1.3.0) will offer natively what `StreamQuery.js:119-142` hand-rolls
+  around `pipeToSignal` -- the buffer window (our `ring.push/shift/slice`
+  shifts O(n) where their real ring is O(1)), the first-frame status tap
+  smuggled through `transform`, and the abort-filtering `onError` (their
+  LS-12 decision doc). When lite-stream 1.3.0 ships: collapse the three
+  into the enriched call in the next minor here, and refresh
+  `demo/vendor/lite-stream.js` (still 1.0.0; VENDOR.md row updates with
+  it). Safe to wait: lite-stream's s7 conformance tier freezes our exact
+  current call shape, so drift under us is structurally impossible.
 - **fromPromise vocabulary normalization**: upstream decision -- now
   scheduled: lite-await V1 records accept-or-reject in its decisions/0009
   (recommendation there: REJECT, closing this permanently). Q3 reads the
