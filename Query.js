@@ -620,15 +620,60 @@ export function queryClient(options = {}) {
     // No-op until the feed vocabulary grows in C10.
     function emitStreamGap(entry, count, reason) { /* C10 */ }
 
-    // Watchdog liveness (C6): armWatchdog starts the periodic check-and-rearm
-    // timer; disarmWatchdog clears it. Declared as no-ops here so C2's terminal
-    // projection can call them; the real bodies land in C6.
-    function armWatchdog(entry) { /* C6 */ }
-    function disarmWatchdog(entry) { /* C6 */ }
+    // Watchdog liveness (OR-3 extended to streams). lastFrameAt is a plain
+    // number stamped per frame (zero alloc, no per-value timer churn); ONE
+    // periodic check-and-rearm timer per projected entry decides liveness --
+    // lite-stream's own idleTimeout design note, implemented in the domain that
+    // can see the failure. If no frame has arrived within streamIdleTimeout the
+    // follower self-connects (openStream). A healthy leader's frames keep
+    // lastFrameAt fresh, so the check just rearms. Never per-value
+    // setTimeout/clearTimeout -- amortized O(1).
+    function armWatchdog(entry) {
+        if (entry.streamWatchdog !== null) return;           // already armed
+        const period = opts.streamIdleTimeout;
+        entry.streamWatchdog = opts.setTimeout(function watchdogCheck() {
+            entry.streamWatchdog = null;
+            // Only a still-following, observed entry needs liveness. A success
+            // terminal is done; an owner drives its own connection; an
+            // error terminal KEEPS the watchdog so it can recover (F7).
+            if (!entry.streamShared || entry.streamOwner || entry.observerCount === 0) return;
+            if (entry.status() === "success") return;
+            if ((opts.now() - entry.lastFrameAt) >= period) {
+                openStream(entry, "leader-hung");            // OR-3: self-connect on silence
+            } else {
+                armWatchdog(entry);                          // fresh: rearm
+            }
+        }, period);
+        if (entry.streamWatchdog && typeof entry.streamWatchdog.unref === "function") {
+            entry.streamWatchdog.unref();
+        }
+    }
+    function disarmWatchdog(entry) {
+        if (entry.streamWatchdog !== null) {
+            opts.clearTimeout(entry.streamWatchdog);
+            entry.streamWatchdog = null;
+        }
+    }
 
-    // Promotion: open a FRESH iterator on this tab and claim ownership (C7). A
-    // no-op until then; declared for the watchdog/race call sites.
-    function openStream(entry, reason) { /* C7 */ }
+    // Promotion / self-connect: THIS tab opens a fresh iterator and claims
+    // ownership. The announce is DEFERRED one queueMicrotask (V2, cold, once per
+    // promotion) so a promotion triggered from inside onRemoteMessage leaves
+    // after the processingRemote echo guard is down -- the guard itself is
+    // untouched. streamPromoting guards a double-promote in the microtask gap.
+    // startStream (the /stream-installed streamPromote thunk) claims a strictly
+    // higher epoch, sets streamOwner, announces stream-open, and adopts the
+    // projected window (V1) so no frame is lost beyond OR-4's bound.
+    function openStream(entry, reason) {
+        if (!entry.streamShared || entry.streamOwner || entry.streamPromoting) return;
+        if (entry.observerCount === 0) return;
+        disarmWatchdog(entry);
+        entry.streamPromoting = true;
+        queueMicrotask(() => {
+            entry.streamPromoting = false;
+            if (!entry.streamShared || entry.streamOwner || entry.observerCount === 0) return;
+            if (typeof entry.streamPromote === "function") entry.streamPromote(reason);
+        });
+    }
 
     // Allocate the next ownership epoch for a tab that is opening a shared
     // stream: max(seen) + 1, carried on the entry. Globally monotone across the
@@ -657,12 +702,20 @@ export function queryClient(options = {}) {
     }
 
     // stream-frame: the hot receive path. Track the epoch, stamp liveness, and
-    // hand the frame to projectFrame's epoch/seq gate (C4/C5).
+    // hand the frame to projectFrame's epoch/seq gate (C4/C5). If THIS tab is an
+    // owner and the frame outranks it, a higher-ranked leader exists: abdicate
+    // and project (the frame-driven half of the race convergence -- two leaders
+    // that never traded a stream-open still converge the instant either yields a
+    // frame; pure rank, never election state, OR-3).
     function onStreamFrame(m) {
         if (m.epochSeq > maxEpochSeen) maxEpochSeen = m.epochSeq;
         const e = entries.get(hashKey(m.key));
         if (!e || !e.streamShared) return;
         e.lastFrameAt = opts.now();
+        if (e.streamOwner &&
+            rankBelow(e.streamEpoch, clientId, m.epochSeq, m.clientId)) {
+            closeStream(e);                          // a higher-ranked owner won
+        }
         projectFrame(e, m.epochSeq, m.seq, m.value);
     }
 
@@ -746,6 +799,7 @@ export function queryClient(options = {}) {
             lastFrameAt: 0,              // watchdog stamp: opts.now() of the last frame
             streamWatchdog: null,        // periodic check-and-rearm liveness timer
             streamPromote: null,         // (reason) => open THIS tab's iterator (adopt path, V1)
+            streamPromoting: false,      // a promotion microtask is in flight (double-promote guard)
             projWindow: null,            // buffer-mode follower window (last snapshot array)
             // Infinite-query slots -- uniform on every entry (same monomorphism
             // rule as the stream slots above). A plain query() entry leaves all

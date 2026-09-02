@@ -381,6 +381,106 @@ test("shared-stream: buffer follower publishes a FRESH snapshot per frame (no sh
     df(); fs.dispose(); follower.dispose(); peer.close();
 });
 
+// -- C6: watchdog / liveness / self-connect / lying oracle (A8) --------------
+
+const ent = (tab, key) => tab._internal.entries.get(JSON.stringify(key));
+const owners = (tabs, key) => tabs.filter((t) => { const e = ent(t, key); return e && e.streamOwner; }).length;
+
+test("shared-stream: a follower self-connects when no leader serves within streamIdleTimeout (OR-3)", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const src = makeControllable();
+    const follower = makeTab(bc, clock, "W", () => false, { streamIdleTimeout: 1000 });
+    const fs = streamQuery(follower, { key: ["k"], stream: () => src.iterable });
+    const df = observe(fs);
+    await drain();
+    // no leader answers the stream-req; the follower is not the owner yet
+    assert.equal(ent(follower, ["k"]).streamOwner, false);
+    // silence past the idle bound -> the watchdog self-connects
+    clock.advance(1000);
+    await drain();
+    assert.equal(ent(follower, ["k"]).streamOwner, true, "follower promoted itself on silence");
+    src.push(42); await drain();
+    assert.equal(follower.getQueryData(["k"]), 42, "the self-connected iterator drives data");
+    df(); fs.dispose(); follower.dispose();
+});
+
+test("shared-stream: a healthy leader keeps the follower from promoting (watchdog rearms)", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const leaderSrc = makeControllable();
+    const leader = makeTab(bc, clock, "WH", () => true, { streamIdleTimeout: 1000 });
+    const follower = makeTab(bc, clock, "WH", () => false, { streamIdleTimeout: 1000 });
+    const ls = streamQuery(leader, { key: ["k"], stream: () => leaderSrc.iterable });
+    const fs = streamQuery(follower, { key: ["k"], stream: () => { throw new Error("follower must not open while leader is healthy"); } });
+    const dl = observe(ls); const df = observe(fs);
+    await drain();
+    // frames arrive well inside the idle bound, keeping lastFrameAt fresh
+    for (let round = 0; round < 3; round++) {
+        clock.advance(400);
+        leaderSrc.push(round); await drain();
+    }
+    clock.advance(400); await drain();
+    assert.equal(ent(follower, ["k"]).streamOwner, false, "follower never promoted under a live leader");
+    assert.equal(owners([leader, follower], ["k"]), 1, "exactly one owner");
+    leaderSrc.end(); await drain();
+    dl(); df(); ls.dispose(); fs.dispose(); leader.dispose(); follower.dispose();
+});
+
+test("shared-stream A8: convergence holds with an all-TRUE lying oracle (every tab thinks it leads)", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const tabs = [];
+    const handles = [];
+    const srcs = [];
+    for (let i = 0; i < 3; i++) {
+        const src = makeControllable();
+        const t = makeTab(bc, clock, "AT", () => true, { streamIdleTimeout: 1000 });
+        const h = streamQuery(t, { key: ["k"], stream: () => src.iterable });
+        observe(h);
+        tabs.push(t); handles.push(h); srcs.push(src);
+    }
+    await drain(20);
+    // every tab opened as a leader; the moment any yields a frame the race
+    // resolves on (epochSeq, clientId) and the losers abdicate.
+    for (let r = 0; r < 3; r++) { srcs.forEach((s) => s.push(r)); await drain(20); }
+    assert.equal(owners(tabs, ["k"]), 1, "the epoch/clientId race converges to exactly one connection");
+    handles.forEach((h) => h.dispose());
+    tabs.forEach((t) => t.dispose());
+});
+
+test("shared-stream A8: convergence holds with an all-FALSE lying oracle (every tab thinks it follows)", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const tabs = [];
+    const handles = [];
+    const srcs = [];
+    for (let i = 0; i < 3; i++) {
+        const src = makeControllable();
+        const t = makeTab(bc, clock, "AF", () => false, { streamIdleTimeout: 1000 });
+        const h = streamQuery(t, { key: ["k"], stream: () => src.iterable });
+        observe(h);
+        tabs.push(t); handles.push(h); srcs.push(src);
+    }
+    await drain(20);
+    // nobody claims leadership; every watchdog fires and races to self-connect
+    clock.advance(1000); await drain(20);
+    for (let r = 0; r < 3; r++) { srcs.forEach((s) => s.push(r)); clock.advance(1000); await drain(20); }
+    assert.equal(owners(tabs, ["k"]), 1, "correctness invariant under a lying oracle; only connection count would degrade");
+    handles.forEach((h) => h.dispose());
+    tabs.forEach((t) => t.dispose());
+});
+
+test("shared-stream: streamIdleTimeout defaults to sharedFetchTimeout", () => {
+    const bc = createMockBroadcastChannel();
+    const qc = queryClient({
+        crossTab: true, broadcastChannel: bc.BroadcastChannel, crossTabChannel: "z",
+        sharedStream: true, isLeader: () => true, sharedFetchTimeout: 4242,
+    });
+    assert.equal(qc.options.streamIdleTimeout, 4242);
+    qc.dispose();
+});
+
 test("shared-stream: sharedStreamActive requires opt-in + a leader oracle + a channel", async () => {
     const clock = createMockClock();
     const bc = createMockBroadcastChannel();
