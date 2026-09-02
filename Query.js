@@ -2773,13 +2773,23 @@ export function persistQueryClient(qc, persistOpts) {
     let uninstall = null;
     let queueUninstall = null;
     let stopped = false;
+    // Set by a queue WRITE (enqueue/drop) so the shared doSave persists the queue
+    // ONLY when it actually changed -- a pure cache write must not re-save (and
+    // re-throw for) an unchanged queue. The synchronous at-least-once removal
+    // write does NOT use this path (it is saveQueueRemoval, direct + ordered).
+    let queueDirty = false;
 
-    // Persist the full current queue (cold). Shares the cache doSave throttle
-    // window: an enqueue/drop arms the same timer, and doSave calls this after the
-    // cache write. queueSave throws are contained here (the trailing-edge coalesce
-    // is not the at-least-once removal write -- that path is saveQueueRemoval).
+    // Arm the shared throttle for a queue change (enqueue/drop). Marks the queue
+    // dirty and rides the same trailing-edge timer as the cache doSave.
+    function armQueue() {
+        queueDirty = true;
+        onWrite();
+    }
+
+    // Persist the full current queue (cold). Called by doSave only when the queue
+    // is dirty. queueSave throws are contained here (the trailing-edge coalesce is
+    // not the at-least-once removal write -- that path is saveQueueRemoval).
     function saveQueue() {
-        if (!hasQueue) return;
         try {
             const r = queueSave({ version, queue: _pi.dehydrateQueue(undefined) });
             if (r && typeof r.then === "function") r.then(noop, noop);
@@ -2820,7 +2830,7 @@ export function persistQueryClient(qc, persistOpts) {
             if (r && typeof r.then === "function") r.then(noop, noop);
         } catch { /* synchronous save throw contained */ }
         if (feed !== null && feed.hook !== null) emitClient("persist:save", envelope.state.entries.length, true, null, null);   // site 23 (saved)
-        saveQueue();   // OR-5: the queue rides the same trailing-edge write
+        if (hasQueue && queueDirty) { queueDirty = false; saveQueue(); }   // OR-5: only when the queue actually changed
     }
 
     // Trailing-edge coalescing (OR-7): the first write in a window arms the
@@ -2911,7 +2921,7 @@ export function persistQueryClient(qc, persistOpts) {
         // the cache hook arming). arm rides the cache throttle; saveRemoval is the
         // synchronous at-least-once removal write.
         if (!stopped) {
-            try { queueUninstall = qc._internal.installQueueHook({ arm: onWrite, saveRemoval: saveQueueRemoval }); }
+            try { queueUninstall = qc._internal.installQueueHook({ arm: armQueue, saveRemoval: saveQueueRemoval }); }
             catch { /* client disposed, or a hook already holds the slot */ }
         }
         return outcome;
