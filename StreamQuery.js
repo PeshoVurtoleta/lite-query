@@ -116,36 +116,42 @@ function streamQuery(qc, streamOpts) {
             return;
         }
 
-        // Buffer-mode ring: bounded array, oldest dropped on overflow. The
-        // snapshot returned each frame is a new array so the signal's Object.is
-        // guard fires. Latest mode allocates nothing -- it returns the raw value.
-        const ring = (mode === "buffer") ? [] : null;
-
+        // The buffer window (bounded, drop-oldest, fresh newest-last snapshot
+        // per set) is lite-stream 1.3.0's own `mode`/`maxBuffer` now -- the hand
+        // ring is gone. `onValue` taps each value AFTER transform and BEFORE the
+        // set to drive the status ladder + count; the drop count is read from
+        // the stop fn's own getter (never a hand counter). Intentional aborts
+        // route to `onAbort` and NEVER reach `onError` (lite-stream 0001).
         const stop = pipeToSignal(source, entry.data, {
             signal: ac.signal,
-            transform: (value) => {
+            mode: mode,
+            // maxBuffer is meaningful only in buffer mode; lite-stream fails
+            // closed if it is passed with mode "latest".
+            maxBuffer: mode === "buffer" ? maxBuffer : undefined,
+            onValue: () => {
                 if (entry.streamCount === 0) entry.status.set("streaming");
                 entry.streamCount = (entry.streamCount + 1) | 0;
-                if (mode === "buffer") {
-                    ring.push(value);
-                    if (ring.length > maxBuffer) {
-                        ring.shift();
-                        entry.streamDropped = (entry.streamDropped + 1) | 0;
-                    }
-                    return ring.slice();
-                }
-                return value;
             },
             onError: (err) => {
-                // pipeToSignal funnels intentional aborts (detach / restart /
-                // removeQueries) through onError too. Those are not failures.
-                if (ac.signal.aborted) return;
+                // A genuine iterator failure. Snapshot the final drop count so
+                // droppedCount() stays stable after teardown.
+                entry.streamDropped = stop.droppedCount;
                 entry.error.set(err);
                 entry.status.set("error");
                 entry.streamStop = null;
                 entry.streamRestart = null;
             },
+            onAbort: () => {
+                // Intentional abort (detach / restart / removeQueries) is not a
+                // failure: snapshot the final drop count so droppedCount() reads
+                // byte-identical after teardown, then release the handles. Status
+                // is reset by the caller (detach -> idle; restart -> pending).
+                entry.streamDropped = stop.droppedCount;
+                entry.streamStop = null;
+                entry.streamRestart = null;
+            },
             onDone: () => {
+                entry.streamDropped = stop.droppedCount;
                 entry.status.set("success");
                 entry.lastCompletedAt = opts.now();
                 entry.streamStop = null;
@@ -153,7 +159,12 @@ function streamQuery(qc, streamOpts) {
             },
         });
 
-        entry.streamStop = () => { ac.abort(); stop(); };
+        // streamStop aborts the iterator (signalling the user's stream to clean
+        // up) then stops the pump. Its `.raw` is the pipeToSignal stop fn, whose
+        // live droppedCount getter the accessor reads while the pump is active.
+        const streamStop = () => { ac.abort(); stop(); };
+        streamStop.raw = stop;
+        entry.streamStop = streamStop;
         entry.streamRestart = () => startStream(entry);
     }
 
@@ -281,7 +292,12 @@ function streamQuery(qc, streamOpts) {
         },
         droppedCount() {
             const e = untrack(() => currentEntry());
-            return e ? e.streamDropped : 0;
+            if (!e) return 0;
+            // While a pump is live, read its own overflow getter (byte-identical
+            // to lite-stream's droppedCount); after any terminal path it is
+            // snapshotted into entry.streamDropped, so fall back to that.
+            const s = e.streamStop;
+            return (s !== null && s.raw !== undefined) ? s.raw.droppedCount : e.streamDropped;
         },
         // Imperative restart: abort the current stream and re-establish it.
         restart() {
