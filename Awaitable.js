@@ -1,4 +1,4 @@
-// @zakkster/lite-query/await 1.1.2
+// @zakkster/lite-query/await
 //
 // Async coordination for lite-query. Re-exports the @zakkster/lite-await
 // primitives verbatim (single source of truth -- no reimplementation) and adds
@@ -191,6 +191,11 @@ function whenAllQueries(queries, opts) {
 // ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
+
+// One runtime version source for every subpath (see Query.js VERSION). Note
+// this is lite-query's OWN version, never lite-await's VERSION (which is
+// deliberately not imported above).
+export { VERSION } from "./Query.js";
 
 export {
     // Re-exported lite-await primitives (single source of truth).

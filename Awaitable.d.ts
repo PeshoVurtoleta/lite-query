@@ -72,3 +72,6 @@ export function whenAllQueries<T = unknown>(
     queries: ReadonlyArray<QueryHandleLike<T>>,
     opts?: WhenQueryOptions,
 ): Promise<T[]>;
+
+/** Re-export of lite-query's VERSION (see Query.d.ts). */
+export { VERSION } from "./Query.js";

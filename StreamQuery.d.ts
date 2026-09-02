@@ -93,3 +93,6 @@ export function streamQuery<
     T = unknown,
     K extends readonly unknown[] = readonly unknown[],
 >(qc: QueryClient, opts: StreamQueryOptions<T, K>): StreamQuery<T>;
+
+/** Re-export of lite-query's VERSION (see Query.d.ts). */
+export { VERSION } from "./Query.js";

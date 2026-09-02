@@ -29,6 +29,7 @@ import {
 // re-exports must be the SAME bindings as upstream, not copies.
 import * as subpath from "../Awaitable.js";
 import * as upstream from "@zakkster/lite-await";
+import { VERSION as queryVersion } from "../Query.js";
 import {
     allSettledOf,
     withResolvers,
@@ -264,21 +265,25 @@ test("identity: createAwaitScope is upstream's binding", () => {
     assert.equal(createAwaitScope, upstream.createAwaitScope);
 });
 
-test("VERSION is not exported from /await", () => {
-    // lite-query owns its own VERSION const (Query.js); the sibling's VERSION
-    // is deliberately excluded so this subpath never misreports the version.
-    assert.equal(subpath.VERSION, undefined);
-    assert.equal("VERSION" in subpath, false);
+test("VERSION on /await is lite-query's own, not lite-await's", () => {
+    // The subpath exposes lite-query's OWN VERSION (Query.js, re-exported by
+    // this entry in C6). lite-await's VERSION is deliberately NOT imported, so
+    // it never leaks through -- the two differ (lite-query 1.1.x vs lite-await
+    // 1.3.x). version-sync.test.js pins VERSION === package.json.
+    assert.equal(subpath.VERSION, queryVersion);
+    assert.notEqual(subpath.VERSION, upstream.VERSION);
 });
 
 test("subpath named surface == upstream minus VERSION plus the two bridges", () => {
-    // The /await surface is EXACTLY: every upstream name except VERSION, plus
-    // lite-query's two native bridges. A set compare catches any drift in
-    // either direction (a missed re-export or an accidental extra).
+    // The re-exported lite-await surface is EXACTLY every upstream name except
+    // VERSION (lite-query does not re-export the sibling's VERSION), plus
+    // lite-query's two native bridges. VERSION is filtered from `actual` too
+    // because the VERSION that IS present is lite-query's own, asserted above.
+    // A set compare catches any drift in either direction.
     const expected = new Set(Object.keys(upstream).filter((n) => n !== "VERSION"));
     expected.add("whenQuery");
     expected.add("whenAllQueries");
-    const actual = new Set(Object.keys(subpath));
+    const actual = new Set(Object.keys(subpath).filter((n) => n !== "VERSION"));
     assert.deepEqual([...actual].sort(), [...expected].sort());
 });
 

@@ -1,4 +1,4 @@
-// @zakkster/lite-query/stream 1.1.2
+// @zakkster/lite-query/stream
 //
 // Streaming queries -- a multi-shot, iterator-backed query built on
 // @zakkster/lite-stream. Subscribe by key to an async iterable (SSE, websocket
@@ -314,5 +314,8 @@ function streamQuery(qc, streamOpts) {
         },
     };
 }
+
+// One runtime version source for every subpath (see Query.js VERSION).
+export { VERSION } from "./Query.js";
 
 export { streamQuery };

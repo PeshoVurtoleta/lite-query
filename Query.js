@@ -33,6 +33,13 @@ import {
                                                      // alias the lite-signal one to avoid the shadow
 } from "@zakkster/lite-signal";
 
+// The single runtime source of this package's version. Re-exported by the
+// /stream and /await entries so all three subpaths report one string, and
+// asserted equal to package.json by test/version-sync.test.js. The /release
+// drill bumps this in lockstep with package.json + llms.txt (packaging law:
+// same commit or not at all).
+export const VERSION = "1.1.2";
+
 const noop = () => {};
 
 // -----------------------------------------------------------------------------

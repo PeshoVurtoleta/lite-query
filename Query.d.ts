@@ -259,3 +259,8 @@ export function mutation<TData = unknown, TVars = unknown, TCtx = unknown>(
     qc: QueryClient,
     opts: MutationOptions<TData, TVars, TCtx>,
 ): Mutation<TData, TVars>;
+
+/** The package version string. The single runtime source (Query.js);
+ * re-exported by the /stream and /await entries and asserted equal to
+ * package.json by test/version-sync.test.js. */
+export const VERSION: string;
