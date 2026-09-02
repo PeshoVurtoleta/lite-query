@@ -30,15 +30,15 @@ accumulated hygiene; features build on top of gates that provably run.
 
 ---
 
-## 0. Ground truth (verified 2026-08-31)
+## 0. Ground truth (verified 2026-08-31; sibling rows re-verified 2026-09-02)
 
 Registry state, checked with `npm view <pkg> version`:
 
 | Package | Latest | Relevant fact |
 | --- | --- | --- |
-| `@zakkster/lite-query` | 1.1.1 | Q1 shipped; matches local `package.json` |
-| `@zakkster/lite-await` | 1.2.0 | published 2026-08-30; ships 6 exports lite-query does not re-export (Q-07) |
-| `@zakkster/lite-stream` | 1.1.0 | published 2026-07-10; additive `toAsyncIterable` enrichments; `^1.0.0` peer admits it; suite green against it. Roadmap enriched 2026-09-01 (`../LiteStream/ROADMAP.md`, LS1..LS4): its LS-01 (dispose-mid-pump pulls forever; llms claim false since 1.0.0) verified NOT to bite us -- `streamStop` aborts before any teardown (`StreamQuery.js:156`); its LS3 v1.3.0 targets our hand-rolled ring (see parking ledger) |
+| `@zakkster/lite-query` | 1.1.2 | Q2 shipped (operator publish; registry `latest` = 1.1.2). Artifact verified 2026-09-02 from the registry tarball: 13 files, `[1.1.2] -- 2026-08-31` CHANGELOG head, manifest version sync |
+| `@zakkster/lite-await` | 1.3.0 | fully upgraded (V1 -> 1.2.1, C1 -> 1.3.0): **18 named exports** + VERSION. `createAwaitScope` shipped -- triggering consumer was lite-room 1.1.0 (`decisions/0007`), NOT our Q5; that gate resolved externally. `decisions/0009` verdict: **REJECT** (locked decision #4 closes). Q3's re-export target is now EIGHT (Q-07) |
+| `@zakkster/lite-stream` | 1.1.0 | published 2026-07-10; additive `toAsyncIterable` enrichments; `^1.0.0` peer admits it; suite green against it. Roadmap enriched 2026-09-01 (`../LiteStream/ROADMAP.md`, LS1..LS4): its LS-01 (dispose-mid-pump pulls forever; llms claim false since 1.0.0) verified NOT to bite us -- `streamStop` aborts before any teardown (`StreamQuery.js:156`); its LS3 v1.3.0 targets our hand-rolled ring (see parking ledger). UPDATE 2026-09-02: lite-stream is now **1.3.0** -- LS1..LS3 all shipped (their harness caught and fixed a real pump bug, LS-13, on the way); `pipeToSignal` gained `mode`/`maxBuffer`, `droppedCount`/`overflowCount` getters on the stop fn, an `onValue` tap, and `onAbort` (abort vocabulary pinned in their `decisions/0001`); their s7 conformance tier freezes OUR exact 1.1.x call shape and proves a rewrite-parity case. The collapse rider is folded into Q3. LS4 (1.4.0) stays GATED on Q8's spike; SPIKE INPUTS recorded in the Q8 brief |
 | `@zakkster/lite-signal` | 1.5.0 | stable; the `>=1.5.0-alpha` peer floor is now pointing below a released stable (Q-06) |
 | `@zakkster/lite-store` | 1.2.0 | NOT a peer of lite-query 1.1.0, despite what the README says (Q-04) |
 | `@zakkster/lite-channel` | 1.0.1 | same (Q-04) |
@@ -119,7 +119,7 @@ all ran clean.
 | **Q-04** | S2 | **The README's install section documents a dependency set the package does not have.** It says "Three peer dependencies" and tells users to `npm install ... @zakkster/lite-store @zakkster/lite-channel`. `package.json` peers are `lite-signal` (required) + `lite-stream`/`lite-await` (optional); `Query.js` imports only `lite-signal`. Published README contradicts published manifest. | README `## Install` vs `package.json` `peerDependencies`; `grep "^import" Query.js` -> lite-signal only |
 | **Q-05** | S3 | **Dead links in the npm tarball.** README links `./QuickStart.md` and `./Cookbook.md`; `files[]` ships neither (tarball = 11 files, verified from the registry tarball listing). The facts table also leans on "pagination is a Cookbook recipe" -- a claim whose evidence npm consumers cannot open. | `tar -tzf <tarball>` -> no QuickStart.md, no Cookbook.md; README line ~149 |
 | **Q-06** | S3 | **Alpha peer floor in a stable release.** `"@zakkster/lite-signal": ">=1.5.0-alpha"` in `peerDependencies` and `devDependencies`, while 1.5.0 stable is published and README/llms.txt both say `>= 1.5.0`. Three documents, two vocabularies. | `package.json` lines 51, 65 |
-| **Q-07** | S3 | **/await re-export drift: SEVEN of 17 upstream named exports missing** (corrected 2026-08-31 from six -- the original count was diffed against a truncated read of the upstream export block). `Awaitable.js` re-exports 10 (`whenSignal, whenTruthy, whenEquals, allOf, anyOf, raceOf, withTimeout, withAbort, fromPromise, TimeoutError`). lite-await 1.2.0 also ships `allSettledOf, withResolvers, tryFn, delay, withRetry, mapLimit` AND the 1.0.0-era `whenStatechart` -- none re-exported, none in any lite-query doc. Upstream additionally exports `VERSION`, which consumers deliberately do NOT re-export (it names lite-await's version; the convention is now stated in lite-await's llms.txt). The `^1.0.0` peer range already resolves to 1.2.0, so the gap is invisible until a user imports from the subpath and gets `undefined`. | full export block `sed -n '1699,1725p' ../LiteAwait/Await.js` vs `Awaitable.js` import block |
+| **Q-07** | S3 | **/await re-export drift: SEVEN of 17 upstream named exports missing** (corrected 2026-08-31 from six -- the original count was diffed against a truncated read of the upstream export block). `Awaitable.js` re-exports 10 (`whenSignal, whenTruthy, whenEquals, allOf, anyOf, raceOf, withTimeout, withAbort, fromPromise, TimeoutError`). lite-await 1.2.0 also ships `allSettledOf, withResolvers, tryFn, delay, withRetry, mapLimit` AND the 1.0.0-era `whenStatechart` -- none re-exported, none in any lite-query doc. Upstream additionally exports `VERSION`, which consumers deliberately do NOT re-export (it names lite-await's version; the convention is now stated in lite-await's llms.txt). The `^1.0.0` peer range already resolves to 1.2.0, so the gap is invisible until a user imports from the subpath and gets `undefined`. UPDATE 2026-09-02: upstream is now 1.3.0 with **18** named exports (`createAwaitScope` joined via its C1); the gap is EIGHT and Q3 is amended to it. | full export block `sed -n '/^export {/,/^};/p' ../LiteAwait/Await.js` vs `Awaitable.js` export block |
 | **Q-08** | S3 | **~1,400 ASCII-law violations across shipped files.** Counted per file: `Query.js` 790x U+2500 box-drawing + 37 em-dashes + 8 arrows + 1 U+2265 + 1 `i`-diaeresis; `Query.d.ts` 433x U+2500 + 10 em; `StreamQuery.js` 63x U+2500; `llms.txt` 38 em + 13 arrows; `README.md` 41 em + 13 arrows + misc (`(c)` sign, middle dots, en-dashes, left arrow); `CHANGELOG.md` 18 em + 6 arrows; both other d.ts 2 em each. The 21 U+00D7 (`x`) occurrences in README/llms.txt sit inside the law's source exception but the docs law prescribes literal `x`. | `grep -oP '[^\x00-\x7F]' <file> \| sort \| uniq -c` per file |
 | **Q-09** | S3 | **The torture harness deviates from suite law and is not landed.** Law: every change proven by `node --expose-gc test/torture.mjs` with `@zakkster/lite-leak` + `@zakkster/lite-gc-profiler`. Reality: three scripts under `bench/torture/` using a signal-registry pool snapshot as the leak oracle (deliberately no `--expose-gc`), neither law package in devDeps, no `test/torture.mjs`, and the whole suite plus its `package.json` script wiring is **staged but uncommitted**. The pool oracle is good -- and blind to JS-heap retention outside pooled nodes (closures, arrays, Maps held past teardown), which is exactly the blind-spot class the profiler exists to close. All three scripts PASS exit 0 today. | `git status` -> staged `bench/torture/*`, modified `package.json`; `npm run torture` -> 3x PASS, exit 0 |
 | **Q-10** | S3 | **No `.gitignore`, no lockfile.** Root cause of Q-01 (section 0 tells the story). `package-lock.json` was deleted from tracking and never ignored; `node_modules` shows as `??`. | `ls -a \| grep gitignore` -> nothing |
@@ -323,7 +323,7 @@ DONE WHEN
 ---
 package: "@zakkster/lite-query"
 version_target: 1.1.2
-status: planned
+status: shipped
 tests_min: 153
 skip_max: 0
 torture: "3x PASS + controls fail"
@@ -403,15 +403,26 @@ DONE WHEN
 ```
 
 ===============================================================================
-# Q3 -- lite-query v1.2.0 -- /await refresh to the lite-await 1.2 surface
+# Q3 -- lite-query v1.2.0 -- the sibling refresh (/await -> 1.3.0, /stream collapse -> 1.3.0)
 ===============================================================================
+
+Amended 2026-09-02: both siblings shipped past the original brief while Q2
+was in flight. lite-await is 1.3.0 (18 exports; 0009 verdict REJECT on
+disk; createAwaitScope shipped via lite-room, not our Q5). lite-stream is
+1.3.0 (the LS3 consumer-contract session built FOR this package). The
+original NON-GOAL "no streamQuery changes" is deliberately flipped by
+operator ruling: adopting the contract upstream shipped for us IS the
+session; deferring it to Q5 would leave three hand-rolled mechanisms alive
+for exactly one release cycle for no benefit. Scope stays pinned: the
+streamQuery diff touches `startStream` + the droppedCount plumbing, nothing
+else.
 
 ```markdown
 ---
 package: "@zakkster/lite-query"
 version_target: 1.2.0
 status: planned
-tests_min: 160
+tests_min: 170
 skip_max: 0
 torture: "3x PASS + controls fail"
 findings: [Q-07, Q-16]
@@ -422,52 +433,81 @@ blocks: [Q5]
 # lite-query -- the re-export thesis only holds if the re-export is current
 
 PURPOSE
-  Awaitable.js froze the lite-await surface at 1.0. Upstream shipped 1.1
-  (allSettledOf, withResolvers, tryFn, delay) and 1.2 (withRetry, mapLimit)
-  and the `^1.0.0` peer range already hands users 1.2.0 -- so today
-  `import { withRetry } from "@zakkster/lite-query/await"` is `undefined`
-  while `withRetry` sits in the installed dependency. Re-export-don't-
-  reimplement (law 3) decays into re-export-what-existed-in-June unless the
-  list tracks upstream deliberately.
+  Awaitable.js froze the lite-await surface at 1.0; upstream is at 1.3.0
+  with 18 named exports, so today `import { withRetry } from
+  "@zakkster/lite-query/await"` is `undefined` while `withRetry` sits in
+  the installed dependency. And StreamQuery still hand-rolls the buffer
+  window, status tap, and abort filter that lite-stream 1.3.0 now offers
+  natively -- options designed off OUR code sites (their LS3, their
+  decisions/0001). One minor catches this package up to both siblings:
+  re-export what exists, delete what upstream absorbed.
 
 TASKS
-  - Re-export the seven: `allSettledOf`, `withResolvers`, `tryFn`, `delay`,
-    `withRetry`, `mapLimit`, `whenStatechart` -- verbatim, alongside the
-    existing ten. Full named-export parity with upstream (17), which the
-    surface guard then holds automatically.
+  - Re-export the EIGHT: `allSettledOf`, `withResolvers`, `tryFn`, `delay`,
+    `withRetry`, `mapLimit`, `whenStatechart`, `createAwaitScope` --
+    verbatim, alongside the existing ten. Full named-export parity with
+    upstream (18), which the surface guard then holds automatically.
   - DECISION (record): `VERSION` is NOT re-exported -- upstream's VERSION
     names lite-await's version and would read as lite-query's from this
     subpath. Convention agreed with upstream (its llms.txt states it);
     the surface guard's parity check excludes VERSION by name with a
     comment citing this decision.
-  - Peer + devDep floor: `"@zakkster/lite-await": "^1.2.0"` -- the floor
-    matches the surface actually re-exported, per the old roadmap's own
-    rule.
-  - Documentation of the two boundary lines, in README /await section and
-    llms.txt:
-      * `withRetry` vs `query()` retry: query() owns cached-fetch retry
-        (per-entry, backoff, abort-aware); withRetry is for imperative
-        one-shot flows outside the cache. One sentence each, one example.
-      * `delay` vs the test harness mock clock: delay is wall-clock; inside
-        tests use the harness clock. Prevents the first confused issue.
-  - fromPromise vocabulary: the deferral now has an owner. lite-await's V1
-    session decides accept-or-reject ON THE RECORD
-    (../LiteAwait/decisions/0009, recommendation REJECT -- three releases
-    of the docs-only mapping produced zero friction). If REJECT: locked
-    decision #4 closes permanently and the mapping table is the final
-    answer -- say so in the /await docs. If ACCEPT: adopt the option here
-    with a named test. Do not ship Q3 without reading the verdict.
-  - Tests (~8 new in test/awaitable.test.js): re-export identity for all
-    seven (`assert.equal(reexported, upstream)` against the installed
-    package -- the strongest possible smoke test), plus one integration
-    each for withRetry (rejecting fetcher, succeeds on 3rd try) and
-    mapLimit (concurrency ceiling observed via in-flight counter).
-    whenStatechart gets identity only -- its integration home is upstream
-    (which gains a real-machine test in its V1 via the lite-statechart
-    devDep).
-  - Awaitable.d.ts: re-export the six types. The Q2 surface guard enforces
-    llms.txt + d.ts completeness automatically -- this session is its first
-    real test.
+  - Peer + devDep floors, matching the surfaces actually used (the old
+    roadmap's own rule): `"@zakkster/lite-await": "^1.3.0"` (createAwaitScope
+    is 1.3.0); optional peer `"@zakkster/lite-stream": "^1.3.0"` (StreamQuery
+    now calls mode/onValue/onAbort/droppedCount -- all 1.3.0).
+  - **The StreamQuery collapse** (from the parking ledger; upstream made it
+    a floor-bumped adoption, not a gamble -- their s7 tier freezes our
+    1.1.x call shape AND proves a rewrite-parity case, N=12/maxBuffer=4 ->
+    droppedCount 8, newest-last):
+      * hand ring (`StreamQuery.js:119-137`) -> `mode: "buffer"` +
+        `maxBuffer` on pipeToSignal; the O(n) `shift()` and per-frame
+        `slice()` leave this package.
+      * first-frame status tap smuggled through `transform` -> `onValue`
+        (fires before each set, after transform); `transform` disappears
+        from the call entirely (it carried no mapping of its own).
+      * abort filter (`StreamQuery.js:139-142`) -> `onAbort` (per upstream
+        decisions/0001, aborts route there and never reach onError).
+      * `droppedCount()` accessor semantics BYTE-IDENTICAL to today,
+        sourced from the stop fn's getter: snapshot into the entry counter
+        on every terminal path (onDone/onError/onAbort) and on restart
+        reset, so reads after completion and across restarts are unchanged.
+      * Parity proof discipline: write the semantics-recording tests FIRST
+        (status transitions, droppedCount ladder incl. overflow, restart
+        reset, error paths, abort-is-not-an-error), watch them pass against
+        the CURRENT code, then collapse, then watch the same tests pass
+        unchanged. The test diff is the review artifact.
+  - Vendored demo copies (VENDOR.md's own pre-peer-bump law): refresh
+    `demo/vendor/lite-await.js` 1.0.0 -> 1.3.0 and
+    `demo/vendor/lite-stream.js` 1.0.0 -> 1.3.0; update VENDOR.md rows +
+    its API check commands; re-run the demo smoke.
+  - Documentation, README /await section and llms.txt:
+      * the two boundary lines: `withRetry` vs `query()` retry (query()
+        owns cached-fetch retry -- per-entry, backoff, abort-aware;
+        withRetry is for imperative one-shot flows outside the cache);
+        `delay` vs the test-harness mock clock (delay is wall-clock).
+      * `createAwaitScope` one-liner: scoped awaiters, one controller, one
+        teardown -- semantics owned upstream (their decisions/0007); we
+        re-export, we do not re-document the contract.
+      * fromPromise vocabulary CLOSED: upstream verdict REJECT
+        (../LiteAwait/decisions/0009, read 2026-09-02). Locked decision #4
+        closes permanently; the mapping table (`resolved -> success`,
+        `rejected -> error`) is the final answer -- say so in the /await
+        docs and stop tracking it.
+      * StreamQuery internals note: the window/tap/abort handling now live
+        upstream; zero user-visible API change (the options surface of
+        streamQuery() is untouched).
+  - Tests (~15 new): re-export identity for all eight
+    (`assert.equal(reexported, upstream)` against the installed package),
+    VERSION-exclusion by name, one integration each for withRetry
+    (rejecting fetcher, succeeds on 3rd try), mapLimit (concurrency
+    ceiling observed via in-flight counter), createAwaitScope
+    (scope abort settles a pre-bound whenSignal; teardown observed);
+    whenStatechart identity only (its integration home is upstream). Plus
+    the collapse parity suite (~5, written first, per above).
+  - Awaitable.d.ts: the eight types re-exported. The Q2 surface guard
+    enforces llms.txt + d.ts completeness automatically -- this session is
+    its first real test.
   - `VERSION` const (Q-16): export from Query.js, re-export from
     StreamQuery.js and Awaitable.js; three-place sync check (package.json ==
     CHANGELOG head == VERSION) joins the default test run, and the /release
@@ -475,29 +515,41 @@ TASKS
     line-1 header stamps in favor of the const (one version, one source).
 
 HOT PATH
-  None. Re-exports are module-scope bindings; zero runtime code added to any
-  query path. The two bridges (whenQuery/whenAllQueries) are untouched.
+  Re-exports are module-scope bindings; zero runtime code added to any
+  query path. The collapse REMOVES per-frame work from the stream path
+  (O(n) shift + slice -> upstream's O(1) ring with one snapshot per set);
+  bench before/after on the buffer-mode stream scenario and record the
+  delta in the CHANGELOG line. The two bridges (whenQuery/whenAllQueries)
+  are untouched.
 
 ASSERTIONS
-  - All 17 upstream named exports importable from
+  - All 18 upstream named exports importable from
     `@zakkster/lite-query/await`; identity-equal to the upstream bindings;
     VERSION deliberately absent and the exclusion tested by name.
-  - Surface guard (Q2) green with the six added -- and it FAILED before
-    llms.txt was updated during development (record that it fired; that is
-    the guard's control in the wild).
-  - `npm test` >= 160 pass, 0 skip; torture 3x PASS.
-  - `npm ls @zakkster/lite-await` resolves >= 1.2.0; install with 1.1.x
-    fails the peer range loudly.
-  - CHANGELOG names all six + the floor bump under a `[1.2.0]` entry.
+  - Collapse parity suite green BEFORE and AFTER the collapse with zero
+    edits to the tests themselves; upstream's s7 rewrite-parity numbers
+    reproduced locally (droppedCount 8 on N=12/maxBuffer=4).
+  - Surface guard (Q2) green with the eight added -- and record that it
+    FIRED mid-development before llms.txt caught up (the guard's control
+    in the wild).
+  - `npm ls` resolves lite-await >= 1.3.0 AND lite-stream >= 1.3.0;
+    installing lite-await 1.2.x fails the peer range loudly.
+  - `npm test` >= 170 pass, 0 skip; torture 3x PASS; controls fail.
+  - CHANGELOG `[1.2.0]`: the eight, both floors, the collapse (with the
+    bench delta), the 0009 closure.
 
 NON-GOALS
   No new bridges (whenAnyQuery etc. wait for a real consumer). No wrapping
-  of withRetry into query() -- the boundary doc exists precisely to keep
-  them apart. No streamQuery changes.
+  of withRetry into query(). No streamQuery changes BEYOND the collapse
+  (the diff is startStream + droppedCount plumbing; anything else is a
+  reviewer REJECT). No idleTimeout / push-writer / share adoption -- that
+  is Q8/LS4 territory and stays behind the spike.
 
 DONE WHEN
   the /await subpath surface equals the installed lite-await surface plus
-  the two bridges; floors match reality; 1.2.0 published
+  the two bridges minus VERSION; StreamQuery's window/tap/filter live
+  upstream with parity proven; vendored copies match the floors; 1.2.0
+  published
 ```
 
 ===============================================================================
@@ -895,6 +947,61 @@ DESIGN OBLIGATIONS (the brief's floor, not its ceiling)
     breaking nit (if any accumulated in the ledger by then) into it.
     CHANGELOG breaking section + migration notes, per suite drill.
 
+SPIKE INPUTS -- the lite-stream split (recorded 2026-09-02; the spike
+DECIDES, this is its evidence file, gathered while both packages' 1.3.0
+surfaces were fresh)
+
+  Topology facts that decide most of it:
+  1. Followers receive frames as lite-channel MESSAGES (push); no follower
+     ever holds an iterator. lite-stream's pull-based surfaces cannot see
+     follower traffic at all.
+  2. A promoted follower STARTS A FRESH iterator (failover matrix above);
+     nothing adopts a dead leader's iterator mid-flight.
+  3. In-process observer sharing already exists here: entry dedup
+     (`shouldStartStream` -- "don't double-pump a shared entry").
+     Cross-tab sharing IS the channel broadcast.
+
+  Candidate verdicts (provisional -- overturn only with a named matrix cell):
+  - **push-writer -> lite-stream** (the LS4 core, strongest case). Without
+    it, follower-side buffer mode re-hand-rolls the exact window Q3 just
+    deleted -- a third copy of the semantics, and the obligation above
+    ("followers receive the SAME windowed view discipline") is only
+    guaranteed by same-code, which the upstream already factored for the
+    enriched pipeToSignal. Shape sketch: `createSignalWriter(target,
+    { mode, maxBuffer }) -> { push(v), end(), error(e), droppedCount }` --
+    the enqueue half of pipeToSignal without the pull pump. Side profit:
+    retires their `fromEventTarget` parking entry into a recipe.
+    Pre-integration requirement: hand lite-stream the parity assertion
+    (follower droppedCount == local-stream droppedCount for identical
+    sequences) BEFORE LS4 codes, so their s7 pins it and Q8 consumes the
+    pinned tests verbatim.
+  - **idleTimeout -> not structurally required by Q8.** The follower
+    watchdog ("frames stop, channel alive -> self-connect within a bound")
+    runs on channel messages: `lastFrameAt` + one timer in THIS package,
+    domain-correct, invisible to lite-stream (fact 1). Leader self-health
+    is an optimization, not a correctness cell -- followers self-connecting
+    around a hung leader IS the liveness law above. As a STANDALONE
+    lite-stream feature (SSE stall detection; their overall-deadline
+    `timeout` is the wrong tool users will reach for) it still needs its
+    own named consumer -- parked on their side until one ships. Design note
+    recorded for whenever it lands: never per-value clearTimeout/setTimeout
+    (timer churn per frame breaks their zero-churn law); `lastValueAt` +
+    one periodic check-and-rearm timer, amortized O(1).
+  - **share/refcount -> nowhere visible.** In-process sharing = entry dedup
+    (fact 3, exists); cross-tab = channel domain (fact 2 -- no shared
+    in-process iterator ever exists); N keys over one socket = transport
+    multiplexing, rejected by this brief's own NON-GOALS. Strike unless
+    the spike produces a named cell that needs one-iterator ->
+    N-local-consumers.
+
+  Spike checklist (answer these, record the verdict in BOTH roadmaps, flip
+  LS4 `status: gated` -> planned-or-closed):
+  1. Confirm facts 1-3 against the actual Q8 design sketch.
+  2. Rule each candidate: lite-stream / lite-query / nowhere.
+  3. If push-writer survives: deliver the parity assertion + a frame-shape
+     corpus to LS4 before it codes.
+  4. LS4 shrinking to the push-writer alone is a perfectly good 1.4.0.
+
 ASSERTIONS (floor)
   - Failover matrix green, every cell named.
   - N-tab soak (fuzzer extended): 5 simulated tabs, one upstream
@@ -957,25 +1064,21 @@ scripts; Q4 onward: the law harness). No gate output is a FAIL.
 - **Devtools PANEL**: lite-studio's, consuming Q7's feed. Out of this
   package's scope by design.
 - **whenAnyQuery / further bridges**: no consumer yet (Q3 NON-GOALS).
-- **createAwaitScope re-export**: lite-await's C1 session (its
-  AWAIT_ROADMAP.md) is gated with OUR Q5 as its named tripwire --
-  route-loader work makes scoped awaiter defaults real. When C1 ships,
-  `/await` re-exports `createAwaitScope` in the next minor here.
+- **createAwaitScope re-export**: RESOLVED 2026-09-02. C1 shipped in
+  lite-await 1.3.0 without waiting for our Q5 -- the triggering consumer
+  was lite-room 1.1.0 (`awaitRoomSignal`, per their decisions/0007).
+  Re-export moved into Q3's task list; this entry retires.
 - **fetchPreviousPage / bidirectional infinite**: no consumer yet (Q5).
-- **StreamQuery hand-ring collapse** (added 2026-09-01): lite-stream LS3
-  (v1.3.0) will offer natively what `StreamQuery.js:119-142` hand-rolls
-  around `pipeToSignal` -- the buffer window (our `ring.push/shift/slice`
-  shifts O(n) where their real ring is O(1)), the first-frame status tap
-  smuggled through `transform`, and the abort-filtering `onError` (their
-  LS-12 decision doc). When lite-stream 1.3.0 ships: collapse the three
-  into the enriched call in the next minor here, and refresh
-  `demo/vendor/lite-stream.js` (still 1.0.0; VENDOR.md row updates with
-  it). Safe to wait: lite-stream's s7 conformance tier freezes our exact
-  current call shape, so drift under us is structurally impossible.
-- **fromPromise vocabulary normalization**: upstream decision -- now
-  scheduled: lite-await V1 records accept-or-reject in its decisions/0009
-  (recommendation there: REJECT, closing this permanently). Q3 reads the
-  verdict before shipping; this entry retires either way.
+- **StreamQuery hand-ring collapse** (added 2026-09-01): MOVED into Q3
+  2026-09-02 -- lite-stream 1.3.0 shipped the enriched pipeToSignal
+  (mode/maxBuffer, droppedCount getters, onValue, onAbort per their
+  decisions/0001) plus an s7 rewrite-parity proof of a StreamQuery-shaped
+  rewrite. The collapse and the vendored-copy refresh are Q3 tasks now;
+  see the Q3 brief for the parity discipline. Retired from parking.
+- **fromPromise vocabulary normalization**: RESOLVED 2026-09-02 -- verdict
+  REJECT on the record (../LiteAwait/decisions/0009, dated 2026-09-01).
+  Locked decision #4 closed; Q3 states the closure in the /await docs.
+  Retired.
 - **lite-bake-stream composition recipes** (added 2026-08-31, surface read
   from its llms.txt at 1.0.0): (1) `streamQuery` + `RangeReader` -- a
   reactive, cached, abortable window over a remote multi-GB LBK1 container
@@ -1012,7 +1115,9 @@ Still binding; the full rationale lives in this file's git history.
    fetch-dedup guard reads it). The same discipline binds infiniteQuery
    (Q5) and any future entry kind.
 4. **fromPromise re-exported unchanged**; vocabulary mapping is a docs
-   table, not a wrapper.
+   table, not a wrapper. CLOSED 2026-09-02: upstream verdict REJECT on the
+   record (../LiteAwait/decisions/0009) -- the table is the permanent
+   answer; this decision is no longer tracked, only inherited.
 5. **Streaming data does not cross tabs in 1.x** -- each tab owns its
    connection; only invalidation/removal broadcast. 2.0 (Q8) is where that
    changes, by design not by drift.
