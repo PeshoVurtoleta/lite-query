@@ -8,7 +8,7 @@ this file only where this file is silent.
 ---
 package: "@zakkster/lite-query"
 session: Q8
-status: pipeline-complete (2026-09-02; SPLIT ratified -- streams ship, queue -> Q9/2.1; C1-C13 + C10b BREAKING fix + QD-1..QD-4; reviewer DELTA APPROVED after one REJECTED (epoch-collision window), QA PASS after one docs FAIL(3); suite 362/0/0, GATE byte-identical, controls 5/5; awaiting /release 2.0.0 + operator publish per OR-1)
+status: shipped (2026-09-02; SPLIT ratified -- streams ship, queue -> Q9/2.1; C1-C13 + C10b BREAKING fix + QD-1..QD-4; reviewer DELTA APPROVED after one REJECTED (epoch-collision window), QA PASS after one docs FAIL(3); suite 362/0/0, GATE byte-identical, controls 5/5; drill sites=3/47 tests=362/0 GATE ok pack 13 files 108.0 kB; operator publish da8b377; registry artifact verified: 13 files, [2.0.0] head, VERSION sync, latest=2.0.0)
 version_target: 2.0.0       # stamped by the /release drill, NOT in-session (OR-1)
 tests_min: 354              # floor; suite is 314 at session start
 skip_max: 0

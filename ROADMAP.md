@@ -944,7 +944,7 @@ DONE WHEN
 ---
 package: "@zakkster/lite-query"
 version_target: 2.0.0
-status: pipeline-complete (2026-09-02; SPLIT per STOP-DECISION-1 -- streams
+status: shipped (2026-09-02; SPLIT per STOP-DECISION-1 -- streams
   ship, the queue defers to Q9/2.1. Ladder C1 baeb53f .. C13 b152acd incl.
   C10b bdc16b6 (the ON-3 falsy-rejection BREAKING fix, no test retired) +
   reviewer-REJECTED delta QD-1..QD-3 874f079 (two structural OR-4 defects
@@ -954,8 +954,9 @@ status: pipeline-complete (2026-09-02; SPLIT per STOP-DECISION-1 -- streams
   QA FAIL(3, docs-only) -> QD-4 ca41d30 -> QA PASS (G1-G9 evidenced,
   45/45 fresh adversarial probes incl. a three-way epoch collision and a
   re-entrant-teardown vector); suite 314 -> 362/0/0, GATE byte-identical,
-  controls 5/5; attempt E DID NOT FIRE; awaiting /release 2.0.0 +
-  operator publish per OR-1)
+  controls 5/5; attempt E DID NOT FIRE; drill sites=3/47 tests=362/0
+  GATE ok pack 13 files 108.0 kB; operator publish da8b377; registry
+  artifact verified: 13 files, [2.0.0] head, VERSION sync, latest=2.0.0)
 tests_min: 354   # re-rebased 2026-09-02 post-Q7 pipeline (314 base; the charter's original +40 delta preserved); pipeline closed at 362
 carry_from_q7: the findings-clause control -- STILL uncontrolled after
   FOUR attempts (Q5 A/B, Q6 C, Q7 D; INCONCLUSIVE.md holds all four
