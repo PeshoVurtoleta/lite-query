@@ -74,10 +74,13 @@ session shipping.
   message names it. Rationale: the strictest checkable form of reject; a late
   hydrate overwriting live data is the ABA bug of this domain, and an entry
   count of zero is cheaper and less ambiguous than any observer-based rule.
-  BroadcastChannel delivery is macrotask-scheduled, so the documented same-tick
-  boot order (create qc -> hydrate) cannot observe a remote entry -- planner
-  VERIFIES this against the real and mock channel paths rather than trusting
-  this sentence. Incremental / multi-shot hydration is a deferred
+  BroadcastChannel delivery is asynchronous -- the real channel a task, the
+  mock in test/harness.js a MICROTASK (planner V1 verified this and corrected
+  the original "macrotask" wording here) -- so a strictly synchronous boot
+  (create qc -> hydrate, no await between) cannot observe a remote entry under
+  either, and the mock is the stricter of the two. An awaited boot (any async
+  load()) legitimately CAN hit the precondition and resolves as a drop per
+  OR-6 -- a pinned contract, not flake. Incremental / multi-shot hydration is a deferred
   consumer-driven variant (NON-GOALS), not a softer default.
 - OR-3 all-or-nothing hydration. One malformed entry -- wrong shape,
   non-array pages on an infinite-marked entry, non-finite timestamp, anything
