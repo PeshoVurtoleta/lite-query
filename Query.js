@@ -119,6 +119,72 @@ const ABORT_REASON = Object.freeze({
 });
 
 // -----------------------------------------------------------------------------
+// Infinite-query page accumulation (cold path)
+// -----------------------------------------------------------------------------
+
+// An equals that never reports equal. An infinite entry's `data` signal is
+// created with this so a same-ref `data.set(entry.pages)` still notifies after
+// an in-place page push -- lite-signal otherwise skips the notification when
+// the reference is unchanged (Object.is dedup). Plain entries keep Object.is.
+const NEVER_EQUAL = () => false;
+
+// Initialize the seven infinite slots to their "page one is due" state: empty
+// accumulation, no cursor yet, hasNext true (so hasNextPage() reads true before
+// the first fetch). isInfinite / pageGen / getNextCursor are set by the caller.
+function resetPages(entry) {
+    entry.pages = [];
+    entry.flat = [];
+    entry.nextCursor = null;
+    entry.hasNext = true;
+}
+
+// Append a freshly-resolved page. `startCursor === null` marks a page-one fetch
+// (initial load or a post-invalidate refetch): the accumulation is rebuilt from
+// scratch (replace-on-success -- old pages stayed visible until now), otherwise
+// the page appends in place with a flat loop-append (no O(n) re-copy of prior
+// pages). `startGen` guards against a page resolving into a generation a later
+// invalidate already superseded (the mid-flight let-finish path does not bump
+// fetchGen, so this pageGen check is what swallows the stale page).
+function commitPage(entry, pageData, startGen, startCursor) {
+    if (startGen !== entry.pageGen) return;         // dead generation -- swallow
+    if (startCursor === null) {                     // page one -> replace
+        entry.pages = [];
+        entry.flat = [];
+    }
+    entry.pages.push(pageData);
+    const flat = entry.flat;
+    if (Array.isArray(pageData)) {
+        for (let i = 0; i < pageData.length; i++) flat.push(pageData[i]);
+    } else {
+        flat.push(pageData);
+    }
+    const cursor = entry.getNextCursor(pageData, entry.pages);
+    entry.nextCursor = cursor === undefined ? null : cursor;
+    entry.hasNext = entry.nextCursor !== null;
+    entry.data.set(entry.pages);
+}
+
+// Rebuild an infinite entry from an externally-supplied pages array (a manual
+// qc.setQueryData or a cross-tab / shared-fetch broadcast of the whole list).
+// Recomputes the flat view + cursor so a follower can request the next page.
+function rebuildInfinite(entry, pages) {
+    const flat = [];
+    for (let i = 0; i < pages.length; i++) {
+        const p = pages[i];
+        if (Array.isArray(p)) for (let j = 0; j < p.length; j++) flat.push(p[j]);
+        else flat.push(p);
+    }
+    entry.pages = pages;
+    entry.flat = flat;
+    if (entry.getNextCursor && pages.length > 0) {
+        const c = entry.getNextCursor(pages[pages.length - 1], pages);
+        entry.nextCursor = c === undefined ? null : c;
+        entry.hasNext = entry.nextCursor !== null;
+    }
+    entry.data.set(pages);
+}
+
+// -----------------------------------------------------------------------------
 // queryClient
 // -----------------------------------------------------------------------------
 
@@ -219,6 +285,19 @@ export function queryClient(options = {}) {
             streamRestart: null,         // () => void  -- abort + re-establish (invalidate)
             streamCount: 0,              // non-reactive: values seen this session
             streamDropped: 0,            // non-reactive: values dropped (buffer mode)
+            // Infinite-query slots -- uniform on every entry (same monomorphism
+            // rule as the stream slots above). A plain query() entry leaves all
+            // seven at their null/false/0 defaults and allocates no extra node;
+            // only an infiniteQuery() entry populates them. `pages` rides the
+            // entry's `data` signal (set(entry.pages) after each in-place push);
+            // `flat` is a non-reactive flattened view like streamCount.
+            isInfinite: false,
+            pages: null,                 // array of raw page results (== data() value)
+            flat: null,                  // flattened accumulation (live, grows in place)
+            nextCursor: null,            // cursor for the NEXT page fetch
+            hasNext: false,              // is there a next page to fetch?
+            pageGen: 0,                  // accumulation generation (invalidate bumps it)
+            getNextCursor: null,         // (lastPage, allPages) => cursor | null
             fetcher: null,
             equals: Object.is,
             staleTime: opts.defaultStaleTime,
@@ -256,6 +335,16 @@ export function queryClient(options = {}) {
             try { entry.streamStop(); } catch {}
             entry.streamStop = null;
             entry.streamRestart = null;
+        }
+        // Release the infinite-query accumulation so a destroyed entry does not
+        // pin its pages/flat arrays until the next major GC. These are plain
+        // arrays, not signal nodes -- nulling is the whole release.
+        if (entry.isInfinite) {
+            entry.pages = null;
+            entry.flat = null;
+            entry.getNextCursor = null;
+            entry.nextCursor = null;
+            entry.hasNext = false;
         }
         // disposeNode is lite-signal's `dispose`, aliased at import time so it
         // doesn't shadow the local qc.dispose() function. Calling the wrong
@@ -406,6 +495,13 @@ export function queryClient(options = {}) {
     function runFetch(entry, { force = false } = {}) {
         if (!force && entry.promise) return entry.promise;
         if (!entry.fetcher) return Promise.resolve(undefined);
+        // Infinite entries only auto-fetch when a next page is due: hasNext is
+        // true before the first page (resetPages) and after each non-terminal
+        // page, false once the cursor runs out. A forced page-one refetch
+        // (invalidate / refetch) re-arms hasNext before calling in.
+        if (entry.isInfinite && !entry.hasNext) {
+            return entry.promise || Promise.resolve(undefined);
+        }
 
         // Abort any prior in-flight fetch. The old promise's resolution will
         // be filtered by the generation guard below.
@@ -414,6 +510,11 @@ export function queryClient(options = {}) {
         }
 
         const gen = ++entry.fetchGen;
+        // Snapshot the accumulation generation + cursor at fetch start (infinite
+        // only). commitPage uses them: startCursor === null => page one (replace),
+        // startGen mismatch => a page that a later invalidate superseded.
+        const startPageGen = entry.pageGen;
+        const startCursor = entry.isInfinite ? entry.nextCursor : undefined;
         const ac = new AbortController();
         entry.abortController = ac;
         entry.fetching.set(true);
@@ -448,10 +549,9 @@ export function queryClient(options = {}) {
             // eslint-disable-next-line no-constant-condition
             while (true) {
                 try {
-                    const data = await entry.fetcher({
-                        key: entry.key,
-                        signal: ac.signal,
-                    });
+                    const data = await entry.fetcher(entry.isInfinite
+                        ? { key: entry.key, cursor: startCursor, signal: ac.signal }
+                        : { key: entry.key, signal: ac.signal });
                     return { ok: true, data };
                 } catch (err) {
                     if (gen !== entry.fetchGen || ac.signal.aborted) {
@@ -479,15 +579,20 @@ export function queryClient(options = {}) {
             if (outcome.superseded) return;
 
             if (outcome.ok) {
-                if (!entry.equals(entry.data(), outcome.data)) {
+                if (entry.isInfinite) {
+                    commitPage(entry, outcome.data, startPageGen, startCursor);
+                } else if (!entry.equals(entry.data(), outcome.data)) {
                     entry.data.set(outcome.data);
                 }
                 entry.error.set(undefined);
                 entry.status.set("success");
                 // Shared-fetch: the leader broadcasts its results so follower
-                // tabs receive them without issuing their own network calls.
+                // tabs receive them without issuing their own network calls. An
+                // infinite entry broadcasts the WHOLE pages array (one entry,
+                // one list); followers rebuild flat + cursor from it.
                 if (sharedFetchActive && opts.isLeader()) {
-                    broadcast({ type: "setData", key: entry.key, value: outcome.data });
+                    broadcast({ type: "setData", key: entry.key,
+                        value: entry.isInfinite ? entry.pages : outcome.data });
                 }
             } else {
                 entry.error.set(outcome.err);
@@ -531,7 +636,14 @@ export function queryClient(options = {}) {
         const newVal = typeof valueOrFn === "function"
             ? valueOrFn(untrack(() => e.data()))
             : valueOrFn;
-        e.data.set(newVal);
+        // Infinite entries store the pages array in `data`; a manual or
+        // cross-tab write replaces the whole list and rebuilds the flat view +
+        // cursor so hasNextPage()/fetchNextPage() stay coherent.
+        if (e.isInfinite && Array.isArray(newVal)) {
+            rebuildInfinite(e, newVal);
+        } else {
+            e.data.set(newVal);
+        }
         e.error.set(undefined);
         e.status.set("success");
         e.lastCompletedAt = opts.now();
@@ -554,6 +666,24 @@ export function queryClient(options = {}) {
                 // unobserved there's nothing live to restart (the next attach
                 // starts fresh and will see invalidatedSinceCompletion).
                 if (e.observerCount > 0 && e.streamRestart) e.streamRestart();
+            } else if (e.isInfinite) {
+                // Refetch the whole list from page one, replacing on success
+                // (stale-while-revalidate: the old pages stay visible until the
+                // page-one refetch lands). Bumping pageGen + resetting the cursor
+                // makes any in-flight page from the old generation a no-op in
+                // commitPage; hasNext re-arms so the page-one fetch can run.
+                e.pageGen++;
+                e.nextCursor = null;
+                e.hasNext = true;
+                if (e.observerCount > 0 && e.fetcher) {
+                    if (e.promise) {
+                        e.pendingRefetchAfterCurrent = true;
+                    } else if (sharedFetchActive && !opts.isLeader()) {
+                        requestSharedFetch(e);
+                    } else {
+                        runFetch(e).catch(noop);
+                    }
+                }
             } else if (e.observerCount > 0 && e.fetcher) {
                 if (e.promise) {
                     e.pendingRefetchAfterCurrent = true;
@@ -817,6 +947,218 @@ export function query(qc, queryOpts) {
             // Return currentEntry's signal node to lite-signal's pool -- without
             // this, an app that creates + disposes many queries (e.g. many
             // routes over an SPA lifetime) leaks one signal per query() call.
+            try { disposeNode(currentEntry); } catch {}
+        },
+    };
+}
+
+// -----------------------------------------------------------------------------
+// infiniteQuery()
+// -----------------------------------------------------------------------------
+
+/**
+ * Define a cursor-paginated query -- the accumulating sibling of query(). One
+ * cache entry holds the whole list: `pages()` is the array of raw page results,
+ * `data()` is the flattened accumulation. `fetchNextPage()` fetches the page at
+ * the current cursor and appends it in place; `getNextCursor(lastPage, allPages)`
+ * returns the cursor for the next fetch, or `null`/`undefined` when exhausted
+ * (then `hasNextPage()` reads false). Same lazy + abort-on-detach + reactive-key
+ * + enabled lifecycle as query(); lives in the SAME cache, so getQueryData /
+ * setQueryData / invalidate / removeQueries / cross-tab operate on it uniformly.
+ *
+ * The fetcher receives `{ key, cursor, signal }` (cursor is `null` for page one).
+ *
+ * @template T, C, K
+ * @param {import("./Query.js").QueryClient} qc
+ * @param {import("./Query.js").InfiniteQueryOptions<T, C, K>} infOpts
+ * @returns {import("./Query.js").InfiniteQuery<T>}
+ *
+ * @example
+ *   const feed = infiniteQuery(qc, {
+ *       key: ["feed"],
+ *       fetcher: ({ cursor, signal }) =>
+ *           fetch(`/api/feed?after=${cursor ?? ""}`, { signal }).then(r => r.json()),
+ *       getNextCursor: (last) => last.nextCursor ?? null,
+ *   });
+ *   effect(() => console.log(feed.data()));            // attach + fetch page one
+ *   button.onclick = () => feed.fetchNextPage();
+ */
+export function infiniteQuery(qc, infOpts) {
+    if (infOpts === null || typeof infOpts !== "object") {
+        throw new TypeError("infiniteQuery: options object is required");
+    }
+    if (infOpts.key === undefined) {
+        throw new TypeError("infiniteQuery: `key` is required");
+    }
+    if (typeof infOpts.fetcher !== "function") {
+        throw new TypeError("infiniteQuery: `fetcher` must be a function ({ key, cursor, signal }) => Promise");
+    }
+    if (typeof infOpts.getNextCursor !== "function") {
+        throw new TypeError("infiniteQuery: `getNextCursor` must be a function (lastPage, allPages) => cursor | null");
+    }
+
+    const { ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, opts } = qc._internal;
+
+    // Configure a fresh entry as infinite exactly once. The data signal is
+    // recreated with NEVER_EQUAL so an in-place page push (same array ref)
+    // still notifies pages()/data(); plain entries keep Object.is. A shared or
+    // GC-recreated entry re-configures only when isInfinite is still false.
+    function configure(entry) {
+        if (entry.isInfinite) return;
+        entry.isInfinite = true;
+        entry.getNextCursor = infOpts.getNextCursor;
+        entry.pageGen = 0;
+        try { disposeNode(entry.data); } catch {}
+        entry.data = signal(undefined, { equals: NEVER_EQUAL });
+        resetPages(entry);
+        // data() stays undefined until the first page commits, so the status
+        // ladder reports "pending" on the initial load (the pending guard keys
+        // off data() === undefined). pages()/data()/hasNextPage() subscribe to
+        // this signal and re-run when commitPage notifies.
+    }
+
+    // -- observer / watcher (mirrors query(); see Query.js for the rationale) --
+    const currentEntry = signal(null);
+    let watcher = null;
+    let attachedEntry = null;
+    let disposed = false;
+    let stopScheduled = false;
+    let observerCount = 0;
+
+    function startWatcher() {
+        if (watcher !== null || disposed) return;
+        watcher = createRoot(() => effect(() => {
+            const keyVal = typeof infOpts.key === "function"
+                ? infOpts.key()
+                : infOpts.key;
+            const isEnabled = infOpts.enabled === undefined
+                ? true
+                : typeof infOpts.enabled === "function"
+                    ? infOpts.enabled()
+                    : !!infOpts.enabled;
+
+            if (!isEnabled) {
+                if (attachedEntry) {
+                    untrack(() => detach(attachedEntry));
+                    attachedEntry = null;
+                }
+                currentEntry.set(null);
+                return;
+            }
+
+            const entry = untrack(() => ensureEntry(keyVal));
+            untrack(() => configure(entry));
+
+            if (entry !== attachedEntry) {
+                if (attachedEntry) untrack(() => detach(attachedEntry));
+                untrack(() => attach(entry, infOpts));
+                attachedEntry = entry;
+                currentEntry.set(entry);
+                untrack(() => maybeFetch(entry));
+            }
+        }));
+    }
+
+    function stopWatcher() {
+        if (watcher === null) return;
+        watcher();
+        watcher = null;
+        if (attachedEntry) {
+            detach(attachedEntry);
+            attachedEntry = null;
+        }
+        currentEntry.set(null);
+    }
+
+    const cleanupObserver = () => {
+        if (disposed) return;
+        observerCount--;
+        if (observerCount === 0 && !stopScheduled) {
+            stopScheduled = true;
+            queueMicrotask(maybeStopWatcher);
+        }
+    };
+    const maybeStopWatcher = () => {
+        stopScheduled = false;
+        if (observerCount === 0 && watcher !== null && !disposed) stopWatcher();
+    };
+
+    function trackObserver() {
+        if (disposed || !isTracking()) return;
+        observerCount++;
+        if (watcher === null) startWatcher();
+        onCleanup(cleanupObserver);
+    }
+
+    return {
+        // The array of raw page results (== the entry's reactive data value).
+        pages() {
+            trackObserver();
+            const e = currentEntry();
+            return e ? e.data() : undefined;
+        },
+        // The flattened accumulation. LIVE and growing: the returned array is
+        // appended to in place as pages arrive (subscribe via e.data()). Copy it
+        // (`[...feed.data()]`) if you need to retain a page-N snapshot.
+        data() {
+            trackObserver();
+            const e = currentEntry();
+            if (!e) return undefined;
+            e.data();                        // subscribe: re-run when a page commits
+            return e.flat;
+        },
+        hasNextPage() {
+            trackObserver();
+            const e = currentEntry();
+            if (!e) return false;
+            e.data();                        // subscribe: hasNext updates per commit
+            return e.hasNext;
+        },
+        // Fetch the page at the current cursor and append it. Dedups on the
+        // entry promise (a concurrent call returns the in-flight one); a no-op
+        // once exhausted (hasNext false).
+        fetchNextPage() {
+            const e = untrack(() => currentEntry());
+            if (!e) return Promise.resolve(undefined);
+            if (e.promise) return e.promise;
+            if (!e.hasNext) return Promise.resolve(undefined);
+            if (sharedFetchActive && !opts.isLeader()) {
+                requestSharedFetch(e);
+                return e.promise || Promise.resolve(untrack(() => e.flat));
+            }
+            return runFetch(e).catch(noop);
+        },
+        status() {
+            trackObserver();
+            const e = currentEntry();
+            return e ? e.status() : "idle";
+        },
+        error() {
+            trackObserver();
+            const e = currentEntry();
+            return e ? e.error() : undefined;
+        },
+        fetching() {
+            trackObserver();
+            const e = currentEntry();
+            return e ? e.fetching() : false;
+        },
+        // Refetch the whole list from page one (force), replacing on success.
+        refetch() {
+            const e = untrack(() => currentEntry());
+            if (!e) return Promise.resolve(undefined);
+            e.pageGen++;
+            e.nextCursor = null;
+            e.hasNext = true;
+            if (sharedFetchActive && !opts.isLeader()) {
+                requestSharedFetch(e);
+                return e.promise || Promise.resolve(untrack(() => e.flat));
+            }
+            return runFetch(e, { force: true });
+        },
+        dispose() {
+            disposed = true;
+            stopWatcher();
             try { disposeNode(currentEntry); } catch {}
         },
     };

@@ -53,6 +53,23 @@ Opts:
 - onError: async (err, vars, ctx) => void
 - onSettled: async (data, err, vars, ctx) => void -- ALWAYS fires
 
+### infiniteQuery(qc, opts)
+Cursor-paginated sibling of query(): one cache entry holds the whole list. Returns { pages, data, hasNextPage, fetchNextPage, status, error, fetching, refetch, dispose } -- all functions. Same lazy + abort-on-detach + reactive-key + enabled lifecycle as query(); lives in the SAME cache (getQueryData/setQueryData/invalidate/removeQueries/cross-tab operate uniformly).
+
+Opts:
+- key: any[] | () => any[] -- static or reactive
+- fetcher: async ({ key, cursor, signal }) => page -- cursor is null on page one
+- getNextCursor: (lastPage, allPages) => cursor | null -- null/undefined signals exhaustion
+- staleTime / cacheTime / timeout / retry / retryDelay -- per-query overrides
+- enabled: boolean | () => boolean -- gate
+
+Semantics:
+- pages() is the array of raw page results; data() is the flattened accumulation. data() returns a LIVE array grown in place on each fetchNextPage -- copy it ([...q.data()]) if you retain a snapshot across pages (aliasing contract).
+- fetchNextPage() fetches at the current cursor and appends in place (flat loop-append, no O(n) re-copy); dedups on the in-flight promise; no-op once hasNextPage() is false.
+- invalidate()/refetch() refetch from page one and replace the array on success (stale-while-revalidate over the whole list). A generation guard (pageGen) swallows a late page from a superseded generation -- no partial two-generation mixing.
+- Cross-tab: the pages array syncs via the single entry's setData broadcast; under sharedFetch the leader dedups per page fetch and broadcasts the whole list, followers rebuild flat + cursor.
+- ZERO extra signals per entry: pages ride the entry's data signal (recreated once with a never-equal comparator so a same-ref set after an in-place push still notifies); flat is a non-reactive view. A plain query() entry pays nothing for the seven uniform infinite slots (all null/false/0).
+
 ### streamQuery(qc, opts) -- subpath @zakkster/lite-query/stream (optional peer @zakkster/lite-stream)
 Multi-shot sibling of query(): subscribes a cache key to an async iterable (SSE/websocket/cursor/pubsub) instead of a one-shot fetch. Values are pumped via lite-stream pipeToSignal into the SAME cache entry query() uses -- getQueryData/invalidate/removeQueries work uniformly. Returns { data, error, status, loading, done, count, droppedCount, restart, dispose }.
 

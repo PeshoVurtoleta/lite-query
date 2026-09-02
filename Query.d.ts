@@ -206,6 +206,83 @@ export function query<
     K extends readonly unknown[] = readonly unknown[],
 >(qc: QueryClient, opts: QueryOptions<T, K>): Query<T>;
 
+// --- infiniteQuery() ---------------------------------------------------------
+
+/** Context passed to an `infiniteQuery` fetcher. `cursor` is `null` for page one. */
+export interface InfiniteFetcherContext<
+    C = unknown,
+    K extends readonly unknown[] = readonly unknown[],
+> {
+    key: K;
+    /** Cursor for this page fetch. `null` on the initial (page-one) load. */
+    cursor: C | null;
+    signal: AbortSignal;
+}
+
+/** Options for `infiniteQuery(qc, opts)`. */
+export interface InfiniteQueryOptions<
+    T = unknown,
+    C = unknown,
+    K extends readonly unknown[] = readonly unknown[],
+> {
+    /** Cache key -- static array OR a reactive function, same as query(). */
+    key: K | (() => K);
+    /** Async page fetcher. Receives `{ key, cursor, signal }`. */
+    fetcher: (ctx: InfiniteFetcherContext<C, K>) => Promise<T>;
+    /**
+     * Derive the next page's cursor from the last page (and all pages so far).
+     * Return `null`/`undefined` to signal exhaustion -- `hasNextPage()` reads
+     * false and `fetchNextPage()` becomes a no-op.
+     */
+    getNextCursor: (lastPage: T, allPages: T[]) => C | null | undefined;
+    /** Override `defaultStaleTime` for this query. */
+    staleTime?: number;
+    /** Override `defaultCacheTime` for this query. */
+    cacheTime?: number;
+    /** Override `defaultTimeout` for this query. */
+    timeout?: number;
+    /** Override `retry` policy for this query. */
+    retry?: RetryPolicy;
+    /** Override `retryDelay` for this query. */
+    retryDelay?: RetryDelay;
+    /** Gate. Reactive (function form) or static. */
+    enabled?: boolean | (() => boolean);
+}
+
+/**
+ * Returned by `infiniteQuery(...)`. All accessors are functions -- call to read.
+ *
+ * `data()` returns a LIVE array: it is appended to in place as pages arrive, so
+ * a reference captured across a `fetchNextPage()` will be seen to grow. Copy it
+ * (`[...q.data()]`) if you need to retain a point-in-time snapshot of the list.
+ */
+export interface InfiniteQuery<T = unknown> {
+    /** The array of raw page results (one entry per fetched page). */
+    pages: ReadAccessor<T[] | undefined>;
+    /** The flattened accumulation across all pages. Live + growing (see above). */
+    data: ReadAccessor<unknown[] | undefined>;
+    /** True while there is a next page to fetch (cursor not yet exhausted). */
+    hasNextPage: ReadAccessor<boolean>;
+    /** Fetch + append the next page. Dedups on the in-flight fetch; no-op when exhausted. */
+    fetchNextPage: () => Promise<unknown>;
+    /** Coarse status of the current page fetch. */
+    status: ReadAccessor<QueryStatus>;
+    /** Latest page-fetch error, or `undefined`. */
+    error: ReadAccessor<unknown>;
+    /** True when any page fetch is in flight. */
+    fetching: ReadAccessor<boolean>;
+    /** Refetch the whole list from page one, replacing on success. */
+    refetch: () => Promise<unknown>;
+    /** Drop the observer this handle holds. Idempotent. */
+    dispose: () => void;
+}
+
+export function infiniteQuery<
+    T = unknown,
+    C = unknown,
+    K extends readonly unknown[] = readonly unknown[],
+>(qc: QueryClient, opts: InfiniteQueryOptions<T, C, K>): InfiniteQuery<T>;
+
 // --- mutation() --------------------------------------------------------------
 
 export interface MutationOptions<TData = unknown, TVars = unknown, TCtx = unknown> {
