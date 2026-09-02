@@ -5,6 +5,50 @@ All notable changes to `@zakkster/lite-query` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] -- 2026-09-02
+
+Harness only. No runtime change: Query.js, StreamQuery.js and Awaitable.js are
+byte-identical to 1.2.0.
+
+### Added
+
+- `test/torture.mjs` is now the single suite-law entry (`npm run torture:law`).
+  Phase P execs the three `bench/torture/` soaks as children and asserts exit 0
+  on each; phase H keeps the 1.2.0 lifecycle-churn and warm-read gates unchanged;
+  phase C adds controls. Prints the same `GATE leak=... | gc ... | ok` line, then
+  `ok`. Exit 0/1. Measured this session:
+  `GATE leak=size 0/0 findings=0 warnings=0 | gc major=0 minor=0 maxMs=0.00 | ok`.
+- Phase C controls behind `QUERY_TORTURE_BREAK` (`1` = all, or `alloc`/`detach`/
+  `fuzz`): an alloc-per-iteration twin of the warm loop, a skipped-detach
+  teardown, and a one-phantom-broadcast corruption of the fuzzer's echo oracle.
+  Each verified to exit non-zero individually (alloc 1, detach 1, fuzz 1);
+  `QUERY_TORTURE_BREAK=1` trips 3/3. `npm run torture:control`.
+  Closes Q-09: the 1.2.0 leak/gc gate had no control and could not fail.
+- WeakRef census beside `tracker.size()` (lite-leak 1.10.0: size() counts
+  registrations, not reachability). One-sided gate: fails only when nothing in
+  the 256-handle sample is collected across 8 settle cycles (measured 0/256).
+- Explicit `verdict === 'pass'` requirement; an inconclusive verdict fails and
+  points at INCONCLUSIVE.md. `allowInconclusive` is never set.
+- `INCONCLUSIVE.md` -- triage for the third verdict. Repo doc, not shipped. It
+  records the one uncontrolled clause: `findings.length === 0` has no control
+  (owner-cascade audit() cannot fire through the public surface without a
+  runtime edit OR-1 forbids); carried to Q5.
+- `bench/torture/README.md`: measured numbers now carry date / machine / node.
+
+### Changed
+
+- `npm run torture` is the union entry (phase P runs the three soaks once).
+  `prepublishOnly` runs the full law. `torture:leak` retained as an alias.
+- ascii-guard walk extended to `test/**/*.mjs` and `INCONCLUSIVE.md` (no new
+  tests; the existing walk test covers more files -- suite stays 181).
+- llms.txt / README test counts corrected: 177 -> 181. The 177 figure predated
+  the four QA boundary tests (764c8eb) that split stream 20 -> 24.
+
+### Gates
+
+- `npm test` -> 181/0/0. `npm run torture` -> ok, exit 0.
+  Controls: alloc 1, detach 1, fuzz 1. `npm pack --dry-run` -> 13 files.
+
 ## [1.2.0] -- 2026-09-02
 
 The sibling refresh: catch up to both peers in one minor. `npm test` -> 181
