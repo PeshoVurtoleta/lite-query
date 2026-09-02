@@ -70,15 +70,12 @@ resolve the cause, do not widen the budget.
   auto-untracks (`size()` returns to 0). Confirmed empirically in session Q4.
   Staging it would require a runtime edit to Query.js / StreamQuery.js, which
   OR-1 forbids in a harness session. Recorded, not faked; carried to Q5.
-- The census clause (`censusOk`) has NO control. It is exercised only on plain
-  runs of phase H, where it builds a 256-handle WeakRef sample and folds
-  `sampledLive < 256` into the gate. C-detach does not build its own census: it
-  passes `censusOk: true` (test/torture/controls.mjs, ctlDetach), so it trips on
-  the `live === 0` clause alone. This is an undeclared-at-the-time drift from
-  PLAN Assertion 3, which expected C-detach to yield `sampledLive === 256`. The
-  harness stays sound because the census clause is one-sided and ANDed into the
-  gate: it can only tighten a plain run, never mask a leak, so an uncontrolled
-  `censusOk` cannot fail open. Carried to Q5 alongside the findings clause.
+
+The census clause (`censusOk`) WAS uncontrolled between commit e56af54 and its
+fix: C-detach hardcoded `censusOk: true` (an undeclared drift from PLAN
+Assertion 3). It is now controlled -- C-detach builds a WeakRef census over its
+128 strongly-held handles and the whole sample comes back live (128/128),
+tripping the census clause alongside the leak clause. No longer an open item.
 
 ## Escalation
 

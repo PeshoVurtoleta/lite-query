@@ -79,6 +79,7 @@ async function ctlAlloc(ctx) {
 async function ctlDetach(ctx) {
   const { tracker, RULES, evaluateGate, FETCHER, NOOP_RELEASE, makeController } = ctx;
   const RETAIN = [];
+  const censusRefs = [];
   const qc = queryClient({ defaultStaleTime: 0 });
   for (let i = 0; i < DETACH_CYCLES; i++) {
     const c = makeController();
@@ -86,17 +87,20 @@ async function ctlDetach(ctx) {
     q.status();
     tracker.track(q, NOOP_RELEASE, 'query', { audit: true });        // no owner -> no auto-untrack
     RETAIN.push(q);
+    censusRefs.push(new WeakRef(q));
     const sq = streamQuery(qc, { key: ['s', i], stream: c.factory, mode: 'buffer', maxBuffer: 4 });
     sq.data();
     tracker.track(sq, NOOP_RELEASE, 'streamQuery', { audit: true });
     RETAIN.push(sq);
+    censusRefs.push(new WeakRef(sq));
     // deliberate: no dispose(), no qc.clear()
   }
   globalThis.gc?.();
   await settle();
   const live = tracker.size();
   const findings = tracker.audit();
-  // a passing gc window, so ONLY the leak clause trips (not the gc clause).
+  // a passing gc window, so the gc clause stays green (the leak + census
+  // clauses are the ones under test here, not the budget).
   const gc = new GcProfiler().start();
   gc.sampleHeap(performance.now(), process.memoryUsage().heapUsed);
   gc.sampleHeap(performance.now(), process.memoryUsage().heapUsed);
@@ -104,9 +108,25 @@ async function ctlDetach(ctx) {
   const s = gc.summary();
   const report = checkNoGc(s, RULES);
   gc.stop();
+  // Census over the strongly-held RETAIN handles: same settle shape as phase H
+  // (8 gc + macrotask cycles). Because RETAIN pins every handle, the whole
+  // sample comes back live -- the census clause's all-live trip signature.
+  const sample = censusRefs.slice(-256);
+  for (let cyc = 0; cyc < 8; cyc++) {
+    globalThis.gc?.();
+    await new Promise((r) => setTimeout(r, 0));
+  }
+  let sampledLive = 0;
+  for (const ref of sample) if (ref.deref() !== undefined) sampledLive++;
+  // Same all-live signature phase H gates on ("nothing collected"), sized to the
+  // control's 128 pinned handles instead of 256: fail iff the whole sample lives.
+  const censusOk = !(sample.length > 0 && sampledLive === sample.length);
   if (RETAIN.length < 0) console.log('unreachable');
-  const gate = evaluateGate({ live, findings, leaks: [], warns: [], summary: s, report, censusOk: true });
-  return { id: 'detach', tripped: !gate.ok, clause: 'leak', stderrText: 'FAIL H leak=size ' + live + '/0\n' };
+  const gate = evaluateGate({ live, findings, leaks: [], warns: [], summary: s, report, censusOk });
+  const clause = censusOk ? 'leak' : 'leak+census';
+  const stderrText = 'FAIL H leak=size ' + live + '/0\n' +
+    'FAIL H census ' + sampledLive + '/' + sample.length + ' live\n';
+  return { id: 'detach', tripped: !gate.ok, clause, stderrText };
 }
 
 // C-fuzz: spawn cache-fuzzer.mjs WITH the break var. Its one env-gated line
@@ -131,12 +151,21 @@ export async function runControls(mode, ctx) {
     if (id === 'alloc') results.push(await ctlAlloc(ctx));
     else if (id === 'detach') results.push(await ctlDetach(ctx));
     else if (id === 'fuzz') results.push(ctlFuzz());
-    else results.push({ id, tripped: false, clause: 'unknown-break-value', stderrText: '  unknown QUERY_TORTURE_BREAK=' + id + '\n' });
+    // Unknown value: fail loudly (ambiguous state is not "off"; note "0" is
+    // truthy in JS, so it reaches here rather than running the plain gate).
+    else results.push({ id, unknown: true, tripped: false, stderrText: '  unknown QUERY_TORTURE_BREAK=' + id + '\n' });
   }
   let tripped = 0;
   for (const r of results) {
-    if (r.tripped) { tripped++; console.log('CONTROL ' + r.id + ' tripped: ' + r.clause); }
-    else console.log('CONTROL ' + r.id + ' DID-NOT-TRIP -- gate is decorative');
+    if (r.unknown) {
+      console.log('CONTROL unknown QUERY_TORTURE_BREAK value "' + r.id + '" -- valid: 1|alloc|detach|fuzz');
+    } else if (r.tripped) {
+      tripped++;
+      console.log('CONTROL ' + r.id + ' tripped: ' + r.clause);
+    } else {
+      // reserved for a genuine control that ran and failed to trip.
+      console.log('CONTROL ' + r.id + ' DID-NOT-TRIP -- gate is decorative');
+    }
   }
   console.log('CONTROL SUMMARY tripped=' + tripped + '/' + ids.length);
   for (const r of results) if (r.stderrText) process.stderr.write(r.stderrText);

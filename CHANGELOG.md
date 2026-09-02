@@ -26,7 +26,12 @@ byte-identical to 1.2.0.
   Closes Q-09: the 1.2.0 leak/gc gate had no control and could not fail.
 - WeakRef census beside `tracker.size()` (lite-leak 1.10.0: size() counts
   registrations, not reachability). One-sided gate: fails only when nothing in
-  the 256-handle sample is collected across 8 settle cycles (measured 0/256).
+  the sample is collected across 8 settle cycles (plain run 0/256). The detach
+  control exercises this clause too: its 128 pinned handles come back all-live
+  (128/128), so it trips the census clause alongside the leak clause.
+- `test/torture.mjs` refuses to run without `--expose-gc`: it exits 1 with
+  `missing --expose-gc; run: node --expose-gc test/torture.mjs` before any phase,
+  instead of failing incidentally with a leak-shaped census message.
 - Explicit `verdict === 'pass'` requirement; an inconclusive verdict fails and
   points at INCONCLUSIVE.md. `allowInconclusive` is never set.
 - `INCONCLUSIVE.md` -- triage for the third verdict. Repo doc, not shipped. It

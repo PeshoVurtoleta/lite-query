@@ -234,6 +234,17 @@ async function runPhaseH() {
 }
 
 // ---- orchestration --------------------------------------------------------
+// Fail closed on a missing --expose-gc BEFORE any phase runs: without it the
+// census settle cycles cannot collect and phase H reports a leak-shaped
+// 256/256, which would send a human chasing a phantom retention bug. Name the
+// fix instead of failing incidentally.
+if (typeof globalThis.gc !== 'function') {
+  process.stderr.write('FAIL missing --expose-gc; run: node --expose-gc test/torture.mjs\n');
+  process.exit(1);
+}
+
+// Break switch: "set" means NON-EMPTY. QUERY_TORTURE_BREAK= (empty string) is
+// falsy and runs the plain phase P + H gate; a non-empty value selects phase C.
 const BREAK = process.env.QUERY_TORTURE_BREAK;
 if (BREAK) {
   // Phase C only (cold path): phases P and H are skipped so exactly one
