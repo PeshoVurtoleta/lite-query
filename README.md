@@ -58,13 +58,15 @@ The honest comparison. Numbers are min+gzip, current as of writing.
 | Mutation race protection (`mutationGen`) | Yes | Yes | Partial |
 | Reactive keys | Native (signals) | Via framework state | Via framework state |
 | Multi-shot / streaming queries | **`streamQuery` (SSE/ws/cursor)** | Experimental (`streamedQuery`) | No |
+| Cursor pagination (infinite) | **`infiniteQuery` (built-in)** | `useInfiniteQuery` | `useSWRInfinite` |
+| Route-loader prefetch | **`qc.prefetch` (built-in)** | `queryClient.prefetchQuery` | `preload` |
 | Abort reason vocabulary | Yes (`signal.reason`) | No | No |
 | Per-query timeout | Yes | No (manual via fetcher) | No (manual via fetcher) |
 | Devtools UI | Roadmap | Yes (mature) | Yes |
-| Tests | 158 | ~hundreds | ~hundreds |
+| Tests | 199 | ~hundreds | ~hundreds |
 | Foundation | Signals (lite-signal) | Observer pattern | SWR algo + hooks |
 
-Where lite-query trails: pagination is a Cookbook recipe rather than a built-in API, and the devtools panel is on the roadmap. Where it leads: cross-tab and the signal-native composition story.
+Where lite-query trails: the devtools panel is on the roadmap. Where it leads: cross-tab, cursor pagination, and the signal-native composition story.
 
 ## Performance
 

@@ -90,63 +90,76 @@ const userPosts = query(qc, {
 
 ---
 
-## 4. Pagination -- accumulate pages into a single list
+## 4. Pagination -- cursor-accumulate pages with `infiniteQuery`
 
-lite-query doesn't ship a built-in `useInfiniteQuery` because the pattern is simple enough to compose. Hold a page signal, query per page, accumulate manually.
+Cursor pagination is first-class. `infiniteQuery` holds the whole list in one cache entry: `pages()` is the array of raw page results, `data()` is the flattened accumulation, `fetchNextPage()` appends the next page, and `hasNextPage()` reads false once `getNextCursor` returns null.
+
+```js
+import { infiniteQuery } from '@zakkster/lite-query';
+
+const feed = infiniteQuery(qc, {
+  key: ['todos'],
+  fetcher: async ({ cursor, signal }) =>
+    fetch(`/api/todos?after=${cursor ?? ''}&size=20`, { signal }).then(r => r.json()),
+  getNextCursor: (lastPage) => lastPage.nextCursor ?? null,   // null => exhausted
+});
+
+effect(() => render(feed.data()));                   // attach + fetch page one
+
+function loadMore() {
+  if (feed.hasNextPage()) feed.fetchNextPage();      // dedups while in flight
+}
+```
+
+`invalidate(['todos'])` (or `feed.refetch()`) refetches from page one and replaces the whole list on success -- stale-while-revalidate over the accumulation, with a generation guard that swallows a late page from a superseded fetch, so two generations never mix.
+
+Aliasing contract: `data()` returns a LIVE array that grows in place as pages arrive. If you need a point-in-time snapshot of the list (to diff it, or hold it across a `fetchNextPage`), copy it: `const snapshot = [...feed.data()]`.
+
+If you need custom accumulation the library can't express (dedupe by id, interleave two sources, reset on a filter change), hand-roll it with a page signal instead:
 
 ```js
 const page = signal(1);
 const accumulated = signal([]);
-
 const todosPage = query(qc, {
   key: () => ['todos', page()],
   fetcher: async ({ key, signal }) =>
     fetch(`/api/todos?page=${key[1]}&size=20`, { signal }).then(r => r.json()),
 });
-
-// Append fresh pages to the accumulator
 effect(() => {
   const data = todosPage.data();
   if (!data) return;
   if (page() === 1) accumulated.set(data);           // reset on first page
   else accumulated.set([...accumulated.peek(), ...data]);
 });
-
-function loadMore() {
-  if (!todosPage.fetching()) page.set(page.peek() + 1);
-}
 ```
-
-This pattern keeps you in control of the accumulator (reset on filter change, dedupe by id, etc.) without the library imposing assumptions about how your pagination works.
 
 ---
 
 ## 5. Prefetch on hover -- speculate before navigation
 
-The user hovers a link. Start fetching the destination's data so it's cached when they click.
+The user hovers a link. Start fetching the destination's data so it's cached when they click. `qc.prefetch(key, fetcher, opts?)` is the built-in for exactly this -- it warms an entry with zero observers, no throwaway `query()` handle to dispose.
 
 ```js
 function prefetchUserOnHover(userId) {
-  // Spawn a temporary query; dispose right away so it doesn't keep observers.
-  // The fetch still runs; the cache entry survives until cacheTime.
-  const q = query(qc, {
-    key: ['user', userId],
-    fetcher: async ({ key, signal }) =>
+  qc.prefetch(
+    ['user', userId],
+    async ({ key, signal }) =>
       fetch(`/api/users/${key[1]}`, { signal }).then(r => r.json()),
-  });
-
-  // Touch the accessor to start the fetch, then dispose.
-  // The fetch is in-flight; result lands in the cache.
-  effect(() => q.data())();                          // immediate dispose
-
-  // Alternative: don't bother with effect, call refetch directly
-  // q.refetch().catch(() => {});
+  );
+  // Fresh entry already cached? Prefetch is a no-op (no refetch, no GC re-arm).
 }
 
 <a href="/users/42" onmouseover={() => prefetchUserOnHover(42)}>View user 42</a>
 ```
 
-When the user actually clicks and the destination mounts a query with key `['user', 42]`, the cache hit serves the prefetched data instantly.
+When the user clicks and the destination mounts `query(qc, { key: ['user', 42] })`, the cache hit serves the prefetched data instantly (no refetch if still fresh). Pairs with a route loader: `await qc.prefetch(routeKey, routeFetcher)` before the transition, and the mounted query adopts the warmed entry.
+
+The manual form (spawn a temporary `query()`, touch it, dispose) still works if you need the observer lifecycle, but `qc.prefetch` is the direct path:
+
+```js
+const q = query(qc, { key: ['user', 42], fetcher });
+effect(() => q.data())();                            // immediate dispose -- fetch lands in cache
+```
 
 ---
 

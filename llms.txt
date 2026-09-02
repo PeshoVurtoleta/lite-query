@@ -1,6 +1,6 @@
 # @zakkster/lite-query
 
-Reactive async cache with cross-tab coherence. Built on @zakkster/lite-signal (>=1.5.0). ~6KB min+gzip core. Framework-agnostic. 181 deterministic tests (120 core incl. zero-GC hot-path contract + 31 await + 24 stream + 6 repo drift guards). TypeScript types shipped for every entry point (Query.d.ts, StreamQuery.d.ts, Awaitable.d.ts). Three entry points: `.` (core), `./stream` (streamQuery, optional peer lite-stream), `./await` (async coordination, optional peer lite-await). Every entry exports `VERSION` -- lite-query's own version string, the single runtime version source (defined in Query.js, re-exported by /stream and /await, asserted equal to package.json).
+Reactive async cache with cross-tab coherence. Built on @zakkster/lite-signal (>=1.5.0). ~6KB min+gzip core. Framework-agnostic. 199 deterministic tests (138 core incl. zero-GC hot-path contract + infiniteQuery + prefetch + 31 await + 24 stream + 6 repo drift guards). TypeScript types shipped for every entry point (Query.d.ts, StreamQuery.d.ts, Awaitable.d.ts). Three entry points: `.` (core), `./stream` (streamQuery, optional peer lite-stream), `./await` (async coordination, optional peer lite-await). Every entry exports `VERSION` -- lite-query's own version string, the single runtime version source (defined in Query.js, re-exported by /stream and /await, asserted equal to package.json).
 
 ## Performance vs @tanstack/query-core (5.101)
 
@@ -21,7 +21,7 @@ A query/mutation cache layer like TanStack Query or SWR, but signals-based and f
 ## Public API
 
 ### queryClient(options)
-Creates a cache client. Returns { options, getQueryData, setQueryData, invalidate, removeQueries, clear, dispose }.
+Creates a cache client. Returns { options, getQueryData, setQueryData, invalidate, removeQueries, clear, prefetch, dispose }.
 
 Options:
 - defaultStaleTime: number (default 0) -- ms before cache entries are considered stale
@@ -52,6 +52,11 @@ Opts:
 - onSuccess: async (data, vars, ctx) => void
 - onError: async (err, vars, ctx) => void
 - onSettled: async (data, err, vars, ctx) => void -- ALWAYS fires
+
+### qc.prefetch(key, fetcher, opts?)
+Warm an entry into the cache with zero observers (route loaders, hover speculation). Fetches unless the entry is already fresh; a later query() with the same key adopts it without refetching, and the entry GCs at cacheTime like any unobserved one. opts: staleTime / cacheTime / timeout / retry / retryDelay. Returns a promise for the fetched (or cached) value.
+
+Decision (OR-4): prefetch of an already-fresh entry is a NO-OP -- no fetch is issued and the pending cacheTime GC is NOT re-armed (the entry keeps the lease it was created with). A `force` variant is deferred until a consumer needs it. This is a pinned decision, not an oversight.
 
 ### infiniteQuery(qc, opts)
 Cursor-paginated sibling of query(): one cache entry holds the whole list. Returns { pages, data, hasNextPage, fetchNextPage, status, error, fetching, refetch, dispose } -- all functions. Same lazy + abort-on-detach + reactive-key + enabled lifecycle as query(); lives in the SAME cache (getQueryData/setQueryData/invalidate/removeQueries/cross-tab operate uniformly).
@@ -142,26 +147,27 @@ Optional companion:
 ## What it doesn't do (intentional v1 scope)
 
 - No focus/reconnect revalidation triggers (deferred to 1.x as injectable hooks)
-- No built-in pagination (cookbook recipe instead -- keeps the core lean)
 - No devtools (roadmap for 1.x)
 - No SSR hydration (use snapshot/restore from lite-store if needed)
-- No infinite query helper (composition recipe)
+- No bidirectional pagination: infiniteQuery is forward-cursor only. fetchPreviousPage is deferred until a consumer exists (no speculative API).
+- No persistence of infinite pages: how an infinite entry serializes is deferred to Q6 (the pages array is in-cache only; setQueryData(key, pagesArray) rehydrates it and rebuilds the flat view).
 
 ## Test approach
 
-120 deterministic tests using:
+138 core deterministic tests using:
 - Controlled fetcher (test resolves/rejects manually)
 - Mock clock (now/setTimeout injectable)
 - Mock BroadcastChannel (cross-tab simulated without spawning workers)
-- A zero-GC contract test that locks in the hoisted-cleanup hot-path optimization
+- A zero-GC contract test that locks in the hoisted-cleanup hot-path optimization (query() and infiniteQuery() warm reads)
 
-See test/harness.js + test/query.test.js + test/edge-cases.test.js + test/zero-gc.test.js. Run `npm run test:gc` to include the zero-GC contract test (auto-skipped under plain `npm test`).
+See test/harness.js + test/query.test.js + test/edge-cases.test.js + test/zero-gc.test.js + test/infinite-query.test.js. Run `npm run test:gc` to include the zero-GC contract test (auto-skipped under plain `npm test`).
 
 ## File map
 
 - Query.js -- implementation (~890 lines)
 - Query.d.ts -- TypeScript declarations (full surface: QueryClient, Query, Mutation, AbortReason, all option/return interfaces)
 - test/query.test.js -- 106 deterministic tests
+- test/infinite-query.test.js -- infiniteQuery + qc.prefetch tests (accumulation, dedup, invalidate/refetch generation guard, cross-tab page sync, prefetch adoption)
 - test/harness.js -- Mock fetcher, clock, BroadcastChannel
 - bench/bench.mjs -- comparative bench vs @tanstack/query-core (run `npm run bench`)
 - README.md -- public docs + facts comparison + bench headline
