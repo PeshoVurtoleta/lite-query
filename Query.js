@@ -806,6 +806,105 @@ export function queryClient(options = {}) {
         return runFetch(e).catch(noop);
     }
 
+    // -- persistence (cold path) --
+
+    // Serialize the SUCCESS entries into a plain-JSON snapshot. Cold by
+    // definition: it walks the whole entries map (OR-8). Emits STATE only --
+    // no version field (the adapter stamps { version, state }, OR-6). Each
+    // record is monomorphic: exactly four own keys { key, data, dataUpdatedAt,
+    // infinite }. Pending / error / stream entries are excluded (a promise, a
+    // failure, a live connection are not data); an infinite entry carries a
+    // SHALLOW COPY of its pages array (pages is the one structure the cache
+    // grows in place). key, data, and page CONTENTS are references, not deep
+    // copies -- serialize the payload before any further cache write.
+    function dehydrate() {
+        const out = [];
+        for (const e of entries.values()) {
+            if (untrack(() => e.status()) !== "success") continue;
+            if (e.isStream) continue;
+            if (!Number.isFinite(e.lastCompletedAt)) continue;
+            if (e.isInfinite) {
+                if (!Array.isArray(e.pages)) continue;
+                out.push({ key: e.key, data: e.pages.slice(),
+                    dataUpdatedAt: e.lastCompletedAt, infinite: true });
+            } else {
+                const d = untrack(() => e.data());
+                if (d === undefined) continue;
+                out.push({ key: e.key, data: d,
+                    dataUpdatedAt: e.lastCompletedAt, infinite: false });
+            }
+        }
+        return { entries: out };
+    }
+
+    // Validate a hydrate payload in ONE pass over the whole state BEFORE any
+    // mutation (OR-3 all-or-nothing). Returns a stable ASCII reason code on the
+    // first defect, or null when the whole payload is clean. A malformed STORED
+    // payload is external data -> a reason, never a throw (the throw is reserved
+    // for the OR-2 empty-cache precondition, a programming error).
+    function validateHydrateState(state) {
+        if (state === null || typeof state !== "object" || Array.isArray(state)) {
+            return "malformed-state";
+        }
+        if (!Array.isArray(state.entries)) return "malformed-entries";
+        if (Object.keys(state).length !== 1) return "malformed-state";
+        const seen = new Set();
+        for (const rec of state.entries) {
+            if (rec === null || typeof rec !== "object" || Array.isArray(rec)) {
+                return "malformed-entry";
+            }
+            if (Object.keys(rec).length !== 4) return "malformed-entry";
+            if (!Array.isArray(rec.key)) return "malformed-key";
+            if (typeof rec.infinite !== "boolean") return "malformed-entry";
+            if (!Number.isFinite(rec.dataUpdatedAt)) return "malformed-timestamp";
+            if (rec.infinite) {
+                if (!Array.isArray(rec.data)) return "malformed-pages";
+            } else if (rec.data === undefined) {
+                return "malformed-data";
+            }
+            const h = hashKey(rec.key);
+            if (seen.has(h)) return "duplicate-key";
+            seen.add(h);
+        }
+        return null;
+    }
+
+    // Seed a plain entry from a validated record. Writes the signals directly
+    // (never setQueryData -> never a broadcast, V5) so a boot seeding cannot
+    // echo across tabs. lastCompletedAt is CLAMPED to our clock: a finite future
+    // timestamp bounds freshness at one staleTime from boot, never invents data
+    // (ON-3b). status is "success" -- the whole point of hydrate.
+    function seedEntry(e, rec) {
+        e.data.set(rec.data);
+        e.error.set(undefined);
+        e.status.set("success");
+        e.lastCompletedAt = Math.min(rec.dataUpdatedAt, opts.now());
+        e.invalidatedSinceCompletion = false;
+    }
+
+    // Boot-only cache restore (OR-2). Fail-closed:
+    //   1. THROWS if the cache is non-empty (a late hydrate over live data is
+    //      the ABA bug of this domain) -- reserved for that programming error.
+    //   2. Validates the WHOLE payload before any mutation; a malformed stored
+    //      payload RETURNS { ok:false, count:0, reason } (external data drops,
+    //      never throws -- the asymmetry mirrors setQueryData's local-throw /
+    //      remote-drop law).
+    //   3. Seeds only after a clean pass; never broadcasts, never notifies (V5).
+    function hydrate(state) {
+        if (entries.size > 0) {
+            throw new Error("lite-query: hydrate requires an empty cache (" +
+                entries.size + " entries present) -- hydrate at boot, before " +
+                "any observer attaches");
+        }
+        const reason = validateHydrateState(state);
+        if (reason !== null) return { ok: false, count: 0, reason };
+        for (const rec of state.entries) {
+            const e = ensureEntry(rec.key);
+            seedEntry(e, rec);
+        }
+        return { ok: true, count: state.entries.length, reason: null };
+    }
+
     // Dispose the entire client. Releases the BroadcastChannel listener which
     // would otherwise keep the client + its entire cache map alive in
     // scenarios where clients are created and discarded -- testing,
@@ -829,6 +928,8 @@ export function queryClient(options = {}) {
         removeQueries,
         clear,
         prefetch,
+        dehydrate,
+        hydrate,
         dispose,
         // Internal API consumed by query()/mutation(). Not part of the public
         // surface; documented as such in llms.txt.
