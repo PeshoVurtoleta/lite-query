@@ -1,157 +1,195 @@
-# PLAN.md -- Q2 -- lite-query v1.1.2 -- coder implementation plan
+# PLAN.md -- Q3 -- lite-query v1.2.0 -- coder implementation plan
 
-From the Q2 planner pass (2026-08-31) + operator rulings. Contract: BRIEF.md
-(Q2). Package root: /Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteQuery.
+From the Q3 planner pass (2026-09-02) + operator rulings resolving its four
+STOP items. Contract: BRIEF.md (Q3). Package root:
+/Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteQuery.
+
+## STOP-ITEM RESOLUTIONS (operator rulings, continuing BRIEF's OR numbering)
+
+- **OR-5 (resolves STOP 1 + STOP 2 -- stale node_modules, not stale
+  registry).** The planner correctly read node_modules (lite-await 1.2.0,
+  lite-stream 1.1.0) as what is INSTALLED; the registry has 1.3.0 of both
+  (operator-verified 2026-09-02: `npm view` latest = 1.3.0 / 1.3.0). The
+  fix is sequencing, not descoping: the floors commit (C2) bumps peer +
+  devDep for BOTH siblings to `^1.3.0` and runs `npm install` (no
+  lockfile), then VERIFIES the installed surfaces before any dependent
+  task: lite-await exposes 18 named + VERSION incl. `createAwaitScope`;
+  lite-stream `pipeToSignal` accepts mode/maxBuffer/onValue/onAbort and
+  its stop fn carries droppedCount/overflowCount getters. If either
+  verification fails, STOP -- do not code against the BRIEF's claims.
+  The planner's "do not bump lite-stream's floor while the code uses the
+  1.1.0 surface" concern is honored by C-ordering: the floor bump and the
+  collapse ship in the same session, and no commit between C2 and C4
+  publishes anything (publish is the drill's, later).
+- **OR-6 (resolves STOP 3 -- version-sync is two-place; the CHANGELOG leg
+  belongs to the drill).** `VERSION` const = "1.1.2" this session, equal to
+  package.json. The default-run sync test asserts EXACTLY
+  `VERSION === require("./package.json").version` (string compare). The
+  CHANGELOG-head leg is asserted by the /release drill (its steps 3-4
+  already own it); Q2 precedent: the `[1.1.2]` entry landed while
+  package.json said 1.1.1. A permanent test that is red between
+  session-end and publish would be a gate that MUST fail -- as broken as
+  one that cannot.
+- **OR-7 (no red commits).** Every commit leaves `npm test` green. "The
+  new identity tests prove the gap" is demonstrated by running them
+  against pre-implementation code DURING development and recording the
+  failure count in the implementing commit's message -- never by
+  committing a red suite. Same for the G3 surface-guard firing: run the
+  guard after the export edit and before the docs edit, capture the
+  failure output, cite it in the commit message; the committed state is
+  green.
+- **OR-8 (resolves STOP 4 -- ADR attestation).** The planner could not
+  read outside the package. Operator attests, verified 2026-09-02 by
+  reading the files: `../LiteAwait/decisions/0009` verdict REJECT
+  (accepted, dated 2026-09-01); `../LiteAwait/decisions/0007` accepted
+  (createAwaitScope, consumer lite-room 1.1.0); `../LiteStream/decisions/
+  0001` accepted (abort vocabulary: from-side abort -> onAbort when
+  present, NEVER reaching onError). The coder may cite these as facts.
 
 ## SPEC
 
-Docs release, zero logic. The planner verified: all 57 non-ASCII occurrences
-in the three shipped .js sources sit inside comments (line or block) -- the
-token streams of Query.js / StreamQuery.js / Awaitable.js must be identical
-before and after. Total sweep scope: 589 non-ASCII-bearing lines across 23
-files. The durable deliverable is the two drift guards joining `npm test`
-(153 -> 158 tests). The one complication the planner caught: test/ and bench/
-carry non-ASCII inside STRING LITERALS (test titles, printed dividers like
-`"─".repeat(125)`, `<=`/`->` glyphs in test names) -- resolved by OR-1
-below.
+Hot body: nothing. T1/T2/T5/T8 are module-scope bindings, manifests, and
+text; `query()`, `mutation()`, `whenQuery`, `whenAllQueries` keep
+byte-identical bodies. The ONLY behavioral diff in the session is the
+StreamQuery collapse (C4), licensed by OR-1 to touch `startStream` + the
+droppedCount plumbing and NOTHING else -- and it must be observably
+behavior-preserving, proven by the C1 parity suite passing untouched on
+both sides of it.
 
-## OPERATOR RULINGS
+Planner-verified current facts the edits are anchored to:
+- `Awaitable.js:22-33` import list; `:180-195` export block (10 upstream
+  names + 2 bridges); line-1 header stamp.
+- `StreamQuery.js` startStream ring at `:119-137`, abort filter at
+  `:139-142`, export at `:302`, line-1 stamp.
+- `Query.js` has NO export block -- inline exports at `:137`, `:645`,
+  `:852`; VERSION const is a new inline `export const`.
+- `package.json` floors at `:53` (peer lite-await), `:55` (peer
+  lite-stream), `:67`/`:69` (devDeps).
+- `demo/VENDOR.md:11-12` -- lite-await.js and lite-stream.js both pinned
+  1.0.0.
+- Test suite today: 158 = query 106, awaitable 18, stream-query 15,
+  edge-cases 12, ascii-guard 3, zero-gc 2, surface-guard 2.
 
-- **OR-1 (STOP items -- display strings in test/bench).** The law is
-  ASCII-only SOURCE, regardless of syntactic position, and the new ascii
-  guard covers test/ + bench/ -- so these strings cannot stay. They MAY be
-  swept because they are display-only, under two conditions the coder must
-  prove per literal: (i) grep shows no assertion, regex, or gate matches the
-  literal's content anywhere in the repo (test titles are not asserted on;
-  the torture PASS-line greps are ASCII already); (ii) after the sweep,
-  `npm test` and `npm run torture` outputs are behaviorally identical (same
-  counts, same exits). Any literal that IS matched somewhere: STOP, report,
-  leave for a ruling. The guard allowlist stays empty.
-- **OR-2 (U+2500 divider convention).** A run of N U+2500 becomes N ASCII
-  `-` characters (preserves visual width and alignment in every file
-  uniformly; no judgment calls). Applies to comments and to the bench
-  display literals under OR-1.
-- **OR-3 (sweep mechanics).** Scripted, not hand-edited: a throwaway
-  script in the scratchpad
-  (/private/tmp/claude-502/-Users-zakkster-Work-Portfolio-LiteLibrariesSuite-LiteQuery/ccc5a41f-26f2-468a-8a86-2b584cfcf7dc/scratchpad)
-  applying the mapping table below file-by-file, followed per file class by:
-  `node --check` (for .js/.mjs), `npm test`, and a `grep -P '[^\x00-\x7F]'`
-  audit. The script is never committed. Review the diff per file before
-  moving on.
+## COMMIT PLAN (each commit green; no version bump; no publish)
 
-## MAPPING TABLE (from BRIEF task 1)
+C1 `test: record streamQuery semantics before the collapse` (OR-2)
+   test/stream-query.test.js +5, green against CURRENT code with the
+   CURRENTLY INSTALLED lite-stream 1.1.0:
+     - "parity: status ladder idle -> pending -> streaming -> success"
+     - "parity: droppedCount ladder N=12/maxBuffer=4 -> 8, newest-last"
+     - "parity: restart resets count and droppedCount"
+     - "parity: throwing iterator -> status error + error() surfaced"
+     - "parity: abort is not an error (detach/restart/removeQueries)"
+   These five are THE parity artifact; after C1 they are frozen (any later
+   edit to them is a reviewer REJECT per OR-2).
 
-| From | To |
-| --- | --- |
-| U+2500 run (length N) | `-` x N (OR-2) |
-| em dash U+2014 | `--` |
-| en dash U+2013 | `-` |
-| right arrow U+2192 | `->` |
-| left arrow U+2190 | `<-` |
-| U+2265 | `>=` |
-| U+2264 | `<=` |
-| middle dot U+00B7 | `*` or comma per context |
-| copyright U+00A9 | `(c)` |
-| i-diaeresis U+00EF | `i` ("naive") |
-| U+00D7 in docs/prose | `x` |
-| curly quotes, if any found | `'` / `"` |
+C2 `chore: sibling floors to ^1.3.0 + install verification`
+   package.json: lite-await peer+devDep `^1.3.0`; lite-stream peer+devDep
+   `^1.3.0`. `npm install` (NO lockfile -- it is gitignored; do not commit
+   node_modules). Then verify and record in the commit message:
+     - `npm ls @zakkster/lite-await @zakkster/lite-stream` -> 1.3.0 both.
+     - lite-await surface: 18 named + VERSION, `createAwaitScope` a
+       function (node -e dynamic import probe).
+     - lite-stream: `grep -n "onValue\|onAbort\|droppedCount" node_modules/
+       @zakkster/lite-stream/Stream.js` shows the enriched pipeToSignal.
+   FULL suite green (163 incl. C1's five) -- this re-proves the parity
+   suite against 1.3.0 and IS the upstream byte-compat claim tested in
+   our house. STOP if anything above fails.
 
-Anything encountered outside this table: STOP and report before mapping.
+C3 `feat(await): 18-name parity with lite-await 1.3.0`
+   - Awaitable.js: import + export the EIGHT (`allSettledOf`,
+     `withResolvers`, `tryFn`, `delay`, `withRetry`, `mapLimit`,
+     `whenStatechart`, `createAwaitScope`), verbatim, no wrapping (OR-4).
+     VERSION excluded BY NAME with a comment citing the convention.
+   - Awaitable.d.ts: the eight type re-exports.
+   - llms.txt + README /await sections: the eight; withRetry-vs-query()
+     and delay-vs-mock-clock boundary lines; createAwaitScope one-liner
+     citing upstream 0007; fromPromise 0009-REJECT closure sentence.
+   - Tests +13 in test/awaitable.test.js: 8 identity
+     (`assert.equal(reexported, upstream)` per name), "VERSION is not
+     exported from /await", "subpath named surface == upstream minus
+     VERSION plus whenQuery/whenAllQueries" (Object.keys set compare),
+     withRetry succeeds-on-3rd-attempt, mapLimit concurrency ceiling
+     (in-flight counter), createAwaitScope abort settles a pre-bound
+     whenSignal + teardown observed. whenStatechart identity only.
+   - OR-7 evidence in the message: identity tests run against HEAD~
+     (8 failures), surface guard run before the docs edit (fired -- G3
+     recorded), both green at commit.
 
-## ATOMIC TASKS
+C4 `refactor(stream): collapse the hand ring into pipeToSignal 1.3.0`
+   startStream only (OR-1):
+   - delete the ring block (`:119-137` today; re-locate by content after
+     C1-C3 drift): `mode` + `maxBuffer` pass through to pipeToSignal
+     (streamQuery's own validation at `:75-85` stays -- it is OUR
+     option-surface contract and its error messages are pinned by tests).
+   - `transform` leaves the call; first-frame status transition moves to
+     `onValue` (fires before each set, after transform -- planner-verified
+     ordering); count tracking moves there too.
+   - abort filter deleted; `onAbort` absorbs intentional aborts (upstream
+     0001: with onAbort present they never reach onError). onError body
+     loses the `ac.signal.aborted` guard.
+   - droppedCount: read the stop fn's getter; snapshot into
+     `entry.streamDropped` on EVERY terminal path (onDone/onError/onAbort)
+     and on restart reset, so `droppedCount()` reads byte-identical
+     semantics after completion and across restarts.
+   - The C1 parity suite passes UNTOUCHED (G5). Bench the buffer-mode
+     stream scenario before/after (scratchpad harness if bench/ lacks
+     one); record the measured delta with provenance in the commit
+     message, or state "not measured" -- never estimate (law: measured
+     numbers only).
 
-T1. `test/ascii-guard.test.js` (3 tests): walk list = `files[]` parsed from
-    package.json at runtime + `test/*.js` + `bench/**/*.mjs` globs (tracks
-    future files[] changes automatically); predicate over a Buffer allowing
-    printable ASCII + LF (+ optional per-file allowlist arg, empty today);
-    tests: (1) every walked file passes, (2) inline fixture containing one
-    U+2014 fails the predicate (control), (3) allowlist mechanism admits a
-    listed codepoint (proves the escape hatch works without using it).
-T2. `test/surface-guard.test.js` (2 tests): relative dynamic imports of
-    ../Query.js, ../StreamQuery.js, ../Awaitable.js (relative -- works under
-    `node --test` from the repo root with zero resolution tricks); (1) every
-    export name appears in llms.txt AND its entry's .d.ts, and every
-    `@zakkster/lite-*` name in llms.txt's peer block exists in package.json
-    peerDependencies; (2) fixture llms body missing one name fails
-    (control).
-T3. Sweep the three shipped .js + three .d.ts (comment bytes only; 57 + 447
-    occurrences). Gate per file: `node --check`, then full `npm test`.
-T4. Sweep test/*.js + bench/**/*.mjs under OR-1 (prove each display literal
-    unmatched first). Gate: `npm test` counts identical; `npm run torture`
-    3x PASS exit 0, output lines behaviorally identical.
-T5. Sweep README.md, llms.txt, CHANGELOG.md (history punctuation only,
-    wording byte-identical otherwise), Cookbook.md, QuickStart.md, SPEC.md.
-T6. QuickStart.md 1.1 refresh: fix the install line (ONE required peer);
-    fix the stale "five steps" claim (planner: line ~143); add a
-    streamQuery latest-mode taste consistent with Cookbook 14 and a
-    whenQuery route-guard taste consistent with Cookbook 11. Short on-ramp
-    voice; runnable snippets.
-T7. Riders (quote-verify each line in the file before editing; line numbers
-    are approximate after sweeps): llms.txt "One-connection-shared is 1.2."
-    -> "... is 2.0 (see ROADMAP.md)."; README ~43 "(plus its peer deps in
-    the lite ecosystem)" -> singular required peer wording; README
-    ~308/~321 lite-channel "powers"/"engine behind" -> "the convenient
-    isLeader source" framing consistent with lines ~300-301; README ~241
-    demo path -> qualify "in the repo"; README doc links -> relative
-    ./QuickStart.md ./Cookbook.md; package.json files[] += QuickStart.md,
-    Cookbook.md; SPEC.md header line marking it the historical 1.1.0 RC
-    doc + "Post-publish roadmap" body replaced by a two-line pointer to
-    ROADMAP.md; new demo/VENDOR.md (~6 lines, pinned copies + check
-    command), not in files[].
-T8. CHANGELOG `[1.1.2]` entry, sections Added / Changed / Fixed, ASCII
-    only, per-file sweep counts included, facts only. Version stays 1.1.1
-    in package.json (the /release drill owns the bump).
+C5 `chore(demo): vendored copies -> 1.3.0 from registry tarballs` (OR-3)
+   `npm pack @zakkster/lite-await@1.3.0` and `@zakkster/lite-stream@1.3.0`
+   in the scratchpad; extract; byte-copy `Await.js` -> demo/vendor/
+   lite-await.js and `Stream.js` -> demo/vendor/lite-stream.js. Update
+   VENDOR.md rows (versions + the check commands; add a `grep -c
+   createAwaitScope demo/vendor/lite-await.js` line). `node --check` both
+   copies; verify the demo importmap wiring still resolves (grep the demo
+   HTML for the vendor paths).
 
-## COMMIT PLAN (no push, no publish, no version bump)
+C6 `feat: VERSION const + two-place sync (Q-16, OR-6)`
+   Query.js: `export const VERSION = "1.1.2";` (inline, near the header).
+   StreamQuery.js + Awaitable.js: `export { VERSION } from "./Query.js";`
+   New test/version-sync.test.js (1 test): imported VERSION ===
+   package.json version, string compare. Retire the line-1 header version
+   stamps in all three files (comment text only -- token streams of
+   shipped logic unchanged; the reviewer checks). llms.txt/README: note
+   VERSION as the one runtime version source.
 
-C1 guards + source/test/bench sweep: test/ascii-guard.test.js,
-   test/surface-guard.test.js, Query.js, Query.d.ts, StreamQuery.js,
-   StreamQuery.d.ts, Awaitable.js, Awaitable.d.ts, test/*.js,
-   bench/**/*.mjs.
-C2 docs content: README.md, llms.txt, CHANGELOG.md, QuickStart.md,
-   Cookbook.md, SPEC.md, package.json (files[] only), demo/VENDOR.md.
-C3 planning docs: ROADMAP.md, BRIEF.md, PLAN.md.
-Messages follow the Q1 pattern: what/why/findings trailer +
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>.
+C7 `docs: CHANGELOG [1.2.0]`
+   Sections Added (the eight, VERSION const) / Changed (collapse with the
+   C4 measured delta or "not measured", floors ^1.3.0 both) / Fixed (none
+   unless found). The 0009 closure sentence. Facts only, ASCII only.
+   package.json stays 1.1.2 (the /release drill owns the bump).
 
-## GATES
+## GATES (mapped to BRIEF G1-G9)
 
-Pre-commit: G1 `npm test` -> tests 158, pass 158, fail 0, skipped 0.
-G2 `npm run torture` -> 3x PASS, exit 0. G3 `grep -rP '[^\x00-\x7F]'` over
-files[] scope + test/ + bench/ -> zero hits. G4 `node --check` green on the
-three shipped .js. G5 `npm pack --dry-run` -> 13 files, QuickStart + Cookbook
-present, no test/bench/demo. G6 every relative README link target in the
-pack listing. G7 riders verified by grep (no "is 1.2" sequencing claim; no
-"peer deps" plural; SPEC pointer present). G8 `git diff -- '*.js'` for the
-three shipped sources shows comment-only hunks.
-Post-commit: G9 `git status --porcelain` empty. G10 fresh-clone install +
-test + torture green (scratchpad clone, then delete).
+Per commit: `npm test` green (G1 floor rises C1 163 -> C3 176 -> C6 177),
+`node --check` on touched .js, ascii-guard green (G8, in the suite).
+Final: G2 `npm run torture` 3x PASS + controls fail; G4 = the C3 identity
+block (18 importable, VERSION absent); G5 = C1 suite untouched across C4
+(prove with `git diff C1..HEAD -- test/stream-query.test.js` limited to
+additions BELOW the parity block, ideally empty); G6 `npm ls` -> 1.3.0
+both; G7 `npm pack --dry-run` -> 13 files, set unchanged (VENDOR.md and
+demo/ stay unshipped); G9 `git status` clean + fresh-clone drill
+(scratchpad clone, install, test, torture, delete).
+
+Projected final count: 158 + 5 (C1) + 13 (C3) + 1 (C6) = **177** (BRIEF
+floor 170, frontmatter tests_min honored).
 
 ## RISKS
 
-R1 sweep corrupting a matched string -- OR-1's per-literal grep is the
-control; reviewer re-verifies. R2 the U+2500 volume (1,200+) makes hand
-edits unviable -- scripted per OR-3 with per-file diff review. R3 files[]
-runtime parse in the ascii guard must not choke if files[] gains a
-directory entry later -- treat entries as files, skip non-existent with a
-loud failure (fail closed: a files[] entry that does not exist IS a bug).
-R4 Cookbook.md is large and newly in files[] -- it is in the sweep scope
-and the guard scope; its counts go in the CHANGELOG line. R5 test-title
-sweeps change `npm test` display lines -- acceptable per OR-1; counts are
-the gate, not titles. R6 CHANGELOG history sweep must not change wording --
-diff review word-by-word on that file (punctuation-only hunks).
-
-## POST-CODER RULINGS (2026-08-31)
-
-- **OR-4 (off-table glyphs in bench/bench.mjs):** the coder found U+2022
-  bullets (x4) and one U+25B6 in display-only console strings, outside the
-  MAPPING TABLE, and mapped by extension (bullet -> `*`, U+25B6 -> `>`)
-  with OR-1 proofs. Ratified; the mappings are recorded in the CHANGELOG's
-  sweep bullet.
-- **OR-5 (test-count drift):** the guards raise the runtime to 158; the
-  coder correctly left the four doc TOTALS (README tagline, facts row,
-  Tests section, llms.txt headline) at 153 as out-of-scope. Fixed by the
-  operator before review -- Q-14's lesson is precisely that totals and
-  runtime must not diverge in a shipped artifact. Per-section counts
-  (llms.txt "120 core", "106 in query.test.js") verified correct and
-  unchanged. CHANGELOG gains the alignment bullet.
+R1 Upstream surfaces differ from the BRIEF's claims -> C2's verification
+   step STOPs before any dependent code (OR-5).
+R2 The collapse changes droppedCount timing observably (getter vs per-push
+   counter) -> the C1 ladder test is the tripwire; if it fails, STOP and
+   report -- do not adjust the test (OR-2).
+R3 onValue/onAbort semantics differ from the planner's reading ->
+   re-verify against installed 1.3.0 source in C2 (grep the actual
+   Stream.js), not the CHANGELOG prose.
+R4 Vendored 1.3.0 copies break the demos (importmap or API drift) ->
+   node --check + importmap grep in C5; a demo-visible break is a STOP,
+   not a silent fix.
+R5 createAwaitScope integration test flakes (timer/abort timing) -> use
+   deterministic settlement (pre-resolved signals, manual aborts), no
+   wall-clock waits.

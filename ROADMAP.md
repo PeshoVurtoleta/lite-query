@@ -556,6 +556,18 @@ DONE WHEN
 # Q4 -- lite-query v1.2.1 -- the suite-law torture harness
 ===============================================================================
 
+Amended 2026-09-02, post-Q3 pipeline: Q3's coder landed a SEED of this
+session's deliverable as a ratified deviation (`8fa6ad4`): test/torture.mjs
+with lite-leak + lite-gc-profiler devDeps, phase 1 = 4096 query+streamQuery
+lifecycle churn with `tracker.size() -> 0`, phase 2 = 200K warm accessor
+reads at `major=0 minor=0`, appended to the `npm run torture` chain
+(reviewer-audited: harness rules honored). Q4 therefore EXTENDS the seed
+rather than starting from zero -- and inherits one verified gap as its
+first task: QA confirmed 2026-09-02 that the leak/gc gate has NO
+break-switch control (the ascii/surface guards carry in-suite controls;
+test/torture.mjs does not). A gate that cannot fail is decorative; Q4's
+"controls provably fail" assertion now names this gate explicitly.
+
 ```markdown
 ---
 package: "@zakkster/lite-query"
