@@ -529,6 +529,14 @@ export function queryClient(options = {}) {
     // CONSTRUCTION): a re-entrant call while one is running rejects LQ_REPLAY_BUSY
     // rather than interleaving two dispatch loops over the same durable store.
     let replaying = false;
+    // Private single-slot queue-persist seam (Q9, OR-5). The persistence adapter
+    // installs { arm, saveRemoval } here when queueSave/queueLoad are supplied.
+    // `arm` rides the SAME trailing-edge throttle as the cache doSave (an enqueue
+    // or drop coalesces into the next cache save); `saveRemoval(id)` is the
+    // synchronous at-least-once removal write. null when no adapter is installed
+    // -- the queue is then in-memory only and every write site pays one !== null
+    // test and nothing else.
+    let queueHooks = null;
 
     // Number of durably-enqueued mutations (0 when the queue was never touched).
     // Read-only introspection for retention assertions and caller UI.
@@ -570,8 +578,49 @@ export function queryClient(options = {}) {
             tries: 0,
         };
         queueStore.push(rec);
+        if (queueHooks !== null) queueHooks.arm();      // OR-5: persist the enqueue
         if (feed.hook !== null) emitQueue("queue:enqueue", key, keyHash, queueStore.length, true, vars, null);
         return rec;
+    }
+
+    // Serialize the queue for persistence (cold). Returns a fresh array of
+    // shallow-copied records (each the 7 frozen keys); `excludeId` omits one
+    // record -- the removal-write payload that reflects an item's absence WHILE it
+    // is still in the live store, so the durable removal precedes the in-memory
+    // splice (at-least-once, OR-6). key/vars are references, never deep copies
+    // (mirrors dehydrate()); tries is copied by value so a later in-place
+    // increment cannot mutate an already-handed-off snapshot.
+    function dehydrateQueue(excludeId) {
+        if (queueStore === null) return [];
+        const out = [];
+        for (let i = 0; i < queueStore.length; i++) {
+            const r = queueStore[i];
+            if (r.id === excludeId) continue;
+            out.push({ id: r.id, name: r.name, key: r.key, keyHash: r.keyHash,
+                vars: r.vars, at: r.at, tries: r.tries });
+        }
+        return out;
+    }
+
+    // Restore a validated queue on adapter install (before any enqueue). The
+    // records keep their ORIGINAL ids (the at-least-once idempotency key survives
+    // the round trip); new enqueues in this fresh client stamp a fresh clientId,
+    // so restored and new ids can never collide. An empty restored queue is [] --
+    // a real (if empty) restored queue, distinct from the untouched null store.
+    function restoreQueue(records) {
+        queueStore = records;
+    }
+
+    // Single-slot install for the queue-persist seam. Mirrors installPersistHook:
+    // throws on double-install, returns an idempotent === guarded uninstall.
+    function installQueueHook(hooks) {
+        if (queueHooks !== null) {
+            throw new Error("lite-query: a queue-persist hook is already installed on this client (single-slot seam)");
+        }
+        queueHooks = hooks;
+        return function uninstallQueueHook() {
+            if (queueHooks === hooks) queueHooks = null;
+        };
     }
 
     // Replay the durable queue (T3, OR-4). The CALLER triggers it (the library
@@ -658,7 +707,19 @@ export function queryClient(options = {}) {
             return queueItemResult(rec, "error", value, null);
         }
         const r = queueItemResult(rec, "ok", value, null);
-        removeQueueRecord(rec.id);
+        // At-least-once (OR-6): the terminal result now exists (r). Hand the
+        // REMOVAL to the durable store FIRST -- the envelope excludes rec.id while
+        // rec is still in the live store, so the persisted queue reflects the
+        // item's absence before the in-memory splice. Only if that write is
+        // accepted (or there is no adapter) do we splice. A save that THROWS on
+        // the removal write leaves the record durable -- both here and on disk --
+        // and it re-dispatches with the identical id on the next call (G9).
+        let persisted = true;
+        if (queueHooks !== null) {
+            try { queueHooks.saveRemoval(rec.id); }
+            catch { persisted = false; }
+        }
+        if (persisted) removeQueueRecord(rec.id);
         return r;
     }
 
@@ -675,6 +736,7 @@ export function queryClient(options = {}) {
             if (queueStore[i].id === id) {
                 const rec = queueStore[i];
                 queueStore.splice(i, 1);
+                if (queueHooks !== null) queueHooks.arm();   // persist the drop
                 if (feed.hook !== null) emitQueue("queue:drop", rec.key, rec.keyHash, queueStore.length, false, null, "caller-dropped");
                 return true;
             }
@@ -1893,7 +1955,7 @@ export function queryClient(options = {}) {
         // Not part of the public surface; documented as such in llms.txt. `feed`
         // is the live per-client cell (V2: a `let` cannot cross the subpath
         // boundary, so the subpath reads the same object through _internal).
-        _internal: { entries, ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, sharedStreamActive, broadcast, clientId, claimStreamEpoch, armWatchdog, disarmWatchdog, closeStream, opts, installPersistHook, feed, setStatus, emitStream, emitStreamPromote, emitClient, enqueue },
+        _internal: { entries, ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, sharedStreamActive, broadcast, clientId, claimStreamEpoch, armWatchdog, disarmWatchdog, closeStream, opts, installPersistHook, feed, setStatus, emitStream, emitStreamPromote, emitClient, enqueue, emitQueue, installQueueHook, dehydrateQueue, restoreQueue },
     };
 }
 
@@ -2568,6 +2630,75 @@ export function mutation(qc, mutOpts) {
 }
 
 // -----------------------------------------------------------------------------
+// Offline-queue envelope validation (Q9, OR-5) -- module-level, cold
+// -----------------------------------------------------------------------------
+
+// Validate + materialize ONE queue record, exception-contained. All 7 keys
+// present, correct primitive types, key an array, no own symbols -- a single
+// defect drops the WHOLE queue (fail closed), so this returns the first reason
+// found. vars is unconstrained (any JSON value the caller stored).
+function validateQueueRecord(list, i) {
+    try {
+        const rec = list[i];
+        if (rec === null || typeof rec !== "object" || Array.isArray(rec)) {
+            return { reason: "malformed-record" };
+        }
+        if (Object.getOwnPropertySymbols(rec).length !== 0) {
+            return { reason: "malformed-record" };
+        }
+        if (Object.keys(rec).length !== 7) return { reason: "malformed-record" };
+        const id = rec.id, name = rec.name, key = rec.key, keyHash = rec.keyHash;
+        const vars = rec.vars, at = rec.at, tries = rec.tries;
+        if (typeof id !== "string") return { reason: "malformed-record" };
+        if (typeof name !== "string") return { reason: "malformed-record" };
+        if (!Array.isArray(key)) return { reason: "malformed-record" };
+        if (typeof keyHash !== "string") return { reason: "malformed-record" };
+        if (typeof at !== "number" || !Number.isFinite(at)) return { reason: "malformed-record" };
+        if (typeof tries !== "number" || !Number.isInteger(tries) || tries < 0) {
+            return { reason: "malformed-record" };
+        }
+        return { reason: null, record: { id, name, key, keyHash, vars, at, tries } };
+    } catch {
+        return { reason: "malformed-record" };
+    }
+}
+
+// Validate a restored queue envelope in ONE contained pass BEFORE any mutation
+// (OR-3 all-or-nothing), mirroring the frozen cache-envelope ladder verbatim in
+// discipline: exactly 2 keys { version, queue }, strict === version match (no
+// coercion), queue an array, every record clean. Returns { reason } on the first
+// defect (the WHOLE queue drops -- never a partial restore) or { reason: null,
+// records } (materialized) when clean.
+function validateQueueEnvelope(envelope, version) {
+    try {
+        if (envelope === null || typeof envelope !== "object" || Array.isArray(envelope)) {
+            return { reason: "malformed-envelope" };
+        }
+        if (Object.getOwnPropertySymbols(envelope).length !== 0) {
+            return { reason: "malformed-envelope" };
+        }
+        if (Object.keys(envelope).length !== 2 ||
+            !("version" in envelope) || !("queue" in envelope)) {
+            return { reason: "malformed-envelope" };
+        }
+        if (envelope.version !== version) {               // strict ===, no coercion
+            return { reason: "version-mismatch" };
+        }
+        const list = envelope.queue;
+        if (!Array.isArray(list)) return { reason: "malformed-queue" };
+        const records = [];
+        for (let i = 0; i < list.length; i++) {
+            const r = validateQueueRecord(list, i);
+            if (r.reason !== null) return { reason: r.reason };
+            records.push(r.record);
+        }
+        return { reason: null, records };
+    } catch {
+        return { reason: "malformed-envelope" };
+    }
+}
+
+// -----------------------------------------------------------------------------
 // persistQueryClient() -- the persistence adapter
 // -----------------------------------------------------------------------------
 
@@ -2596,7 +2727,7 @@ export function persistQueryClient(qc, persistOpts) {
     if (persistOpts === null || typeof persistOpts !== "object") {
         throw new TypeError("persistQueryClient: an options object is required");
     }
-    const { save, load, version, throttle } = persistOpts;
+    const { save, load, version, throttle, queueSave, queueLoad } = persistOpts;
     if (typeof save !== "function") {
         throw new TypeError("persistQueryClient: `save` must be a function (envelope) => void | Promise");
     }
@@ -2613,6 +2744,19 @@ export function persistQueryClient(qc, persistOpts) {
     if (typeof throttleMs !== "number" || !Number.isFinite(throttleMs) || throttleMs < 0) {
         throw new TypeError("persistQueryClient: `throttle` must be a finite number >= 0");
     }
+    // Offline-queue seam (Q9, OR-5). queueSave/queueLoad are optional SIBLING
+    // thunks on the same adapter (the frozen envelope/state length gates forbid
+    // riding the queue inside them). Supplying one without the other is a
+    // half-durable queue -- fail closed at install.
+    const hasQueue = queueSave !== undefined || queueLoad !== undefined;
+    if (hasQueue) {
+        if (typeof queueSave !== "function") {
+            throw new TypeError("persistQueryClient: `queueSave` must be a function (envelope) => void | Promise when `queueLoad` is supplied");
+        }
+        if (typeof queueLoad !== "function") {
+            throw new TypeError("persistQueryClient: `queueLoad` must be a function () => envelope | Promise when `queueSave` is supplied");
+        }
+    }
     if (persistInstalled.has(qc)) {
         throw new Error("persistQueryClient: a persister is already installed on this client (single-slot seam)");
     }
@@ -2624,9 +2768,32 @@ export function persistQueryClient(qc, persistOpts) {
     const _pi = qc._internal;
     const feed = _pi ? _pi.feed : null;
     const emitClient = _pi ? _pi.emitClient : null;
+    const emitQueue = _pi ? _pi.emitQueue : null;
     let timer = null;
     let uninstall = null;
+    let queueUninstall = null;
     let stopped = false;
+
+    // Persist the full current queue (cold). Shares the cache doSave throttle
+    // window: an enqueue/drop arms the same timer, and doSave calls this after the
+    // cache write. queueSave throws are contained here (the trailing-edge coalesce
+    // is not the at-least-once removal write -- that path is saveQueueRemoval).
+    function saveQueue() {
+        if (!hasQueue) return;
+        try {
+            const r = queueSave({ version, queue: _pi.dehydrateQueue(undefined) });
+            if (r && typeof r.then === "function") r.then(noop, noop);
+        } catch { /* coalesced queue save throw contained */ }
+    }
+
+    // The at-least-once removal write (OR-6). Builds the envelope EXCLUDING the
+    // resolved record while it is still in the live store, so the persisted queue
+    // reflects the removal BEFORE the caller (doReplayItem) splices in memory.
+    // Throws are propagated to doReplayItem, which then leaves the record durable.
+    function saveQueueRemoval(id) {
+        const r = queueSave({ version, queue: _pi.dehydrateQueue(id) });
+        if (r && typeof r.then === "function") r.then(noop, noop);
+    }
 
     function clearTimer() {
         if (timer !== null) {
@@ -2653,6 +2820,7 @@ export function persistQueryClient(qc, persistOpts) {
             if (r && typeof r.then === "function") r.then(noop, noop);
         } catch { /* synchronous save throw contained */ }
         if (feed !== null && feed.hook !== null) emitClient("persist:save", envelope.state.entries.length, true, null, null);   // site 23 (saved)
+        saveQueue();   // OR-5: the queue rides the same trailing-edge write
     }
 
     // Trailing-edge coalescing (OR-7): the first write in a window arms the
@@ -2713,6 +2881,51 @@ export function persistQueryClient(qc, persistOpts) {
         return outcome;
     });
 
+    // Queue restore ladder (Q9, OR-3/OR-5). ALWAYS resolves, never rejects. An
+    // absent queue section is "no queue" (empty), never an error; any defect --
+    // load throw, malformed envelope, version mismatch, malformed queue/record --
+    // drops the WHOLE queue (never a partial restore) and surfaces the drop TWICE:
+    // on this promise AND as a queue:drop feed event carrying the reason. Only
+    // installed when the queueSave/queueLoad seam is wired.
+    const queueRestored = !hasQueue ? undefined : (async () => {
+        let envelope;
+        try {
+            envelope = await queueLoad();
+        } catch {
+            return dropRestoredQueue("load-threw");
+        }
+        if (envelope === null || envelope === undefined) {
+            return { status: "empty", count: 0, reason: null };   // no queue (OR-3)
+        }
+        const v = validateQueueEnvelope(envelope, version);
+        if (v.reason !== null) {
+            return dropRestoredQueue(v.reason);
+        }
+        qc._internal.restoreQueue(v.records);
+        if (feed !== null && feed.hook !== null && emitQueue !== null) {
+            emitQueue("queue:restore", null, null, v.records.length, true, null, null);
+        }
+        return { status: "restored", count: v.records.length, reason: null };
+    })().then((outcome) => {
+        // Arm the queue seam AFTER the restore settles, in every branch (mirrors
+        // the cache hook arming). arm rides the cache throttle; saveRemoval is the
+        // synchronous at-least-once removal write.
+        if (!stopped) {
+            try { queueUninstall = qc._internal.installQueueHook({ arm: onWrite, saveRemoval: saveQueueRemoval }); }
+            catch { /* client disposed, or a hook already holds the slot */ }
+        }
+        return outcome;
+    });
+
+    // Surface a whole-queue drop twice (OR-5): the queueRestored outcome AND a
+    // queue:drop feed event with the reason. The dropped queue never seeds.
+    function dropRestoredQueue(reason) {
+        if (feed !== null && feed.hook !== null && emitQueue !== null) {
+            emitQueue("queue:drop", null, null, 0, false, null, reason);
+        }
+        return { status: "dropped", count: 0, reason };
+    }
+
     // Force the pending save now. QD-1: a strict no-op once stopped (stop()
     // already flushed and uninstalled) -- flush-after-stop must not re-save.
     // While running, an explicit flush()/flush() double-saves by design ("force
@@ -2729,11 +2942,16 @@ export function persistQueryClient(qc, persistOpts) {
     function stop() {
         if (stopped) return;
         stopped = true;
-        if (timer !== null) doSave();     // flush the pending write to disk
+        if (timer !== null) doSave();     // flush the pending write to disk (cache + queue)
         clearTimer();
         if (uninstall) { uninstall(); uninstall = null; }
+        if (queueUninstall) { queueUninstall(); queueUninstall = null; }
         persistInstalled.delete(qc);
     }
 
-    return { restored, flush, stop };
+    // queueRestored is present only when the queueSave/queueLoad seam is wired
+    // (an undefined property when the adapter carries no queue -- OR-5).
+    const handle = { restored, flush, stop };
+    if (hasQueue) handle.queueRestored = queueRestored;
+    return handle;
 }
