@@ -567,10 +567,37 @@ export function queryClient(options = {}) {
         entry.streamOwner = false;
     }
 
-    // Follower frame projection. Body lands in C4 (latest) + C5 (buffer window);
-    // declared here so the C2 routing is complete and hoisting-safe. Inert until
-    // then -- no local entry sets streamShared until the /stream follower path.
-    function projectFrame(entry, epochSeq, seq, value) { /* C4 latest / C5 buffer */ }
+    // Follower frame projection. The OR-4 dedup/ordering gate runs BEFORE any
+    // signal write, so duplication and reordering are STRUCTURALLY impossible
+    // (not merely untested); frame loss is permitted and counted. Latest mode is
+    // a single signal write + field stores -- zero allocation per frame. Buffer
+    // mode routes through projectBuffer (C5), whose budget is one snapshot array
+    // per frame (the parity contract).
+    function projectFrame(entry, epochSeq, seq, value) {
+        if (epochSeq < entry.projEpoch) return;              // dead leader's late frame -> drop
+        let gap = 0;
+        if (epochSeq > entry.projEpoch) {                    // new epoch: first frame or failover
+            entry.projEpoch = epochSeq;
+            entry.projSeq = 0;                               // expect seq 1 next (fresh iterator)
+        }
+        if (seq <= entry.projSeq) return;                    // duplicate -> drop
+        if (seq > entry.projSeq + 1) gap = (seq - entry.projSeq - 1) | 0;   // missed frames (at-most-once loss)
+        entry.projSeq = seq;
+        if (entry.streamCount === 0) setStatus(entry, "streaming");
+        entry.streamCount = (entry.streamCount + 1) | 0;
+        if (entry.streamMode === "buffer") projectBuffer(entry, value);
+        else entry.data.set(value);                          // latest: one signal write, zero alloc
+        if (gap > 0 && feed.hook !== null) emitStreamGap(entry, gap, "gap");   // C10 (feed no-op until then)
+    }
+
+    // Buffer-window projection (C5): a bounded, drop-oldest, fresh-newest-last
+    // snapshot per frame, parity-identical to lite-stream's pipeToSignal buffer
+    // mode. Declared here so the C4 latest path can route to it.
+    function projectBuffer(entry, value) { /* C5 */ }
+
+    // Gap telemetry emit (C10): stream:gap carries the count of frames missed.
+    // No-op until the feed vocabulary grows in C10.
+    function emitStreamGap(entry, count, reason) { /* C10 */ }
 
     // Watchdog liveness (C6): armWatchdog starts the periodic check-and-rearm
     // timer; disarmWatchdog clears it. Declared as no-ops here so C2's terminal
