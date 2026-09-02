@@ -10,7 +10,8 @@ import assert from "node:assert/strict";
 import { queryClient } from "../Query.js";
 import { streamQuery } from "../StreamQuery.js";
 import { createMockClock, createMockBroadcastChannel } from "./harness.js";
-import { createRoot, effect } from "@zakkster/lite-signal";
+import { createRoot, effect, signal } from "@zakkster/lite-signal";
+import { pipeToSignal } from "@zakkster/lite-stream";
 
 // -- test rig ---------------------------------------------------------------
 
@@ -302,6 +303,81 @@ test("shared-stream: dehydrate excludes a projected follower entry (V7)", async 
     const snap = follower.dehydrate();
     const hasStream = snap.entries.some((r) => JSON.stringify(r.key) === JSON.stringify(["k"]));
     assert.equal(hasStream, false, "isStream follower entry is not persisted");
+    df(); fs.dispose(); follower.dispose(); peer.close();
+});
+
+// -- C5: buffer-window projection + differential parity ---------------------
+
+async function* asyncIterableOf(values) { for (const v of values) yield v; }
+
+// The oracle: lite-stream's own pipeToSignal buffer window over V. Returns the
+// final snapshot array + its droppedCount. This is the contract projectFrame's
+// buffer path must match element-for-element (A6); when LS4 ships
+// createSignalWriter the seam swaps and this test does not change.
+async function bufferOracle(values, m) {
+    const target = signal(undefined);
+    const stop = pipeToSignal(asyncIterableOf(values), target, { mode: "buffer", maxBuffer: m });
+    for (let i = 0; i < values.length * 3 + 30; i++) await Promise.resolve();
+    const out = target();
+    return { arr: out, dropped: stop.droppedCount };
+}
+
+test("shared-stream: follower buffer window is element-for-element parity with pipeToSignal (A6)", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    let combos = 0;
+    for (const m of [1, 2, 3, 7, 64]) {
+        for (const n of [0, 1, m - 1, m, m + 1, 4 * m]) {
+            if (n < 0) continue;
+            combos++;
+            const V = Array.from({ length: n }, (_, i) => ({ id: `${m}:${n}:${i}` }));
+            const oracle = await bufferOracle(V, m);
+
+            const name = `PAR-${m}-${n}`;
+            const follower = makeTab(bc, clock, name, () => false, {});
+            const fs = streamQuery(follower, { key: ["k"], mode: "buffer", maxBuffer: m, stream: () => makeControllable().iterable });
+            const df = observe(fs);
+            await drain(4);
+            const peer = new bc.BroadcastChannel(name);
+            for (let i = 0; i < V.length; i++) {
+                peer.postMessage({ type: "stream-frame", key: ["k"], epochSeq: 1, clientId: "a", seq: i + 1, value: V[i] });
+            }
+            await drain(Math.max(12, n * 2 + 8));
+
+            const got = follower.getQueryData(["k"]);
+            if (V.length === 0) {
+                assert.equal(got, undefined, `${name}: empty -> unwritten`);
+            } else {
+                assert.equal(Array.isArray(got), true, `${name}: array snapshot`);
+                assert.equal(got.length, oracle.arr.length, `${name}: window length parity`);
+                for (let i = 0; i < got.length; i++) {
+                    assert.equal(got[i], oracle.arr[i], `${name}: element ${i} reference-identical`);
+                }
+            }
+            assert.equal(fs.droppedCount(), oracle.dropped, `${name}: droppedCount parity`);
+            df(); fs.dispose(); follower.dispose(); peer.close();
+        }
+    }
+    assert.equal(combos, 30, "30 (m x |V|) combinations exercised");
+});
+
+test("shared-stream: buffer follower publishes a FRESH snapshot per frame (no shared reference)", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const follower = makeTab(bc, clock, "FR", () => false);
+    const fs = streamQuery(follower, { key: ["k"], mode: "buffer", maxBuffer: 3, stream: () => makeControllable().iterable });
+    const df = observe(fs);
+    await drain(4);
+    const peer = new bc.BroadcastChannel("FR");
+    peer.postMessage({ type: "stream-frame", key: ["k"], epochSeq: 1, clientId: "a", seq: 1, value: "a" });
+    await drain();
+    const snap1 = follower.getQueryData(["k"]);
+    peer.postMessage({ type: "stream-frame", key: ["k"], epochSeq: 1, clientId: "a", seq: 2, value: "b" });
+    await drain();
+    const snap2 = follower.getQueryData(["k"]);
+    assert.notEqual(snap1, snap2, "distinct array references per frame");
+    assert.deepEqual(snap1, ["a"]);
+    assert.deepEqual(snap2, ["a", "b"]);
     df(); fs.dispose(); follower.dispose(); peer.close();
 });
 

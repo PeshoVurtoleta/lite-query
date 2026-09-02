@@ -245,6 +245,7 @@ function streamQuery(qc, streamOpts) {
         entry.streamMaxBuffer = maxBuffer;
         entry.projEpoch = -1;
         entry.projSeq = -1;
+        entry.projWindow = null;
         entry.streamCount = 0;
         entry.streamDropped = 0;
         entry.invalidatedSinceCompletion = false;

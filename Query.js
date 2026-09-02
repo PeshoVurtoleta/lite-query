@@ -590,10 +590,31 @@ export function queryClient(options = {}) {
         if (gap > 0 && feed.hook !== null) emitStreamGap(entry, gap, "gap");   // C10 (feed no-op until then)
     }
 
-    // Buffer-window projection (C5): a bounded, drop-oldest, fresh-newest-last
-    // snapshot per frame, parity-identical to lite-stream's pipeToSignal buffer
-    // mode. Declared here so the C4 latest path can route to it.
-    function projectBuffer(entry, value) { /* C5 */ }
+    // Buffer-window projection: a bounded, drop-oldest, newest-last window that
+    // publishes a FRESH snapshot array per frame -- parity-identical to
+    // lite-stream's pipeToSignal buffer mode (the differential test is the
+    // contract). Budget is exactly ONE array allocation per push: the window is
+    // held non-reactively in entry.projWindow so the previous snapshot is read
+    // without a signal round-trip or an untrack closure, and slice()+push builds
+    // the one new array. Values are never copied -- element identity is by
+    // reference (A6).
+    function projectBuffer(entry, value) {
+        const max = entry.streamMaxBuffer;
+        const base = entry.projWindow;
+        let next;
+        if (base === null) {
+            next = [value];
+        } else if (base.length < max) {
+            next = base.slice();
+            next.push(value);
+        } else {
+            next = base.slice(1);                        // drop oldest
+            next.push(value);                            // append newest
+            entry.streamDropped = (entry.streamDropped + 1) | 0;
+        }
+        entry.projWindow = next;
+        entry.data.set(next);
+    }
 
     // Gap telemetry emit (C10): stream:gap carries the count of frames missed.
     // No-op until the feed vocabulary grows in C10.
@@ -725,6 +746,7 @@ export function queryClient(options = {}) {
             lastFrameAt: 0,              // watchdog stamp: opts.now() of the last frame
             streamWatchdog: null,        // periodic check-and-rearm liveness timer
             streamPromote: null,         // (reason) => open THIS tab's iterator (adopt path, V1)
+            projWindow: null,            // buffer-mode follower window (last snapshot array)
             // Infinite-query slots -- uniform on every entry (same monomorphism
             // rule as the stream slots above). A plain query() entry leaves all
             // seven at their null/false/0 defaults and allocates no extra node;
