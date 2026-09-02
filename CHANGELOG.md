@@ -65,6 +65,11 @@ Cursor pagination and route-loader prefetch, both first-class. The last honest
   abort, error ladder, enabled gate, cross-tab page sync, prefetch adoption /
   fresh no-op / cacheTime GC, plus the three contract regressions above) and a
   zero-GC warm-read contract for infinite handles.
+- The /await VERSION provenance guard now asserts SOURCE identity (Awaitable.js
+  re-exports `VERSION` from `./Query.js`; its lite-await re-export block carries
+  none) instead of value inequality with lite-await's VERSION -- the 1.3.0/1.3.0
+  version collision between the two packages falsified the original `notEqual`
+  mechanism during this release drill. Test count unchanged.
 - `test/torture.mjs` phase H reads a prefilled 4-page infinite handle inside the
   200000 warm loop at zero allocation; the GATE line is byte-identical:
   `GATE leak=size 0/0 findings=0 warnings=0 | gc major=0 minor=0 maxMs=0.00 | ok`.

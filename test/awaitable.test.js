@@ -8,6 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import { signal } from "@zakkster/lite-signal";
 import {
@@ -266,12 +267,41 @@ test("identity: createAwaitScope is upstream's binding", () => {
 });
 
 test("VERSION on /await is lite-query's own, not lite-await's", () => {
-    // The subpath exposes lite-query's OWN VERSION (Query.js, re-exported by
-    // this entry in C6). lite-await's VERSION is deliberately NOT imported, so
-    // it never leaks through -- the two differ (lite-query 1.1.x vs lite-await
-    // 1.3.x). version-sync.test.js pins VERSION === package.json.
+    // The subpath exposes lite-query's OWN VERSION (single source Query.js;
+    // version-sync.test.js pins it to package.json). Provenance is asserted
+    // at the SOURCE level, not by value inequality with upstream.VERSION:
+    // the two packages' version strings can legally coincide (they collided
+    // at 1.3.0, which falsified this guard's original notEqual form during
+    // the 1.3.0 release drill), and equal values prove nothing either way.
     assert.equal(subpath.VERSION, queryVersion);
-    assert.notEqual(subpath.VERSION, upstream.VERSION);
+    const src = readFileSync(new URL("../Awaitable.js", import.meta.url), "utf8");
+    assert.match(
+        src,
+        /export\s*\{\s*VERSION\s*\}\s*from\s*["']\.\/Query\.js["']/,
+        "Awaitable.js must re-export VERSION from ./Query.js",
+    );
+    // The upstream IMPORT block and the local export list, with line comments
+    // stripped (the import block's comments legitimately DISCUSS VERSION):
+    // neither may carry the bare VERSION binding, so lite-await's VERSION can
+    // never flow through this subpath even when the version strings coincide.
+    const stripped = (s) => s.replace(/\/\/[^\n]*/g, "");
+    const upstreamImports =
+        src.match(/import\s*\{[^}]*\}\s*from\s*["']@zakkster\/lite-await["']/g) ?? [];
+    assert.ok(upstreamImports.length > 0, "upstream import block must exist");
+    for (const block of upstreamImports) {
+        assert.ok(
+            !/\bVERSION\b/.test(stripped(block)),
+            "the lite-await import block must not carry the VERSION binding",
+        );
+    }
+    const localExports = src.match(/export\s*\{[^}]*\};/g) ?? [];
+    assert.ok(localExports.length > 0, "the local export list must exist");
+    for (const block of localExports) {
+        assert.ok(
+            !/\bVERSION\b/.test(stripped(block)),
+            "the local export list must not carry VERSION (it exports only via ./Query.js)",
+        );
+    }
 });
 
 test("subpath named surface == upstream minus VERSION plus the two bridges", () => {
