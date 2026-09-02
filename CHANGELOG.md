@@ -5,16 +5,16 @@ All notable changes to `@zakkster/lite-query` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.5.0] -- unreleased
+## [1.5.0] -- 2026-09-02
 
 The devtools FEED (`qc.inspect`) -- observability with a zero-cost off switch.
 SPEC promised devtools; the PANEL belongs to lite-studio (its repo), so what
 lite-query owes the ecosystem is the feed a panel renders: a synchronous,
 push-mode stream of cache truth. The whole design tension is the off switch --
 law 4 says the hot path buys nothing it does not use, so the uninstalled branch
-is the product. Per OR-1 the version stamp lands only with the `/release 1.5.0`
-drill after the pipeline closes; this head lands in-session with `package.json`
-and the `VERSION` const held at `1.4.0`.
+is the product. Per OR-1 the version stamp landed only with the `/release 1.5.0`
+drill after the pipeline closed (no in-session stamp; the pipeline ran with
+`package.json` and the `VERSION` const at `1.4.0`).
 
 ### Added
 
