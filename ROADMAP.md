@@ -858,12 +858,20 @@ DONE WHEN
 ---
 package: "@zakkster/lite-query"
 version_target: 1.5.0
-status: planned
-tests_min: 278   # re-rebased 2026-09-02 post-Q6 pipeline (268 base; a floor below the shipped suite is decorative)
-carry_from_q6: the findings-clause control -- STILL uncontrolled after
-  three attempts (Q5 A/B, Q6 C; INCONCLUSIVE.md holds all three verbatim);
-  re-attempt via Q7's inspect-hook install/uninstall lifecycle or
-  re-record and carry again
+status: pipeline-complete (2026-09-02; ladder C1 a617101 .. C8 8285dd8 +
+  operator deltas QD-1..QD-3 7c911d0, QD-4 4812521; reviewer REJECTED x1
+  (QD-4 _se retention pin, caught by adversarial probe) then DELTA
+  APPROVED; QA PASS -- 11/11 assertions, G1-G8 evidenced, 6/6 fresh
+  probes, QD-1 baseline cross-check clean; suite 268 -> 314/0/0, GATE
+  byte-identical, controls 5/5 incl. the new C-feed; awaiting
+  /release 1.5.0 + operator publish per OR-1)
+tests_min: 278   # re-rebased 2026-09-02 post-Q6 pipeline (268 base); pipeline closed at 314
+carry_from_q6: RESOLVED into attempt D (2026-09-02): rode the inspect
+  install/uninstall lifecycle, DID NOT FIRE (4096 cycles, live-delta 0);
+  INCONCLUSIVE.md holds it verbatim beside A/B/C plus the QD-4
+  postscript -- the reviewer's retention find demonstrates the exact
+  class the churn control is blind to. Clause stays honestly
+  uncontrolled; carried to Q8 (carry_from_q7 there).
 skip_max: 0
 torture: "law harness ok; hook-installed vs not, both gated"
 findings: []   # SPEC.md devtools item, feed half; panel is lite-studio's
@@ -912,7 +920,9 @@ ASSERTIONS
     assertion mode: events observed form a consistent state machine --
     no detach without attach, no settle without dispatch).
   - Uninstalled overhead: unmeasurable vs baseline (numbers recorded).
-  - Suite >= 200, 0 skip; law torture ok; controls fail; guards green.
+  - Suite >= 278 (corrected at Q7 closeout per ON-4/V10; this line
+    staled at ">= 200"), 0 skip; law torture ok; controls fail; guards
+    green.
 
 NON-GOALS
   No UI, no formatting, no serialization of the feed (the panel's job). No
@@ -933,7 +943,13 @@ DONE WHEN
 package: "@zakkster/lite-query"
 version_target: 2.0.0
 status: planned
-tests_min: 308   # re-rebased 2026-09-02 post-Q6 pipeline (268 base)
+tests_min: 354   # re-rebased 2026-09-02 post-Q7 pipeline (314 base; the charter's original +40 delta preserved; a floor below the shipped suite is decorative)
+carry_from_q7: the findings-clause control -- STILL uncontrolled after
+  FOUR attempts (Q5 A/B, Q6 C, Q7 D; INCONCLUSIVE.md holds all four
+  verbatim + the QD-4 postscript: review's adversarial probe caught the
+  retention class the churn control missed); re-attempt via Q8's
+  offline-mutation-queue teardown / leader-failover surface or re-record
+  and carry again
 skip_max: 0
 torture: "law harness ok + leader-failover stream soak"
 findings: []   # the old roadmap's Future section, sequencing preserved
@@ -1192,6 +1208,23 @@ scripts; Q4 onward: the law harness). No gate output is a FAIL.
   slices the unpooled copy, bake's own suite idiom. Cookbook.md SHIPS in
   the pack, so 1.4.0's tarball carries the broken samples; the fix rides
   the next publish (owed a `[1.5.0]` CHANGELOG Fixed line).
+  CLOSED BOTH SIDES 2026-09-02: the four Fixed lines LANDED in the
+  `[1.5.0]` head (Q7 C8, per OR-2 "cookbook folds here"), and bake's MX1
+  session verified the fixed recipes against their shipped package -- the
+  probe executes our recipe 18/19 lines verbatim (root + kebab imports,
+  pooled-Buffer slice, windowed syncRange reads, R_ABORTED both ways) and
+  their ledger records "no cross-repo item remains open against this
+  package" (witness: bake session scratchpad
+  mx1-probe/probe-recipes-fixed.mjs).
+- **StreamQuery accessor closure** (noted by Q7 QA, pre-existing:
+  count()/droppedCount() allocate a per-call arrow passed to untrack();
+  V8 escape analysis elides it only after warm-up, which is why isolated
+  fresh-process runs show minor-GC noise the settled torture run does
+  not). Byte-identical across 1.4.0 and Q7 -- NOT a Q7 regression, not
+  feed cost (QA root-cause, qa-q7/isolate-head.mjs). Candidate: hoist to
+  module-level readers on the READ_STATUS pattern in the next session
+  that touches StreamQuery under its own charter; never casually mid-era
+  (OR-9 discipline).
 - **Baked torture fixtures** (optional, Q4+): a deterministic LBK1 fixture
   for large-payload churn would keep JSON.parse allocation noise out of
   the profiler-gated phase H measurement, borrowing lite-bake-stream's
