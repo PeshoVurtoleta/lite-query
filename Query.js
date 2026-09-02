@@ -2242,6 +2242,35 @@ export function mutation(qc, mutOpts) {
     const feed = _mi ? _mi.feed : null;
     const emitClient = _mi ? _mi.emitClient : null;
 
+    // Offline-queue opt-in (Q9, T1/ON-3). Validate the opt-in SHAPE at the door
+    // -- the package's validate-at-construction norm -- so a malformed opt-in
+    // fails closed with nothing constructed, never silently taking the normal
+    // path (fail-open). `queue` present and not a boolean is a caller who thinks
+    // they opted in; that must throw. queue:true then requires an offline oracle
+    // (a function), a name (a string, what a reloaded tab resolves the handler
+    // by), and a queueKey (an array, what a dropped entry is resolved against).
+    if (mutOpts.queue !== undefined && typeof mutOpts.queue !== "boolean") {
+        throw new TypeError("lite-query: mutation `queue` must be a boolean (queue: true to opt in)");
+    }
+    const queueEnabled = mutOpts.queue === true;
+    if (queueEnabled) {
+        if (typeof mutOpts.offline !== "function") {
+            throw new TypeError("lite-query: mutation queue:true requires `offline` to be a function () => boolean");
+        }
+        if (typeof mutOpts.name !== "string") {
+            throw new TypeError("lite-query: mutation queue:true requires `name` to be a string");
+        }
+        if (!Array.isArray(mutOpts.queueKey)) {
+            throw new TypeError("lite-query: mutation queue:true requires `queueKey` to be a query-key array");
+        }
+        if (!_mi || typeof _mi.enqueue !== "function") {
+            throw new TypeError("lite-query: mutation queue:true requires a real query client");
+        }
+    }
+    // Bound once at construction (cold). null on the no-opt-in path, so mutate()'s
+    // ladder is gated by a single boolean read and the 2.0.0 body is unchanged.
+    const enqueue = queueEnabled ? _mi.enqueue : null;
+
     // mutationGen mirrors the fetchGen pattern used in queries. Two rapid
     // mutate() calls -- slow first, fast second -- must not let the first one
     // overwrite the second's settled state. Gen-guarding the SIGNAL writes
@@ -2254,6 +2283,48 @@ export function mutation(qc, mutOpts) {
 
     async function mutate(vars) {
         const gen = ++mutationGen;
+        // Offline dispatch ladder (Q9, T1/OR-3) -- evaluated ONCE, before onMutate
+        // and before fn, and ONLY under the per-mutation opt-in. The whole branch
+        // sits behind a single boolean read, so a mutation that never opts in pays
+        // one test and ZERO allocation: the 2.0.0 body below is byte-identical.
+        // The oracle read + enqueue are synchronous (no await before the terminal
+        // decision), so no second mutate() can interleave and steal `gen` here.
+        if (queueEnabled) {
+            // Call the caller's connectivity oracle inside a try. An unverified
+            // connectivity state must not silently pick a branch (null is not
+            // zero): a THROW or a NON-BOOLEAN return fails closed -- nothing
+            // dispatched, nothing queued, status settles "error", the awaited
+            // promise rejects with a tagged LQ_OFFLINE_ORACLE.
+            let off;
+            let oracleThrew = false;
+            try { off = mutOpts.offline(); } catch { oracleThrew = true; }
+            if (oracleThrew || (off !== true && off !== false)) {
+                const err = new Error("lite-query: offline() must return a boolean and must not throw");
+                err.code = "LQ_OFFLINE_ORACLE";
+                if (gen === mutationGen) { error.set(err); status.set("error"); }
+                throw err;
+            }
+            if (off === true) {
+                // Transport down -> durable enqueue. onMutate/fn/onSuccess/onError
+                // do NOT run; onSettled DOES (Phase-4 law). A full queue is a
+                // surfaced rejection (LQ_QUEUE_FULL), never a silent drop (OR-3).
+                const rec = enqueue(mutOpts.name, mutOpts.queueKey, hashKey(mutOpts.queueKey), vars);
+                if (rec === null) {
+                    const err = new Error("lite-query: mutation queue is full");
+                    err.code = "LQ_QUEUE_FULL";
+                    if (gen === mutationGen) { error.set(err); status.set("error"); }
+                    throw err;
+                }
+                if (gen === mutationGen) { error.set(undefined); status.set("queued"); }
+                if (mutOpts.onSettled) {
+                    try { await mutOpts.onSettled(undefined, undefined, vars, undefined); }
+                    catch { /* callback errors don't propagate or alter state */ }
+                }
+                return { queued: true, id: rec.id };   // the one receipt build site (ON-3)
+            }
+            // off === false -> the transport is up: fall through to the normal
+            // 2.0.0 path with the gen already advanced above.
+        }
         // Mark pending immediately on the new mutation. This is the LATEST
         // generation by definition, so no gen check needed here.
         status.set("pending");
