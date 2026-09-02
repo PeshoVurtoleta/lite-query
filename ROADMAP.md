@@ -1147,6 +1147,15 @@ scripts; Q4 onward: the law harness). No gate output is a FAIL.
   values read by signals, and a serialize/deserialize toll between a
   signal read and its data would break law 4 -- bake belongs at
   boundaries (disk, network, boot).
+  Q6 DOCS-PASS OUTCOME 2026-09-02: recipe (1) `streamQuery` + `RangeReader`
+  LANDED in Cookbook.md (recipe 19), citing bake's abortable-range-read
+  surface (`{ signal }`, `fetch(byteOffset, byteLength, signal?)`,
+  `R_ABORTED`, no-partial-cache) and its consumer-floor line verbatim.
+  Recipe (2) `ingestStream` `onProgress` as a `streamQuery` source did NOT
+  fit the three-recipe Q6 docs pass and is RE-PARKED here explicitly (no
+  silent drop): it rides a future docs pass when a consumer asks for a
+  reactive ingest-progress UI. The persistQueryClient recipes (localStorage
+  / IndexedDB, recipe 17; bake-backed, recipe 18) shipped this pass.
 - **Baked torture fixtures** (optional, Q4+): a deterministic LBK1 fixture
   for large-payload churn would keep JSON.parse allocation noise out of
   the profiler-gated phase H measurement, borrowing lite-bake-stream's

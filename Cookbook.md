@@ -508,6 +508,143 @@ qc.invalidate(['room', roomId]);
 
 ---
 
-That's the cookbook for v1.1. Recipes for devtools integration, SSR hydration, and shared (one-connection-per-cluster) streams will land as those features ship.
+## 17. Persist the cache for instant cold-starts -- localStorage and IndexedDB thunks
+
+`persistQueryClient(qc, { save, load, version, throttle? })` is storage-agnostic: you supply `save` and `load` thunks. It restores once on install (before any observer attaches), then throttles a dehydrated snapshot to `save`. `version` is REQUIRED -- bump it whenever your cached shapes change and the old cache is dropped instead of resurrected. `handle.restored` is a promise that always resolves (never rejects) with `{ status, count, reason }`.
+
+Boot order matters: create the client, install the persister, `await handle.restored`, THEN attach observers. Hydrate is boot-only and fail-closed -- it throws if the cache already holds an entry.
+
+```js
+import { queryClient, persistQueryClient } from '@zakkster/lite-query';
+
+// --- localStorage (synchronous thunks) ---
+const qc = queryClient({ defaultStaleTime: 30_000 });
+const persister = persistQueryClient(qc, {
+  version: 'v1',                                  // bump to drop the old cache on a schema change
+  throttle: 1000,                                 // coalesce bursts of writes into one save/second
+  save: (envelope) => localStorage.setItem('lq-cache', JSON.stringify(envelope)),
+  load: () => {
+    const raw = localStorage.getItem('lq-cache');
+    if (raw == null) return null;                 // null/undefined => empty store, a normal boot
+    try {
+      return JSON.parse(raw);
+    } catch (err) {
+      // A native SyntaxError (its .code is undefined) means the stored record is
+      // not JSON: discard the cache and re-fetch, never retry the same bytes.
+      if (err instanceof SyntaxError) { localStorage.removeItem('lq-cache'); return null; }
+      throw err;                                  // anything else resolves as { status: 'dropped', reason: 'load-threw' }
+    }
+  },
+});
+
+const outcome = await persister.restored;         // { status: 'restored' | 'empty' | 'dropped', count, reason }
+// ...now attach observers: query()/infiniteQuery() read from cache instantly and revalidate per staleTime.
+
+// On logout, persist emptiness then stop (clear is a write hook site):
+// qc.clear(); persister.stop();
+
+// --- IndexedDB (async thunks -- same adapter, promises instead of sync) ---
+function idbThunks(dbName = 'lq', store = 'cache', key = 'state') {
+  const open = () => new Promise((res, rej) => {
+    const r = indexedDB.open(dbName, 1);
+    r.onupgradeneeded = () => r.result.createObjectStore(store);
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+  const tx = async (mode, fn) => {
+    const db = await open();
+    return new Promise((res, rej) => {
+      const t = db.transaction(store, mode);
+      const req = fn(t.objectStore(store));
+      t.oncomplete = () => res(req && req.result);
+      t.onerror = () => rej(t.error);
+    });
+  };
+  return {
+    save: (envelope) => tx('readwrite', (s) => s.put(envelope, key)),
+    load: () => tx('readonly', (s) => s.get(key)),   // undefined when absent => empty store
+  };
+}
+
+const qc2 = queryClient({ defaultStaleTime: 30_000 });
+const persister2 = persistQueryClient(qc2, { version: 'v1', throttle: 1000, ...idbThunks() });
+await persister2.restored;
+```
+
+An async `load()` that resolves AFTER a cross-tab `setData` already populated this client hits the empty-cache precondition; the adapter catches it and resolves `{ status: 'dropped', reason: 'cache-not-empty' }` -- never a merge, never an unhandled rejection.
+
+## 18. Back the cache with a baked container -- `@zakkster/lite-bake-stream`
+
+For a large cache, bake each dehydrated entry as one JSON record in a preserve-mode container and read it back lazily. The bake wiring lives entirely in your thunks -- lite-query ships no bake subpath, peer, or import. Pick your floor from bake-stream's own `llms.txt` "Consumer floors:" line, quoted verbatim (never restate version numbers from another package's roadmap):
+
+> Consumer floors: validated preserve reads need `>= 1.3.1` (the six S1 read doors all closed there; the preserve doors themselves shipped in `1.3.0`, but the full validated read set is `1.3.1`); CRC-verified persistence needs `>= 1.6.0` (`{ crc: true }` on write, `{ verifyCrc: true }` on open); abortable range reads need `>= 1.7.0`.
+
+Below the crossover, use plain JSON (whole-cache `JSON.parse` wins full hydration); the bake container wins above it, and for lazy first-entry boot the O(1) preserve open always wins. And carry bake's read rule: a `getJSON(i)` that throws a native `SyntaxError` (its `.code` is undefined) means the stored record is not JSON -- discard the cache and re-fetch, never retry the same bytes.
+
+```js
+import { serialize } from '@zakkster/lite-bake-stream';
+import { PreserveReader } from '@zakkster/lite-bake-stream/PreserveReader';
+import { persistQueryClient } from '@zakkster/lite-query';
+
+const persister = persistQueryClient(qc, {
+  version: 'v1',
+  save: (envelope) => {
+    // One NDJSON record per dehydrated entry -> one preserve record per query.
+    const ndjson = envelope.state.entries.map((e) => JSON.stringify(e)).join('\n') + '\n';
+    const container = serialize(new TextEncoder().encode(ndjson), { preserve: true, writer: { crc: true } });
+    writeToDisk('lq.lbk', container, envelope.version);   // your storage
+  },
+  load: () => {
+    const bytes = readFromDisk('lq.lbk');
+    if (bytes == null) return null;
+    const reader = new PreserveReader(bytes.buffer, { verifyCrc: true });   // fails closed on CRC mismatch/absence
+    const entries = [];
+    for (let i = 0; i < reader.totalRows; i++) {
+      try {
+        entries.push(reader.getJSON(i));
+      } catch (err) {
+        if (err instanceof SyntaxError) return null;   // not JSON -> discard the whole cache, re-fetch
+        throw err;
+      }
+    }
+    return { version: readVersion('lq.lbk'), state: { entries } };
+  },
+});
+```
+
+Corrupted storage is refused at open or first read with a named `R_` code, never hydrated wrong -- bake-stream's consumer-shaped corruption matrix is its `test/DehydratedCache.test.js`.
+
+## 19. A reactive window over a remote multi-GB container -- `streamQuery` + `RangeReader`
+
+Bake-stream's `RangeReader` reads a remote LBK1 container over HTTP Range with zone-map pruning -- no full download -- and (from `>= 1.7.0`) is abortable: reader-level `{ signal }`, an adapter contract `fetch(byteOffset, byteLength, signal?)`, an `R_ABORTED` refusal, and no partial cache on abort. That abortability is exactly what lets it compose with `streamQuery`, whose abort-on-detach law needs a cancellable source: when the last observer leaves, `streamQuery` aborts the iterator, which aborts the in-flight range read.
+
+```js
+import { streamQuery } from '@zakkster/lite-query/stream';
+import { RangeReader } from '@zakkster/lite-bake-stream/RangeReader';
+
+// The stream factory yields rows from a pruned range scan; `signal` is the
+// streamQuery abort signal (fires on detach / removeQueries / key change).
+const feed = streamQuery(qc, {
+  key: ['remote-feed', filter()],
+  mode: 'buffer',
+  maxBuffer: 200,
+  stream: async function* ({ signal }) {
+    const reader = new RangeReader({
+      fetch: (byteOffset, byteLength, sig) =>
+        fetch(URL, { headers: { Range: `bytes=${byteOffset}-${byteOffset + byteLength - 1}` }, signal: sig })
+          .then((r) => r.arrayBuffer()),
+      signal,                                        // abort-on-detach cancels the in-flight range read (R_ABORTED)
+    });
+    for (let i = 0; i < reader.totalRows; i++) yield reader.getJSON(i);
+  },
+});
+effect(() => render(feed.data()));                   // detach -> abort -> no partial cache
+```
+
+Cite only what bake-stream's `llms.txt` states about `RangeReader` and its adapter; version floors come from its consumer-floor line above, never from session numbers.
+
+---
+
+That's the cookbook. Recipes for devtools integration, SSR hydration, and shared (one-connection-per-cluster) streams will land as those features ship. The bake-backed ingest-progress recipe (`ingestStream` `onProgress` as a `streamQuery` source) is parked in ROADMAP.md until a consumer asks for it.
 
 If you have a pattern that should live here, open an issue or a PR.

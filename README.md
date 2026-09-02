@@ -60,10 +60,11 @@ The honest comparison. Numbers are min+gzip, current as of writing.
 | Multi-shot / streaming queries | **`streamQuery` (SSE/ws/cursor)** | Experimental (`streamedQuery`) | No |
 | Cursor pagination (infinite) | **`infiniteQuery` (built-in)** | `useInfiniteQuery` | `useSWRInfinite` |
 | Route-loader prefetch | **`qc.prefetch` (built-in)** | `queryClient.prefetchQuery` | `preload` |
+| Cache persistence + boot hydration | **`persistQueryClient` + `qc.dehydrate`/`hydrate` (built-in)** | Plugin (`@tanstack/query-persist-client`) | Manual |
 | Abort reason vocabulary | Yes (`signal.reason`) | No | No |
 | Per-query timeout | Yes | No (manual via fetcher) | No (manual via fetcher) |
 | Devtools UI | Roadmap | Yes (mature) | Yes |
-| Tests | 203 | ~hundreds | ~hundreds |
+| Tests | 259 | ~hundreds | ~hundreds |
 | Foundation | Signals (lite-signal) | Observer pattern | SWR algo + hooks |
 
 Where lite-query trails: the devtools panel is on the roadmap. Where it leads: cross-tab, cursor pagination, and the signal-native composition story.
@@ -83,6 +84,8 @@ Measured against `@tanstack/query-core` 5.101 on Node 22 (SWR is React-coupled -
 Where lite-query wins decisively: **invalidation** (~3.9x -- the signal-graph propagates without TanStack's observer-notification fan-out and per-query Promise allocation), **mutations with optimistic updates** (~3.7x -- the `setQueryData` -> `onMutate` -> `fn` -> rollback path is a direct signal write chain, not a queued observer cycle), and **high-concurrency scaling** (~2.5x on 1000 concurrent queries, with ~70% less transient memory).
 
 Memory: lite-query allocates 4x-10x **less transient memory per operation** on the high-allocation scenarios (invalidate, mutation, 1000-parallel) thanks to lite-signal's zero-GC primitives and proper entry-signal disposal on cache removal. The 1000-parallel scenario goes from ~750 KB/cycle (query-core) to ~280 KB/cycle (lite-query). Warm reads are within noise of each other -- both libraries have a tight warm path.
+
+Persistence adds **zero warm-path allocation**: no new per-entry slot, no new signal, no read-path branch (`dehydrate` walks the map and is cold by definition; the write hook is a single `persistHook !== null` test at six commit/settle sites, none on the 200000-iteration warm-read loop). With no adapter installed the torture GATE line is byte-identical to the pre-persistence build (`GATE leak=size 0/0 findings=0 warnings=0 | gc major=0 minor=0 maxMs=0.00 | ok`), including a 4096-cycle dehydrate/hydrate/teardown loop.
 
 Reproduce: `npm install && npm run bench` (Node 18+, includes warmup, transient + retained byte tracking). Numbers vary ~10-15% run-to-run; the ratios are stable.
 
@@ -354,7 +357,7 @@ npm test
 # skipped 0
 ```
 
-The core suite (142) uses a controlled fetcher, mock clock, and mock `BroadcastChannel` so every test is deterministic -- no real timers, no real network, and it covers `infiniteQuery` cursor pagination and `qc.prefetch`. The optional entry points add 31 (`/await`) and 24 (`/stream`) tests, the latter driving a manually-pumped async iterator through every termination path, and 6 repo drift guards keep the shipped files ASCII-clean, the documented surface in sync with the real exports, and the runtime `VERSION` const equal to `package.json`. See `test/harness.js` for the mocks.
+The core suite (198) uses a controlled fetcher, mock clock, and mock `BroadcastChannel` so every test is deterministic -- no real timers, no real network, and it covers `infiniteQuery` cursor pagination, `qc.prefetch`, and the persistence primitive + adapter (with a dependency-free dehydrated-cache corruption matrix). The optional entry points add 31 (`/await`) and 24 (`/stream`) tests, the latter driving a manually-pumped async iterator through every termination path, and 6 repo drift guards keep the shipped files ASCII-clean, the documented surface in sync with the real exports, and the runtime `VERSION` const equal to `package.json`. See `test/harness.js` for the mocks.
 
 Every entry point exports `VERSION` -- lite-query's own version string, the single runtime version source. It lives in `Query.js`, is re-exported by `/stream` and `/await`, and `test/version-sync.test.js` asserts it equals `package.json`.
 
