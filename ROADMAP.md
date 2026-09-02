@@ -645,7 +645,7 @@ DONE WHEN
 package: "@zakkster/lite-query"
 version_target: 1.3.0
 status: planned
-tests_min: 175
+tests_min: 195   # rebased 2026-09-02: written against a 158 base, suite is 181 post-Q3
 skip_max: 0
 torture: "law harness ok + pagination churn phase"
 findings: []   # anchored to the README facts table's own honesty row
@@ -731,7 +731,7 @@ DONE WHEN
 package: "@zakkster/lite-query"
 version_target: 1.4.0
 status: planned
-tests_min: 190
+tests_min: 210   # rebased 2026-09-02 (181 post-Q3 base)
 skip_max: 0
 torture: "law harness ok + hydrate/dehydrate cycle phase"
 findings: []   # SPEC.md post-publish item, reconciled by Q2
@@ -767,20 +767,28 @@ TASKS
     not zero). Storage-agnostic save/load thunks; lite-persist recipe in
     the Cookbook shows localStorage and IndexedDB.
   - Bake-backed persistence recipe (added 2026-08-31): a second Cookbook
-    variant wires the thunks to `@zakkster/lite-bake-stream@1.0.0` preserve
+    variant wires the thunks to `@zakkster/lite-bake-stream` preserve
     mode -- one cache entry per record, `PreserveReader.getJSON(i)` for
     lazy per-entry materialization, so boot becomes a sync zero-alloc
     container open and each entry parses on first observer attach instead
     of one monolithic JSON.parse over the whole dehydrated cache. Store is
     IndexedDB/CacheStorage Blobs (LBK1 is bytes; localStorage would pay a
-    base64 tax). Floors (cross-repo, scheduled 2026-08-31): the recipe
-    requires bake-stream's M2 release or later -- its BS-06 means an
-    unpatched PreserveReader can hand back short bytes from corrupted
-    storage instead of refusing at open, and a persistence adapter must
-    fail closed to fresh-fetch. The JSON-vs-bake crossover number is
-    measured ONCE, by bake-stream's MQ2 session (see
-    ../LiteBakeStream/ROADMAP.md), and this recipe cites it -- below the
-    crossover the recipe says "use plain JSON", in those words.
+    base64 tax). Floors (cross-repo; version citations refreshed
+    2026-09-02 -- bake-stream's shipped versions DRIFTED above its
+    chartered targets, so never cite its session numbers as semvers):
+    the recipe requires the validated-preserve-reads floor and, if it
+    touches RangeReader, the abort floor (MQ1, shipped content = 1.7.0).
+    Both floors are published as ONE consumer-floor line in bake-stream's
+    llms.txt by its MQ2 session -- cite THAT line verbatim at Q6 coding
+    time; do not restate numbers from this file. Rationale unchanged:
+    BS-06 means an unpatched PreserveReader can hand back short bytes
+    from corrupted storage instead of refusing at open, and a persistence
+    adapter must fail closed to fresh-fetch. The JSON-vs-bake crossover
+    number is measured ONCE, by bake-stream's MQ2 session (targets 1.7.1;
+    see ../LiteBakeStream/ROADMAP.md progress log), and this recipe cites
+    it -- below the crossover the recipe says "use plain JSON", in those
+    words. MQ2 also ships the cache-shaped conformance suite runnable
+    FROM this repo (dependency-free both directions); Q6 lands our copy.
     Discipline unchanged: lite-query keeps zero runtime deps;
     bake lives entirely in the caller-wired adapter thunks (an
     optional-peer subpath only if a real consumer demands it, per the
@@ -832,7 +840,7 @@ DONE WHEN
 package: "@zakkster/lite-query"
 version_target: 1.5.0
 status: planned
-tests_min: 200
+tests_min: 220   # rebased 2026-09-02 (181 post-Q3 base)
 skip_max: 0
 torture: "law harness ok; hook-installed vs not, both gated"
 findings: []   # SPEC.md devtools item, feed half; panel is lite-studio's
@@ -902,7 +910,7 @@ DONE WHEN
 package: "@zakkster/lite-query"
 version_target: 2.0.0
 status: planned
-tests_min: 230
+tests_min: 250   # rebased 2026-09-02 (181 post-Q3 base)
 skip_max: 0
 torture: "law harness ok + leader-failover stream soak"
 findings: []   # the old roadmap's Future section, sequencing preserved
@@ -1098,11 +1106,17 @@ scripts; Q4 onward: the law harness). No gate output is a FAIL.
   `onProgress` as a `streamQuery` source -- reactive ingest-progress UI in
   ~10 lines. Recipe-grade, zero core change; candidates to ride Q5 or Q6's
   docs pass. Bake-stream's side is scheduled (2026-08-31) as sessions MQ1
-  and MQ2 in ../LiteBakeStream/ROADMAP.md: recipe (1) requires MQ1's
-  v1.4.0 (abortable range reads -- probed: its RangeAdapter contract has
-  no AbortSignal today, and streamQuery's abort-on-detach law cannot
-  compose with an uncancellable reader); the persistence recipe's
-  conformance suite and crossover number are MQ2's v1.4.1. Explicitly NOT
+  and MQ2 in ../LiteBakeStream/ROADMAP.md. VERSION DRIFT NOTE 2026-09-02:
+  bake-stream shipped past its chartered numbers (M5 -> 1.5.0,
+  M6 -> 1.6.0, registry latest 1.6.1); MQ1 is content-complete as a
+  frozen 1.7.0 diff awaiting operator publish, MQ2 targets 1.7.1. Recipe
+  (1) requires MQ1 (abortable range reads: reader-level `{ signal }`,
+  adapter `fetch(byteOffset, byteLength, signal?)`, `R_ABORTED`,
+  no-partial-cache -- originally probed here: streamQuery's
+  abort-on-detach law cannot compose with an uncancellable reader); the
+  persistence recipe's conformance suite and crossover number are MQ2's.
+  Cite floors from bake-stream's llms.txt consumer-floor line (an MQ2
+  deliverable), never from session numbers. Explicitly NOT
   for the hot cache path: entries hold live
   values read by signals, and a serialize/deserialize toll between a
   signal read and its data would break law 4 -- bake belongs at
