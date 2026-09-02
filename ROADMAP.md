@@ -36,7 +36,7 @@ Registry state, checked with `npm view <pkg> version`:
 
 | Package | Latest | Relevant fact |
 | --- | --- | --- |
-| `@zakkster/lite-query` | 1.4.0 | Q6 shipped (operator publish `e2f07ba`, 2026-09-02; registry `latest` = 1.4.0). Artifact verified same day from the registry tarball: 13 files, `[1.4.0]` CHANGELOG head, `Query.js` `VERSION = "1.4.0"` string-equal to the manifest. dehydrate/hydrate + persistQueryClient are public surface; bake-stream's MX1 tripwire is ARMED. Prior artifact verifications (1.2.0 `c339c12`, 1.2.1 `e7f69bd`, 1.3.0 `855214e`) hold in history |
+| `@zakkster/lite-query` | 1.5.0 | Q7 shipped (operator publish `8b6743c`, 2026-09-02; registry `latest` = 1.5.0). Artifact verified same day from the registry tarball: 13 files, `[1.5.0]` CHANGELOG head, `Query.js` `VERSION = "1.5.0"` string-equal to the manifest, unpacked 296127 B. qc.inspect (the devtools feed, 23 frozen event types, zero-cost off switch) is public surface; the panel is lite-studio's to build. Prior artifact verifications (1.2.0 `c339c12`, 1.2.1 `e7f69bd`, 1.3.0 `855214e`, 1.4.0 `e2f07ba`) hold in history |
 | `@zakkster/lite-await` | 1.3.0 | fully upgraded (V1 -> 1.2.1, C1 -> 1.3.0): **18 named exports** + VERSION. `createAwaitScope` shipped -- triggering consumer was lite-room 1.1.0 (`decisions/0007`), NOT our Q5; that gate resolved externally. `decisions/0009` verdict: **REJECT** (locked decision #4 closes). Q3's re-export target is now EIGHT (Q-07) |
 | `@zakkster/lite-stream` | 1.1.0 | published 2026-07-10; additive `toAsyncIterable` enrichments; `^1.0.0` peer admits it; suite green against it. Roadmap enriched 2026-09-01 (`../LiteStream/ROADMAP.md`, LS1..LS4): its LS-01 (dispose-mid-pump pulls forever; llms claim false since 1.0.0) verified NOT to bite us -- `streamStop` aborts before any teardown (`StreamQuery.js:156`); its LS3 v1.3.0 targets our hand-rolled ring (see parking ledger). UPDATE 2026-09-02: lite-stream is now **1.3.0** -- LS1..LS3 all shipped (their harness caught and fixed a real pump bug, LS-13, on the way); `pipeToSignal` gained `mode`/`maxBuffer`, `droppedCount`/`overflowCount` getters on the stop fn, an `onValue` tap, and `onAbort` (abort vocabulary pinned in their `decisions/0001`); their s7 conformance tier freezes OUR exact 1.1.x call shape and proves a rewrite-parity case. The collapse rider is folded into Q3. LS4 (1.4.0) stays GATED on Q8's spike; SPIKE INPUTS recorded in the Q8 brief |
 | `@zakkster/lite-signal` | 1.5.0 | stable; the `>=1.5.0-alpha` peer floor is now pointing below a released stable (Q-06) |
@@ -46,10 +46,11 @@ Registry state, checked with `npm view <pkg> version`:
 | `@zakkster/lite-gc-profiler` | 1.16.0 | same (Q-09) |
 
 Full suite verified green against the **newest** published peers (await 1.3.0,
-stream 1.3.0, signal 1.5.0): 268 pass / 0 fail with `--expose-gc` (Q6
+stream 1.3.0, signal 1.5.0): 314 pass / 0 fail with `--expose-gc` (Q7
 pipeline closeout, 2026-09-02). No compatibility break from any peer bump
 since 1.1.0 shipped. (Baselines: 153 on 2026-08-31 against await 1.2.0 /
-stream 1.1.0; 181 at the Q3/Q4 closeouts; 203 at the Q5 closeout.)
+stream 1.1.0; 181 at the Q3/Q4 closeouts; 203 at the Q5 closeout; 268 at
+the Q6 closeout.)
 
 **The dev-env corruption, so it never recurs.** There is no `.gitignore`. The
 initial commit included `node_modules/` and `package-lock.json`; commits
@@ -858,14 +859,15 @@ DONE WHEN
 ---
 package: "@zakkster/lite-query"
 version_target: 1.5.0
-status: pipeline-complete (2026-09-02; ladder C1 a617101 .. C8 8285dd8 +
-  operator deltas QD-1..QD-3 7c911d0, QD-4 4812521; reviewer REJECTED x1
-  (QD-4 _se retention pin, caught by adversarial probe) then DELTA
-  APPROVED; QA PASS -- 11/11 assertions, G1-G8 evidenced, 6/6 fresh
-  probes, QD-1 baseline cross-check clean; suite 268 -> 314/0/0, GATE
-  byte-identical, controls 5/5 incl. the new C-feed; awaiting
-  /release 1.5.0 + operator publish per OR-1)
-tests_min: 278   # re-rebased 2026-09-02 post-Q6 pipeline (268 base); pipeline closed at 314
+status: shipped (2026-09-02; ladder C1 a617101 .. C8 8285dd8 + operator
+  deltas QD-1..QD-3 7c911d0, QD-4 4812521; reviewer REJECTED x1 (QD-4 _se
+  retention pin, caught by adversarial probe) then DELTA APPROVED; QA
+  PASS -- 11/11 assertions, G1-G8 evidenced, 6/6 fresh probes, QD-1
+  baseline cross-check clean; suite 268 -> 314/0/0, GATE byte-identical,
+  controls 5/5 incl. the new C-feed; drill sites=3/27 tests=314/0 pack
+  92.5 kB; operator publish 8b6743c; registry artifact verified: 13
+  files, [1.5.0] head, VERSION sync)
+tests_min: 278   # re-rebased 2026-09-02 post-Q6 pipeline (268 base); shipped at 314
 carry_from_q6: RESOLVED into attempt D (2026-09-02): rode the inspect
   install/uninstall lifecycle, DID NOT FIRE (4096 cycles, live-delta 0);
   INCONCLUSIVE.md holds it verbatim beside A/B/C plus the QD-4
