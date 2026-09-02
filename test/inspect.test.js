@@ -12,7 +12,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { queryClient, query } from "../Query.js";
 import { effect, createRoot } from "@zakkster/lite-signal";
-import { createMockClock } from "./harness.js";
+import { createMockClock, createMockBroadcastChannel, createControlledFetcher } from "./harness.js";
 
 const noop = () => {};
 
@@ -235,4 +235,154 @@ test("entry:stale fires per matched entry with reason 'invalidate'", () => {
     assert.ok(stale.every((e) => e.reason === "invalidate"));
     assert.ok(stale.every((e) => e.count === 0));
     stop();
+});
+
+// -- fetch dispatch / settle / abort (C3) ------------------------------------
+
+test("fetch:dispatch + fetch:settle (success) carry gen, cursor null, and data", async () => {
+    const { qc, events, stop } = withFeed({ defaultStaleTime: 0 });
+    const q = query(qc, { key: ["f"], fetcher: async () => 42 });
+    const stopE = createRoot(() => effect(() => q.data()));
+    await tick();
+    const disp = only(events, "fetch:dispatch");
+    assert.equal(disp.length, 1);
+    assert.equal(disp[0].count, 1, "count is the fetch generation");
+    assert.equal(disp[0].value, null, "plain query: cursor is null");
+    assert.equal(disp[0].reason, null, "unforced dispatch has null reason");
+    assert.equal(disp[0].ok, false);
+    const settle = only(events, "fetch:settle");
+    assert.equal(settle.length, 1);
+    assert.equal(settle[0].ok, true);
+    assert.equal(settle[0].value, 42, "settle value is the fetched data");
+    assert.equal(settle[0].count, 1);
+    assert.equal(settle[0].reason, null);
+    stopE(); q.dispose();
+    stop();
+});
+
+test("fetch:settle (error) reports ok=false and the error value", async () => {
+    const { qc, events, stop } = withFeed({ defaultStaleTime: 0, retry: 0 });
+    const boom = new Error("nope");
+    const q = query(qc, { key: ["fe"], fetcher: async () => { throw boom; } });
+    const stopE = createRoot(() => effect(() => q.data()));
+    await tick();
+    const settle = only(events, "fetch:settle");
+    assert.equal(settle.length, 1);
+    assert.equal(settle[0].ok, false);
+    assert.equal(settle[0].value, boom, "settle value is the thrown error");
+    stopE(); q.dispose();
+    stop();
+});
+
+test("fetch:abort reason 'lite-query:detach' when the last observer leaves in-flight", async () => {
+    const { qc, events, stop } = withFeed({ defaultStaleTime: 0 });
+    const cf = createControlledFetcher();
+    const q = query(qc, { key: ["ad"], fetcher: cf.fetcher });
+    const stopE = createRoot(() => effect(() => q.data()));
+    await tick();                                    // fetch dispatched, in-flight
+    stopE(); q.dispose();                            // detach -> abort in-flight
+    const ab = only(events, "fetch:abort");
+    assert.equal(ab.length, 1);
+    assert.equal(ab[0].reason, "lite-query:detach");
+    assert.equal(ab[0].count, 1);
+    stop();
+});
+
+test("fetch:abort reason 'lite-query:refetch' when a forced refetch supersedes", async () => {
+    const { qc, events, stop } = withFeed({ defaultStaleTime: 0 });
+    const cf = createControlledFetcher();
+    const q = query(qc, { key: ["ar"], fetcher: cf.fetcher });
+    const stopE = createRoot(() => effect(() => q.data()));
+    await tick();                                    // gen 1 in-flight
+    q.refetch();                                     // force -> aborts gen 1
+    const ab = only(events, "fetch:abort").filter((e) => e.reason === "lite-query:refetch");
+    assert.equal(ab.length, 1);
+    stopE(); q.dispose();
+    stop();
+});
+
+test("fetch:abort reason 'lite-query:removed' when removeQueries evicts an in-flight entry", async () => {
+    const { qc, events, stop } = withFeed({ defaultStaleTime: 0 });
+    const cf = createControlledFetcher();
+    const q = query(qc, { key: ["arm"], fetcher: cf.fetcher });
+    const stopE = createRoot(() => effect(() => q.data()));
+    await tick();
+    qc.removeQueries(["arm"]);
+    const ab = only(events, "fetch:abort").filter((e) => e.reason === "lite-query:removed");
+    assert.equal(ab.length, 1);
+    stopE(); q.dispose();
+    stop();
+});
+
+test("fetch:abort reason 'lite-query:timeout' when the per-query timeout fires", async () => {
+    const { qc, clock } = clockClient({ defaultStaleTime: 0, defaultTimeout: 500 });
+    const events = [];
+    const stop = qc.inspect((e) => events.push({ ...e }));
+    const cf = createControlledFetcher();
+    const q = query(qc, { key: ["at"], fetcher: cf.fetcher });
+    const stopE = createRoot(() => effect(() => q.data()));
+    await tick();                                    // dispatched, timeout timer armed
+    clock.advance(501);                              // fire the timeout -> abort
+    const ab = only(events, "fetch:abort").filter((e) => e.reason === "lite-query:timeout");
+    assert.equal(ab.length, 1);
+    stopE(); q.dispose();
+    stop();
+});
+
+// -- cross-tab + shared-fetch (C3) -------------------------------------------
+
+test("tab:send (issuer) and tab:receive (peer) mirror the message type", async () => {
+    const { BroadcastChannel } = createMockBroadcastChannel();
+    const mk = () => queryClient({ crossTab: true, broadcastChannel: BroadcastChannel,
+        crossTabChannel: "ct", defaultStaleTime: 0 });
+    const tabA = mk(), tabB = mk();
+    const evA = [], evB = [];
+    const sA = tabA.inspect((e) => evA.push({ ...e }));
+    const sB = tabB.inspect((e) => evB.push({ ...e }));
+    tabA.setQueryData(["x"], 1);
+    const send = only(evA, "tab:send");
+    assert.ok(send.some((e) => e.reason === "setData" && e.ok === true), "issuer sees tab:send ok");
+    await tick();                                    // mock channel delivers via microtask
+    const recv = only(evB, "tab:receive");
+    assert.ok(recv.some((e) => e.reason === "setData"), "peer sees tab:receive");
+    sA(); sB(); tabA.dispose(); tabB.dispose();
+});
+
+test("shared:request (follower) then shared:fallback on leader-timeout", () => {
+    const clock = createMockClock();
+    const { BroadcastChannel } = createMockBroadcastChannel();
+    const qc = queryClient({ crossTab: true, sharedFetch: true, isLeader: () => false,
+        broadcastChannel: BroadcastChannel, crossTabChannel: "sh",
+        now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
+        defaultStaleTime: 0, sharedFetchTimeout: 3000 });
+    const events = [];
+    const stop = qc.inspect((e) => events.push({ ...e }));
+    const q = query(qc, { key: ["sh"], fetcher: async () => 1 });
+    const stopE = createRoot(() => effect(() => q.data()));
+    const req = only(events, "shared:request");
+    assert.ok(req.some((e) => e.reason === "follower"), "follower emits shared:request");
+    clock.advance(3001);                             // no leader replied -> fallback self-fetch
+    const fb = only(events, "shared:fallback");
+    assert.ok(fb.some((e) => e.reason === "follower-timeout"), "timeout emits shared:fallback");
+    stopE(); q.dispose(); stop(); qc.dispose();
+});
+
+test("shared:serve (leader) when a follower's fetch-req reaches a leader that owns the entry", async () => {
+    const { BroadcastChannel } = createMockBroadcastChannel();
+    const common = { crossTab: true, sharedFetch: true, broadcastChannel: BroadcastChannel,
+        crossTabChannel: "srv", defaultStaleTime: 0 };
+    const leader = queryClient({ ...common, isLeader: () => true });
+    const follower = queryClient({ ...common, isLeader: () => false });
+    const evL = [];
+    const sL = leader.inspect((e) => evL.push({ ...e }));
+    const lq = query(leader, { key: ["k"], fetcher: async () => 7 });
+    const stopL = createRoot(() => effect(() => lq.data()));
+    await tick();                                    // leader has the entry alive with a fetcher
+    const fq = query(follower, { key: ["k"], fetcher: async () => 9 });
+    const stopF = createRoot(() => effect(() => fq.data()));
+    await tick();                                    // follower broadcasts fetch-req; leader serves
+    const serve = only(evL, "shared:serve");
+    assert.ok(serve.some((e) => e.reason === "leader"), "leader emits shared:serve");
+    stopL(); stopF(); lq.dispose(); fq.dispose();
+    sL(); leader.dispose(); follower.dispose();
 });

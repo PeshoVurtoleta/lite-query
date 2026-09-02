@@ -454,13 +454,16 @@ export function queryClient(options = {}) {
 
     function broadcast(msg) {
         if (!channel || processingRemote) return;
-        try { channel.postMessage(msg); } catch { /* serialization or closed */ }
+        let ok = true;
+        try { channel.postMessage(msg); } catch { ok = false; /* serialization or closed */ }
+        if (feed.hook !== null) emitTab("tab:send", msg.type, ok);   // site 11
     }
 
     function onRemoteMessage(evt) {
         processingRemote = true;
         try {
             const m = evt.data;
+            if (feed.hook !== null) emitTab("tab:receive", (m && m.type) || null, false);   // site 12
             switch (m && m.type) {
                 case "setData":    setQueryData(m.key, m.value);    break;
                 case "invalidate": invalidate(m.key, m.opts || {}); break;
@@ -473,7 +476,10 @@ export function queryClient(options = {}) {
                     // its result-broadcast isn't suppressed by processingRemote.
                     if (!sharedFetchActive || !opts.isLeader()) break;
                     const e = entries.get(hashKey(m.key));
-                    if (e && e.fetcher) runFetch(e).catch(noop);
+                    if (e && e.fetcher) {
+                        if (feed.hook !== null) emitEntry("shared:serve", e, 0, "leader");   // site 15
+                        runFetch(e).catch(noop);
+                    }
                     break;
                 }
             }
@@ -598,7 +604,10 @@ export function queryClient(options = {}) {
         entry.gcTimerId = opts.setTimeout(() => {
             entry.gcTimerId = null;
             if (entry.observerCount === 0) {
-                if (entry.abortController) entry.abortController.abort(ABORT_REASON.REMOVED);
+                if (entry.abortController) {
+                    entry.abortController.abort(ABORT_REASON.REMOVED);
+                    if (feed.hook !== null) emitFetch("fetch:abort", entry, entry.fetchGen, false, null, ABORT_REASON.REMOVED);   // site 10 (gc)
+                }
                 entries.delete(entry.keyHash);
                 disposeEntry(entry);
                 notifyWrite();                           // hook site 6: an expired entry leaves the snapshot
@@ -657,6 +666,7 @@ export function queryClient(options = {}) {
             // gate on the generation guard, so a late resolution is harmless.
             if (entry.abortController) {
                 entry.abortController.abort(ABORT_REASON.DETACH);
+                if (feed.hook !== null) emitFetch("fetch:abort", entry, entry.fetchGen, false, null, ABORT_REASON.DETACH);   // site 10 (detach)
                 entry.abortController = null;
                 entry.promise = null;
                 entry.fetching.set(false);
@@ -716,6 +726,7 @@ export function queryClient(options = {}) {
             setStatus(entry, "pending");
         }
         broadcast({ type: "fetch-req", key: entry.key });
+        if (feed.hook !== null) emitEntry("shared:request", entry, 0, "follower");   // site 13
         clearSharedTimer(entry);
         entry.sharedFallbackTimer = opts.setTimeout(() => {
             entry.sharedFallbackTimer = null;
@@ -723,6 +734,7 @@ export function queryClient(options = {}) {
             // arrival path (setQueryData) would have cleared it otherwise.
             // Self-fetch so the UI never hangs.
             if (entry.observerCount > 0 && entry.promise === null) {
+                if (feed.hook !== null) emitEntry("shared:fallback", entry, 0, "follower-timeout");   // site 14
                 runFetch(entry).catch(noop);
             }
         }, opts.sharedFetchTimeout);
@@ -746,6 +758,7 @@ export function queryClient(options = {}) {
         // be filtered by the generation guard below.
         if (entry.abortController) {
             entry.abortController.abort(ABORT_REASON.REFETCH);
+            if (feed.hook !== null) emitFetch("fetch:abort", entry, entry.fetchGen, false, null, ABORT_REASON.REFETCH);   // site 10 (supersede)
         }
 
         const gen = ++entry.fetchGen;
@@ -756,6 +769,8 @@ export function queryClient(options = {}) {
         const startCursor = entry.isInfinite ? entry.nextCursor : undefined;
         const ac = new AbortController();
         entry.abortController = ac;
+        if (feed.hook !== null) emitFetch("fetch:dispatch", entry, gen, false,   // site 8
+            entry.isInfinite ? startCursor : null, force ? "force" : null);
         entry.fetching.set(true);
         if (entry.data() === undefined && entry.status() !== "error") {
             setStatus(entry, "pending");
@@ -768,6 +783,7 @@ export function queryClient(options = {}) {
         if (entry.timeout != null && isFinite(entry.timeout)) {
             timeoutId = opts.setTimeout(() => {
                 ac.abort(ABORT_REASON.TIMEOUT);
+                if (feed.hook !== null) emitFetch("fetch:abort", entry, gen, false, null, ABORT_REASON.TIMEOUT);   // site 10 (timeout)
             }, entry.timeout);
             if (timeoutId && typeof timeoutId.unref === "function") {
                 timeoutId.unref();
@@ -834,6 +850,7 @@ export function queryClient(options = {}) {
                     entry.promise = null;
                     entry.abortController = null;
                     notifyWrite();                       // hook site 3: commitPage-throw returns before site 2
+                    if (feed.hook !== null) emitFetch("fetch:settle", entry, gen, false, commitErr, "commit-throw");   // site 9b
                     return Promise.reject(commitErr);
                 }
             }
@@ -863,6 +880,8 @@ export function queryClient(options = {}) {
             entry.promise = null;
             entry.abortController = null;
             notifyWrite();                               // hook site 2: settle -- success AND error uniformly
+            if (feed.hook !== null) emitFetch("fetch:settle", entry, gen, outcome.ok,   // site 9a
+                outcome.ok ? outcome.data : outcome.err, null);
 
             // Mid-flight invalidation follow-up (option b: let-finish + refetch).
             if (
@@ -978,7 +997,10 @@ export function queryClient(options = {}) {
         let removed = 0;
         for (const [h, e] of [...entries]) {
             if (!keyMatches(e.key, key, exact)) continue;
-            if (e.abortController) e.abortController.abort(ABORT_REASON.REMOVED);
+            if (e.abortController) {
+                e.abortController.abort(ABORT_REASON.REMOVED);
+                if (feed.hook !== null) emitFetch("fetch:abort", e, e.fetchGen, false, null, ABORT_REASON.REMOVED);   // site 10 (removeQueries)
+            }
             cancelGc(e);
             clearSharedTimer(e);
             entries.delete(h);
@@ -993,7 +1015,10 @@ export function queryClient(options = {}) {
     function clear() {
         const had = entries.size > 0;
         for (const e of entries.values()) {
-            if (e.abortController) e.abortController.abort(ABORT_REASON.REMOVED);
+            if (e.abortController) {
+                e.abortController.abort(ABORT_REASON.REMOVED);
+                if (feed.hook !== null) emitFetch("fetch:abort", e, e.fetchGen, false, null, ABORT_REASON.REMOVED);   // site 10 (clear)
+            }
             cancelGc(e);
             clearSharedTimer(e);
             disposeEntry(e);
