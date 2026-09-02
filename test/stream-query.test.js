@@ -472,3 +472,72 @@ test("parity: abort is not an error (detach/restart/removeQueries)", async () =>
     assert.notEqual(sqm.status(), "error", "removeQueries abort is not an error");
     stopM(); sqm.dispose();
 });
+
+// ---------------------------------------------------------------------------
+// QA boundary sweep (Q3 QA pass). Added below the frozen parity suite; none
+// of the tests above are edited. Each covers an accessor/mode boundary the
+// C4 collapse touched (droppedCount plumbing, mode/maxBuffer pass-through)
+// that the existing suite exercises adjacent to, but not directly.
+// ---------------------------------------------------------------------------
+
+test("QA: droppedCount() after dispose() reads 0, does not throw", async () => {
+    const qc = queryClient({ defaultStaleTime: 0 });
+    const c = makeController();
+    const sq = streamQuery(qc, { key: ["qa-dispose"], stream: c.factory, mode: "buffer", maxBuffer: 3 });
+    const stop = effect(() => sq.data());
+    await tick();
+    for (const v of [1, 2, 3, 4, 5]) { c.push(v); await tick(); }
+    assert.equal(sq.droppedCount(), 2, "sanity: dropped before dispose");
+    stop(); sq.dispose();
+    assert.doesNotThrow(() => sq.droppedCount(), "reading droppedCount() post-dispose must not throw");
+    assert.equal(sq.droppedCount(), 0, "post-dispose droppedCount() reads 0 (no live entry)");
+    // duplicate dispose must also be a safe no-op
+    assert.doesNotThrow(() => sq.dispose(), "duplicate dispose() must not throw");
+});
+
+test("QA: buffer mode with maxBuffer=1 keeps only the newest value", async () => {
+    const qc = queryClient({ defaultStaleTime: 0 });
+    const c = makeController();
+    const sq = streamQuery(qc, { key: ["qa-buf1"], stream: c.factory, mode: "buffer", maxBuffer: 1 });
+    let seen;
+    const stop = effect(() => { seen = sq.data(); });
+    await tick();
+    for (const v of [1, 2, 3]) { c.push(v); await tick(); }
+    assert.deepEqual(seen, [3], "window of 1 holds only the newest value");
+    assert.equal(sq.count(), 3, "count is total values seen");
+    assert.equal(sq.droppedCount(), 2, "3 - 1 = 2 dropped");
+    stop(); sq.dispose();
+});
+
+test("QA: restart() before any frame arrives (in-flight first frame) aborts cleanly and re-establishes", async () => {
+    const qc = queryClient({ defaultStaleTime: 0 });
+    const controllers = [];
+    const sq = streamQuery(qc, {
+        key: ["qa-restart-inflight"],
+        stream: () => { const c = makeController(); controllers.push(c); return c.factory(); },
+    });
+    const stop = effect(() => sq.data());
+    await tick();
+    assert.equal(sq.status(), "pending", "subscribed, zero values -> pending, before restart");
+    sq.restart();
+    await tick();
+    assert.equal(controllers[0].closed, true, "the never-yielded first stream was aborted");
+    assert.equal(controllers.length, 2, "a fresh stream was established");
+    assert.equal(sq.status(), "pending", "still pending -- the new stream has not yielded either");
+    assert.equal(sq.count(), 0, "count stays 0 across a restart before any frame");
+    controllers[1].push(42); await tick();
+    assert.equal(sq.data(), 42, "the post-restart stream delivers normally");
+    stop(); sq.dispose();
+});
+
+test("QA: latest mode droppedCount() stays 0 regardless of value volume", async () => {
+    const qc = queryClient({ defaultStaleTime: 0 });
+    const c = makeController();
+    const sq = streamQuery(qc, { key: ["qa-latest-dropped"], stream: c.factory });
+    const stop = effect(() => sq.data());
+    await tick();
+    for (const v of [1, 2, 3, 4, 5]) { c.push(v); await tick(); }
+    assert.equal(sq.count(), 5, "sanity: all 5 values counted");
+    assert.equal(sq.droppedCount(), 0, "latest mode never drops -- droppedCount() is always 0");
+    stop(); sq.dispose();
+});
