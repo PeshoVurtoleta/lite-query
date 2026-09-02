@@ -1,186 +1,181 @@
-# BRIEF -- Q7 -- lite-query v1.5.0 -- the devtools feed: qc.inspect
+# BRIEF -- Q8 -- lite-query v2.0.0 -- shared streams + offline mutations (the major)
 
-Operator contract for the Q7 pipeline (planner -> coder -> reviewer -> qa).
-Source charter: ROADMAP.md section 5, Q7. This file wins over memory; the
-ROADMAP wins over this file only where this file is silent.
+Operator contract for the Q8 pipeline (planner -> coder -> reviewer -> qa).
+Source charter: ROADMAP.md section 5, Q8 (lines ~940-1085, incl. the SPIKE
+INPUTS recorded 2026-09-02). This file wins over memory; the ROADMAP wins over
+this file only where this file is silent.
 
 ---
 package: "@zakkster/lite-query"
-session: Q7
-status: shipped (2026-09-02; C1-C8 + QD-1..QD-4; reviewer DELTA APPROVED after one REJECTED, QA PASS; suite 314, GATE byte-identical, controls 5/5; drill sites=3/27 tests=314/0 pack 92.5 kB; operator publish 8b6743c; registry artifact verified)
-version_target: 1.5.0       # stamped by the /release drill, NOT in-session (OR-1)
-tests_min: 278              # floor; suite is 268 at session start
+session: Q8
+status: planned
+version_target: 2.0.0       # stamped by the /release drill, NOT in-session (OR-1)
+tests_min: 354              # floor; suite is 314 at session start
 skip_max: 0
-torture: "law harness ok; phase H gated TWICE -- hook absent and hook installed"
-depends_on: [Q6 (shipped 1.4.0, operator publish e2f07ba)]
-blocks: [Q8]
-downstream: "lite-studio's cache panel (their repo, their session) -- consumes the
-  feed's vocabulary; no import in either direction, ever"
-carry_from_q6: "findings-clause torture control STILL uncontrolled after three
-  attempts (Q5 A/B, Q6 C; INCONCLUSIVE.md holds all three verbatim); attempt D
-  rides the inspect install/uninstall lifecycle (OR-10)"
+torture: "law harness ok + leader-failover stream soak + 5-tab N-tab soak"
+depends_on: [Q7 (shipped 1.5.0, operator publish 8b6743c)]
+downstream: "lite-stream LS4 (v1.4.0, status: gated) -- THEIR gate IS our
+  session-start spike ruling; recorded on both sides (their ROADMAP ~120-126:
+  'Their spike is our tripwire'). The verdict lands in BOTH roadmaps before
+  any follower-window code is written."
+carry_from_q7: "findings-clause torture control STILL uncontrolled after four
+  attempts (Q5 A/B, Q6 C, Q7 D; INCONCLUSIVE.md holds all four verbatim + the
+  QD-4 postscript); attempt E rides the offline-queue teardown or the
+  leader-failover surface (OR-10)"
 ---
 
 ## PURPOSE
 
-Observability with a zero-cost off switch. SPEC.md promised devtools; the
-panel belongs to lite-studio -- what lite-query owes the ecosystem is the
-FEED: a push-mode stream of cache truth a panel can render. The entire design
-tension is the off switch: law 4 says the hot path buys nothing it does not
-use, so the uninstalled branch is the product. This release also carries the
-Cookbook cross-review fix already committed at 033e670 (OR-2).
+The strategic sequel the 1.1.0 streaming work was built to enable, and the
+LAST session of the eight. Shared fetch collapsed N tabs to one request; a
+shared stream collapses N tabs to one SSE/websocket connection: the leader
+owns the iterator and broadcasts frames, followers project them into their
+local caches. Plus the offline mutation queue with replay-on-reconnect. Both
+are semantics-heavy -- which is exactly why they ride a major, alone, AFTER
+the Q7 feed exists to make their failure modes observable.
 
 ## TASKS
 
-- T1 -- Feed core. `qc.inspect(hook)` installs ONE hook (single slot, not a
-  list -- a panel multiplexes; the hook-array rejection is recorded and
-  tested), returns an idempotent uninstall function. Every emit site is one
-  predictable `!== null` branch; nothing -- no object, no array, no string,
-  no arguments building -- is constructed before that test passes.
-- T2 -- Event classes, from the charter verbatim: entry lifecycle
-  (create/attach/detach/gc/remove), status + staleness transitions, fetch
-  dispatch/settle/abort (with reason), cross-tab send/receive, sharedFetch
-  leader/follower events, stream start/value/done/error, mutation lifecycle,
-  hydrate / persist save. The planner enumerates the exact emit-site list
-  against Query.js the way Q6's V4 pinned the six write sites -- every site
-  named, every non-site recorded with a reason.
-- T3 -- The event-object DECISION. Charter offers two designs: (a)
-  preallocated + reused per event type (the hook must copy what it keeps --
-  the zero-GC feed contract, documented loudly); (b) allocated only when a
-  hook is installed. The lite-signal integer-opcode precedent (OR-3) is on
-  the record as a third data point and the allocation bar. Planner recommends
-  with rationale; phase H measures BOTH candidate costs; the decision and the
-  measured numbers land in the CHANGELOG head (OR-6).
-- T4 -- Fuzzer assertion mode. The existing cache fuzzer gains an
-  events-consistency mode: the observed stream must form a consistent state
-  machine (no detach without attach, no settle without dispatch, no
-  stream value after done, no event after its entry's remove/gc except
-  create). Feed coverage of every lifecycle the fuzzer can provoke is a gate
-  (G4), not a hope.
-- T5 -- Torture. Phase H runs the full warm loop TWICE -- hook absent, and
-  hook installed with a no-op copying hook. Both hold maxMajor 0; the absent
-  run shows zero added allocation vs the Q6 baseline and the byte-frozen GATE
-  line; both numbers recorded in bench provenance (G3). OR-10 findings-clause
-  attempt D through the install/uninstall lifecycle.
-- T6 -- Docs pass. README (short "Devtools feed" section + pointer to
-  lite-studio, no panel promises), llms.txt (scope line flips; full event
-  vocabulary table), d.ts (event union + inspect signature), Cookbook recipe
-  20: a console logger in 10 lines. CHANGELOG `[1.5.0]` head records every OR
-  decision, the T3 measured numbers, AND the Fixed lines for the four
-  bake-facing Cookbook sample defects fixed at 033e670 (OR-2).
+- T0 -- THE SPIKE, before any spec (OR-2). Paper-spike the failover matrix
+  against the REAL sharedFetch/crossTab machinery in Query.js; confirm SPIKE
+  INPUT facts 1-3 (charter lines ~1015-1023) against the actual design
+  sketch; rule each LS4 candidate (push-writer / idleTimeout / share) as
+  lite-stream vs lite-query vs nowhere, overturning a provisional verdict
+  only with a named matrix cell; rule the SEQUENCING (OR-5); then
+  STOP-DECISION-1: ship as one 2.0, or split (2.0 shared streams, 2.1
+  offline mutations). The charter's lean is on the record: "Do not let the
+  queue ride an unfinished failover story."
+- T1 -- Shared streams. Leader owns the one iterator and broadcasts frames;
+  followers project frames into their local entry (no follower ever holds an
+  iterator). Reuse the sharedFetch machinery: same isLeader oracle, same
+  fallback-timer liveness discipline (OR-3).
+- T2 -- Failover matrix, each cell a NAMED test: leader closes gracefully /
+  leader tab killed / leader hung (frames stop, channel alive) / follower
+  promoted mid-buffer / two tabs racing promotion / stream completes during
+  failover / stream errors during failover. A promoted follower starts a
+  FRESH iterator; nothing adopts a dead leader's iterator mid-flight.
+- T3 -- Buffer-mode semantics across tabs: followers receive the same
+  windowed view discipline (maxBuffer, droppedCount) as a local stream; a
+  slow follower cannot grow the leader's memory -- bound it, count drops,
+  assert the bound in torture (G5).
+- T4 -- Offline mutation queue, IF in the ratified scope (OR-6): explicit
+  opt-in per mutation; durable via the Q6 persistence seam, version-stamped;
+  replay preserves order per key, surfaces per-item results, and DROPS
+  (never silently retries) items whose entries no longer exist; replay is
+  observable via the Q7 feed.
+- T5 -- Torture. Leader-failover stream soak + the N-tab soak: 5 simulated
+  tabs, ONE upstream connection at all times (assert the connection count at
+  the mock source), kill the leader every k ops, frames neither duplicated
+  nor reordered in any follower, pool baseline in every tab. The frozen GATE
+  window stays byte-identical (Q7 ON-2 precedent: new soaks print after the
+  frozen gate evaluation). OR-10 attempt E.
+- T6 -- Docs pass. README (shared streams + queue sections), llms.txt (the
+  liveness sentence extended to streams and still TRUE, full new surface),
+  d.ts, Cookbook recipes, CHANGELOG `[2.0.0]` head with the BREAKING section
+  + migration notes per suite drill (OR-7). The LS4 verdict recorded in both
+  roadmaps; if the push-writer survives, the parity assertion + frame-shape
+  corpus are handed to lite-stream BEFORE LS4 codes (OR-5).
 
 ## OPERATOR RULINGS
 
 - OR-1 (standing PR-1). No in-session version stamp. package.json and the
-  Query.js VERSION const stay 1.4.0 (the sync guard couples them); the
-  CHANGELOG `[1.5.0]` head lands in-session; the /release 1.5.0 drill
-  performs the stamp across its sites after the pipeline closes.
-- OR-2 (user ruling, 2026-09-02: "cookbook will fold here"). No 1.4.1 docs
-  patch. The four bake-facing Cookbook sample fixes (commit 033e670 --
-  kebab-case subpath + root import, RangeReader.open over HTTPRangeAdapter,
-  columnar prefetchRange/syncRange rewrite, unpooled-Buffer slice) ship with
-  1.5.0 and are recorded as Fixed lines in the `[1.5.0]` head. The verbatim
-  bake floors quote (Cookbook recipe 18) remains untouchable.
-- OR-3 vocabulary provenance (verified at source today; do not invent from
-  memory). The charter's pointer resolves one repo deeper than it says:
-  lite-studio consumes lite-devtools -- `watchGraph`, `track`, `leakWatch`
-  are lite-devtools' API over lite-signal's engine hook. The conventions Q7
-  MIRRORS, read from lite-devtools/llms.txt and lite-signal/llms.txt
-  2026-09-02: flat event objects with a lower-case string `type`
-  discriminant and a `ts` stamp (performance.now() if available, else
-  Date.now()); push surfaces return an IDEMPOTENT stop/uninstall; a single
-  nullable listener behind one branch-predicted null test (lite-signal
-  `onGraphMutation(fn)`, opcodes as three integers, allocation-free dispatch
-  when registered -- the suite's allocation bar for engine-side feeds);
-  observe-only hook contract ("never throw, never mutate"). Mirror the
-  conventions; import NOTHING from either package; restate no version floors
-  of theirs anywhere. The planner re-reads both llms.txt files before
-  freezing event names.
-- OR-4 two seams, never one. Q6's PRIVATE persistHook stays untouched and
-  private: single slot, TypeError on non-function, Error on double-install,
-  `=== fn`-guarded idempotent uninstall (Query.js installPersistHook,
-  ~253-277), notifyWrite() at the six V4 sites. `qc.inspect` is a NEW,
-  INDEPENDENT single slot with the SAME install/uninstall semantics
-  (mirror the in-repo precedent, including the two throw shapes). Installing
-  or uninstalling either hook never affects the other -- a devtools panel
-  must not be able to evict the persistence adapter, or vice versa. The
-  public feed REPORTS persist/hydrate activity as events; the adapter never
-  consumes the public feed.
-- OR-5 zero-cost-uninstalled is a GATE, not a hope (Q6's OR-8 discipline).
-  With no hook installed the warm path allocates exactly what 1.4.0
-  allocates, the GATE line is byte-frozen, and no new per-entry slots appear
-  unless the planner proves one necessary (STOP item, not a license).
-- OR-6 the T3 DECISION belongs to the planner's spec and phase H's numbers.
-  If reused-singleton events win: the hook-must-copy contract is documented
-  in README + llms.txt + d.ts, and a counted test proves two sequential
-  events of one type share object identity with fields overwritten. If
-  allocate-when-installed wins: the installed-run phase H numbers are the
-  documented cost. Either way both measured candidates land in the CHANGELOG
-  head. Hybrids (opcode + reused payload) are admissible if measured.
-- OR-7 dispatch is SYNCHRONOUS at the emit site (the onGraphMutation
-  discipline): no queue, no microtask, no reordering -- the G4 state-machine
-  assertion depends on emission order being the truth. A hook that blocks
-  blocks the app; that is the panel's problem and the docs say so. What a
-  THROWING hook does is the planner's to pin fail-closed (contain vs
-  propagate vs auto-uninstall), with the chosen behavior tested and the
-  rationale recorded -- silent swallowing is not an option.
-- OR-8 events speak lite-query's OWN domain vocabulary, lower-case: entry /
-  fetch / tab / shared / stream / mutation / persist terms we already ship
-  in docs (attach/detach, dispatch/settle/abort, leader/follower). Where a
-  concept collides with lite-devtools' naming (their connect/disconnect vs
-  our attach/detach), our shipped domain vocabulary WINS -- mirroring means
-  conventions (shape, casing, ts, idempotent uninstall), not renaming our
-  domain. If the planner believes true mirroring demands a rename, that is
-  a STOP item for the operator.
-- OR-9 additive minor. No removal, rename, or behavior change of any 1.4.0
-  surface; the 268 existing tests are contracts and pass UNMODIFIED (any
-  edit to an existing test is a STOP item). Emit-site insertion into
-  functions that also carry notifyWrite() must leave the persist seam's
-  trigger conditions untouched.
-- OR-10 (carry_from_q6). One honest findings-clause control attempt through
-  the NEW surface (candidates: an uninstalled hook closure pinned across
-  install/uninstall cycles; a reused event object retained by a misbehaving
-  hook -- whichever can HONESTLY trip). Outcome recorded in INCONCLUSIVE.md
-  in the same verbatim-attempt style as A/B/C; a control that cannot trip is
-  decorative -- never fake one, never add a ctl that cannot fire.
+  Query.js VERSION const stay 1.5.0; the CHANGELOG `[2.0.0]` head lands
+  in-session; the /release 2.0.0 drill performs the stamp after the pipeline
+  closes.
+- OR-2 spike-first process. The planner runs T0 and returns, in ONE
+  message: (a) the spike verdict (facts confirmed/falsified, LS4 candidate
+  rulings, sequencing ruling), (b) STOP-DECISION-1 -- its scope
+  recommendation with rationale, and (c) the FULL spec for the RECOMMENDED
+  scope (the deferred half's deferral recorded explicitly, never implied).
+  The operator ratifies scope in the PLAN header before any code.
+- OR-3 the liveness law, cited verbatim from llms.txt:180 (verified
+  2026-09-02): "Liveness: if no leader serves within sharedFetchTimeout,
+  the follower self-fetches. Correctness never depends on election state."
+  That sentence is load-bearing for fetch and MUST stay true for streams: a
+  follower that stops receiving frames within a bound self-connects. Any
+  design whose correctness depends on election state is rejected by
+  definition, not by review.
+- OR-4 at-most-once projection. Frame LOSS on failover is permitted and
+  documented; frame DUPLICATION and frame REORDERING are not -- both
+  asserted in the matrix and the N-tab soak. No cell may weaken this to
+  at-least-once to make a test pass.
+- OR-5 the LS4 two-way gate. The spike's candidate verdicts land in BOTH
+  roadmaps (ours here; lite-stream's via the live litestream peer session --
+  the operator relays the verdict; direct edit of ../LiteStream/ROADMAP.md
+  only as fallback). The SEQUENCING ruling is spike output, one of: Q8
+  blocks on LS4 shipping / Q8 proceeds in parallel consuming LS4's pinned
+  parity tests / Q8 hand-rolls the follower window with the parity
+  assertion pinned on our side. The anti-third-copy lean is on record (the
+  charter: same-windowed-discipline is only GUARANTEED by same-code), but a
+  hand-roll with pinned parity is admissible if blocking would strand the
+  session. Version floors, when they exist, are cited from lite-stream's
+  own llms.txt consumer lines -- never session numbers (era-bound law).
+- OR-6 queue semantics (scope-dependent), fail-closed: queueing is explicit
+  opt-in PER MUTATION -- a default that queues silently is fail-open and
+  forbidden; durability rides the Q6 persistence seam with the same
+  version-stamp discipline; replay is order-per-key, per-item observable,
+  and DROPS items whose entries no longer exist (a drop is a surfaced
+  result, never a silent retry).
+- OR-7 breaking budget. The ledger holds NO accumulated deferred-breaking
+  nits (grep-verified 2026-09-02; the planner re-sweeps and confirms). If
+  that holds, the `[2.0.0]` BREAKING section states truthfully that the
+  major rides the new cross-tab semantics and any operator-ratified
+  contract retirements (OR-9), with migration notes regardless. Never
+  invent a break to justify the number.
+- OR-8 the charter's ASSERTIONS line "Suite >= 230" is stale (V10-class);
+  354 governs (this file's tests_min). Corrected in the closeout docs
+  commit, never mid-pipeline.
+- OR-9 the 314 existing tests are contracts. A 2.0 MAY retire one ONLY
+  under an explicit operator-ratified breaking change, each retirement
+  named in the CHANGELOG BREAKING section with its replacement contract;
+  silent edits to existing tests remain forbidden. Everything not
+  explicitly broken stays additive (the Q5-Q7 discipline).
+- OR-10 (carry_from_q7). One honest findings-clause attempt E through the
+  NEW surface (candidates: queue teardown with in-flight replay handles;
+  leader teardown with follower projection buffers). Outcome recorded in
+  INCONCLUSIVE.md in the verbatim-attempt style; a control that cannot trip
+  is decorative -- never fake one.
+- OR-11 transport non-goal (1.1.0 discipline, charter): lite-query
+  coordinates iterators and frames; sockets belong to the caller. No
+  transport ownership, no N-keys-over-one-socket multiplexing (struck by
+  the SPIKE INPUTS unless a named cell resurrects it).
 
 ## GATES
 
-- G1 suite >= 278 pass, 0 fail, 0 skip, under the default `npm test`.
-- G2 law harness: `node --expose-gc test/torture.mjs` prints the byte-frozen
-  GATE line (`GATE leak=size 0/0 findings=0 warnings=0 | gc major=0 minor=0
-  maxMs=0.00 | ok`) then `ok`; all four live controls still trip, plus any
-  honest Q7 addition per OR-10.
-- G3 phase H double-run: hook-absent run byte-identical GATE + zero added
-  allocation vs the Q6 baseline; hook-installed (no-op copying hook) run
-  maxMajor 0; both numbers recorded in bench provenance.
-- G4 fuzzer assertion mode green: the event stream is a consistent state
-  machine across every lifecycle the fuzzer can provoke.
-- G5 every T2 event class fires with its documented shape (counted tests);
-  uninstall stops emission mid-run; double-install throws; hook-array and
-  non-function rejection throw TypeError -- all counted.
-- G6 existing 268 tests pass unmodified (OR-9).
-- G7 drift guards green: ascii guard over every new/edited file; surface
-  guard sees `qc.inspect` + the event union in llms.txt and d.ts.
-- G8 `npm pack --dry-run`: 13 files, test/ + bench/ + INCONCLUSIVE.md + this
-  file absent, llms.txt + CHANGELOG.md + Cookbook.md present.
+- G1 suite >= 354 pass, 0 fail, 0 skip, under the default `npm test`.
+- G2 law harness: the byte-frozen GATE line then `ok`; every live control
+  still trips (5 + any honest Q8 addition per OR-10).
+- G3 failover matrix green, all seven cells named tests.
+- G4 N-tab soak: 5 tabs, connection count === 1 at the mock source through
+  leader churn (kill every k ops), zero duplicated and zero reordered
+  frames in every follower, pool baseline in every tab.
+- G5 the slow-follower bound: leader memory bounded under a stalled
+  follower, drops counted, asserted in torture.
+- G6 (scope-dependent) airplane-mode script: dispatch offline -> reload ->
+  reconnect replays in order, exactly once each, observable via the feed.
+- G7 drift guards green (ascii, surface guard over llms.txt + d.ts).
+- G8 `npm pack --dry-run`: file list per the ratified spec (13 today; any
+  change is a named spec decision, not drift), test/ bench/ INCONCLUSIVE.md
+  BRIEF.md PLAN.md absent, llms.txt + CHANGELOG.md + Cookbook.md present.
+- G9 the LS4 verdict is recorded in both roadmaps BEFORE the coder writes
+  follower-window code.
 
 ## NON-GOALS
 
-- No UI, no formatting, no serialization of the feed (the panel's job).
-- No ring buffer, no history, no replay (panel's job).
-- No second hook, no hook arrays, no per-event subscriptions (a panel
-  multiplexes; rejection recorded and tested).
-- The persistence adapter never rides the public feed (OR-4).
-- No async dispatch, no event queue (OR-7).
-- No new deps of any kind; no imports from lite-devtools / lite-studio.
-- No focus/reconnect triggers (still parked; still no consumer).
+- Whatever STOP-DECISION-1 defers -- recorded in the ROADMAP explicitly,
+  never implied.
+- No transport ownership; no socket multiplexing (OR-11).
+- No silent queueing default (OR-6).
+- No second feed hook, no feed changes beyond new event coverage for the
+  new semantics (vocabulary grows additively if the spec needs it; the
+  10-key record shape is frozen).
 - No version stamp in-session (OR-1).
 
 ## DONE WHEN
 
-A lite-studio cache panel could be built against the feed without touching
-lite-query internals; an app that never calls `inspect()` pays nothing
-measurable (numbers on the record); suite >= 278 with the GATE
-byte-identical; `[1.5.0]` head landed including the 033e670 Cookbook Fixed
-lines. Then: awaiting /release 1.5.0 + operator publish per OR-1.
+Five open tabs hold one upstream connection through leader churn without
+frame duplication or reordering; queued mutations (if in scope) survive a
+reload and replay exactly once, observably; suite >= 354 with the GATE
+byte-identical; `[2.0.0]` head + migration notes landed; the LS4 gate is
+flipped on both sides. Then: awaiting /release 2.0.0 + operator publish per
+OR-1 -- the eighth and final rung of the ladder.
