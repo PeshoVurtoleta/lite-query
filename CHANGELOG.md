@@ -5,6 +5,114 @@ All notable changes to `@zakkster/lite-query` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] -- unreleased
+
+Persistence: a dehydrate/hydrate primitive and a `persistQueryClient` adapter on
+top, built in that order. Instant cold start, fail-closed. No version stamp
+lands in this changelog entry: per OR-1, `package.json` and the `VERSION` const
+stay `1.3.0`; the `/release 1.4.0` drill performs the stamp across its sites
+after the pipeline closes.
+
+### Added
+
+- `qc.dehydrate() -> { entries }` -- a plain-JSON snapshot of the SUCCESS entries
+  only (cold path; walks the whole map, OR-8). Pending, error, and stream entries
+  are never serialized (a promise, a failure, a live connection are not data --
+  both exclusions tested). The state has exactly one own key `entries`; each
+  record is monomorphic with exactly four own keys `{ key, data, dataUpdatedAt,
+  infinite }`. `dataUpdatedAt` reuses the entry's existing staleness timestamp
+  slot (`lastCompletedAt`) -- no new per-entry slot (OR-8). An infinite record
+  carries a shallow copy of its pages array; `key` / `data` / page contents are
+  references, not deep copies (aliasing contract, tested). No `version` field --
+  the adapter stamps `{ version, state }` (OR-6).
+- `qc.hydrate(state) -> { ok, count, reason }` -- boot-only, all-or-nothing cache
+  restore (OR-2/OR-3). Validation runs over the whole payload before any
+  mutation. Reason codes (stable, ASCII): `malformed-state`, `malformed-entries`,
+  `malformed-entry`, `malformed-key`, `malformed-data`, `malformed-timestamp`,
+  `malformed-pages`, `duplicate-key`. Seeded entries are stale-aware and arm the
+  normal cacheTime GC; hydrate never broadcasts and never fires the write hook.
+- `persistQueryClient(qc, { save, load, version, throttle? }) -> { restored,
+  flush, stop }` -- a CORE export (OR-5), storage-agnostic thunks, zero new deps.
+  Install validation is fail-closed: `save`/`load` must be functions; `version`
+  is REQUIRED with no default (string/number, strict `===` at compare);
+  `throttle ?? 1000` must be finite `>= 0`; a second install on the same client
+  throws (single-slot seam). `handle.restored` always RESOLVES (never rejects)
+  with `{ status: "restored" | "empty" | "dropped", count, reason }`; reasons are
+  `null | "load-threw" | "malformed-envelope" | "version-mismatch" |
+  "cache-not-empty" | <hydrate reason code>`. Restore reads once on install,
+  before any observer attaches; the write hook is armed only AFTER the outcome
+  settles, in all three branches, so seeding can never trigger a save. The
+  envelope is exactly `{ version, state }` (two own keys).
+- Infinite round-trip (OR-4/ON-1): dehydrate marks the entry and carries a copy
+  of its pages; hydrate rebuilds pages + flat with `hasNext` false and
+  `getNextCursor` null (fail closed -- an unattached restored list cannot
+  auto-fetch at a wrong cursor). The first `infiniteQuery` attach adopts it: a
+  new branch in `configure()`, keyed on the unambiguous state `entry.isInfinite
+  && entry.getNextCursor === null`, installs `getNextCursor` and recomputes the
+  cursor/hasNext from the restored pages via a `recomputeCursor` helper extracted
+  from `rebuildInfinite` (one cursor-recompute site in the file, not two). A
+  `getNextCursor` that throws at adoption is contained fail-closed: reset to a
+  clean page-one fetch, never a wedge.
+
+### Contracts (fail-closed)
+
+- Throw/return asymmetry (ON-3a): `hydrate` THROWS only on the empty-cache
+  precondition (a programming error -- the ABA bug of this domain; the error
+  message names it and counts entries, not observers) and RETURNS `{ ok: false,
+  count: 0, reason }` for a malformed stored payload (external data). This
+  mirrors `setQueryData`'s local-throw / remote-drop law.
+- Timestamp clamp (ON-3b): a seeded `lastCompletedAt = Math.min(dataUpdatedAt,
+  now())` -- a FINITE future timestamp is clamped to our clock (bounds freshness
+  at one staleTime from boot, never invents data); a NON-finite `dataUpdatedAt`
+  (NaN, Infinity, string, missing) is `malformed-timestamp` and drops the WHOLE
+  payload (the boundary is finite-vs-not).
+- Flush-on-stop (OR-7/ON-3c), no opt-out: a pending throttle timer means a
+  committed cache write is not yet on disk, and `stop()` fires at teardown /
+  logout / dispose -- so it flushes the pending save, then uninstalls the hook
+  and clears the timer. The documented logout path is `qc.clear()` then `stop()`,
+  which persists emptiness (clear is a write hook site). `save()` rejections are
+  contained; the timer is nulled before the flush builds state, so a write during
+  `save()` opens a fresh window.
+- Private write seam (OR-5): a single-slot `persistHook` on the client, fired by
+  `notifyWrite()` at exactly SIX commit/settle sites -- `setQueryData` (covers
+  every remote apply), `runFetch` settle (success and error uniformly), the
+  `runFetch` commitPage-throw branch (returns before the settle site),
+  `removeQueries` (only when `>= 1` entry matched), `clear` (only when the map
+  was non-empty), and the cacheTime GC timer callback (an expired entry leaves
+  the snapshot). `invalidate` is deliberately NOT a hook site -- it changes no
+  cached content and `invalidatedSinceCompletion` is not serialized; nor are
+  `ensureEntry`, attach/detach, prefetch (its writes land via the settle site),
+  or hydrate seeding (which would re-save what was just loaded). With no adapter
+  installed the warm path is unchanged (the hook is one `persistHook !== null`
+  test at each cold site, none on the warm-read loop -- OR-8/G8).
+- Boot-window / cross-tab safety (OR-2, corrected by ON-2): the earlier OR-2
+  wording said the BroadcastChannel delivers on a "macrotask"; verified against
+  the mock (`test/harness.js`, `queueMicrotask`) it is a MICROTASK, and the real
+  channel a task -- so a strictly synchronous `create qc -> hydrate` cannot
+  observe a queued remote `setData` under either, and the mock is the stricter of
+  the two. An awaited boot that raced a remote `setData` legitimately hits the
+  empty-cache precondition and drops as `cache-not-empty` (a pinned contract, not
+  flake).
+
+### Tests + torture
+
+- 56 new core tests (`test/persist.test.js` 29, `test/persist-conformance.test.js`
+  27); the suite is 259 (was 203), 0 fail, 0 skip. The conformance file mirrors
+  the SHAPE of bake-stream's `test/DehydratedCache.test.js` (Part A round-trip,
+  Part B corruption matrix with a pinned `MATRIX.length` of 21, Part C fail-open
+  witness) and imports nothing from bake.
+- Torture phase H gains a 4096-cycle dehydrate/hydrate/teardown loop through the
+  adapter (install -> restored -> pending throttled save -> flush-on-stop),
+  before the gc settle so live/findings cover it. GATE line unchanged:
+  `GATE leak=size 0/0 findings=0 warnings=0 | gc major=0 minor=0 maxMs=0.00 | ok`.
+  Break-mode controls trip 4/4 (`alloc` / `detach` / `fuzz` / `pages`).
+- OR-11 findings-clause attempt C (INCONCLUSIVE.md): a payload tracked with
+  `{ audit: true }` carried across `persistQueryClient.stop()` with a pending
+  throttled save. It does NOT fire -- the adapter teardown touches no lite-signal
+  owner tree, so it cannot leave the owner-cascade kernel's trip state. No
+  `ctlPersist` control was added (a control that cannot trip is decorative); the
+  clause stays uncontrolled and the non-firing is recorded, not faked.
+
 ## [1.3.0] -- 2026-09-02
 
 Cursor pagination and route-loader prefetch, both first-class. The last honest
