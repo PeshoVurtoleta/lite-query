@@ -2171,6 +2171,13 @@ export function mutation(qc, mutOpts) {
         let ctx;
         let resolvedData;
         let resolvedError;
+        // Rejection is tracked by CONTROL FLOW, never by truthiness (ON-3). A
+        // mutation that rejects with null / 0 / "" / undefined is STILL a
+        // rejection -- "fail closed on every unverified state; null is not
+        // zero". Branching on `if (resolvedError)` would settle those falsy
+        // rejections as success (the retired 1.4.0 quirk). `rejected` is the
+        // one source of truth for every downstream branch.
+        let rejected = false;
 
         // Phase 1: run the mutation (onMutate + fn).
         // We collect outcome into local variables and DON'T let onSuccess /
@@ -2181,13 +2188,15 @@ export function mutation(qc, mutOpts) {
             if (mutOpts.onMutate) ctx = await mutOpts.onMutate(vars);
             resolvedData = await mutOpts.fn(vars);
         } catch (err) {
+            rejected = true;
             resolvedError = err;
         }
 
         // Phase 2: update signals under the gen guard. Only the latest
-        // mutation gets to set state.
+        // mutation gets to set state. Any rejection settles "error" and the
+        // error signal holds the rejection value VERBATIM (falsy included).
         if (gen === mutationGen) {
-            if (resolvedError) {
+            if (rejected) {
                 error.set(resolvedError);
                 status.set("error");
             } else {
@@ -2196,10 +2205,11 @@ export function mutation(qc, mutOpts) {
             }
         }
         // Site 21: emitted UNCONDITIONALLY so the state machine stays total;
-        // reason "superseded" when a later mutate() has already advanced the gen.
+        // ok = not-rejected (never a truthiness read); reason "superseded" when
+        // a later mutate() has already advanced the gen.
         if (feed !== null && feed.hook !== null) {
-            emitClient("mutation:settle", gen, !resolvedError,
-                resolvedError ? resolvedError : resolvedData,
+            emitClient("mutation:settle", gen, !rejected,
+                rejected ? resolvedError : resolvedData,
                 gen !== mutationGen ? "superseded" : null);
         }
 
@@ -2209,7 +2219,7 @@ export function mutation(qc, mutOpts) {
         // which has onSuccess throws cascading to the catch block and firing
         // onError with the callback's error. That's worse than the original.)
         try {
-            if (resolvedError) {
+            if (rejected) {
                 if (mutOpts.onError) await mutOpts.onError(resolvedError, vars, ctx);
             } else {
                 if (mutOpts.onSuccess) await mutOpts.onSuccess(resolvedData, vars, ctx);
@@ -2227,8 +2237,10 @@ export function mutation(qc, mutOpts) {
 
         // Phase 5: the user's awaited promise reflects the fetch outcome,
         // unaffected by callback errors. mutate(varsA) returns A's outcome
-        // even if a later mutate(varsB) is running concurrently.
-        if (resolvedError) throw resolvedError;
+        // even if a later mutate(varsB) is running concurrently. A rejection
+        // re-throws its value verbatim (falsy included) -- control flow, not
+        // truthiness.
+        if (rejected) throw resolvedError;
         return resolvedData;
     }
 
