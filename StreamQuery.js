@@ -84,7 +84,10 @@ function streamQuery(qc, streamOpts) {
         }
     }
 
-    const { ensureEntry, attach, detach, opts } = qc._internal;
+    // feed is the live per-client devtools cell (V2: a `let` in Query.js cannot
+    // cross this subpath boundary, so we read it -- and setStatus -- off the same
+    // _internal object). All stream emit sites are one `feed.hook !== null` test.
+    const { ensureEntry, attach, detach, opts, feed, setStatus, emitStream } = qc._internal;
 
     // -- stream pump ---------------------------------------------------------
     // Pumps the iterator into entry.data via pipeToSignal. Aborts and restarts
@@ -105,7 +108,8 @@ function streamQuery(qc, streamOpts) {
         entry.streamDropped = 0;
         entry.invalidatedSinceCompletion = false;
         entry.error.set(undefined);
-        entry.status.set("pending");
+        setStatus(entry, "pending");
+        if (feed.hook !== null) emitStream("stream:start", entry, 0, false, null, null);   // site 16
 
         const ac = new AbortController();
         let source;
@@ -113,7 +117,8 @@ function streamQuery(qc, streamOpts) {
             source = streamOpts.stream({ key: entry.key, signal: ac.signal });
         } catch (err) {
             entry.error.set(err);
-            entry.status.set("error");
+            setStatus(entry, "error");
+            if (feed.hook !== null) emitStream("stream:error", entry, entry.streamCount, false, err, "open");   // site 19 (factory throw)
             return;
         }
 
@@ -129,16 +134,18 @@ function streamQuery(qc, streamOpts) {
             // maxBuffer is meaningful only in buffer mode; lite-stream fails
             // closed if it is passed with mode "latest".
             maxBuffer: mode === "buffer" ? maxBuffer : undefined,
-            onValue: () => {
-                if (entry.streamCount === 0) entry.status.set("streaming");
+            onValue: (v) => {
+                if (entry.streamCount === 0) setStatus(entry, "streaming");
                 entry.streamCount = (entry.streamCount + 1) | 0;
+                if (feed.hook !== null) emitStream("stream:value", entry, entry.streamCount, false, v, null);   // site 17
             },
             onError: (err) => {
                 // A genuine iterator failure. Snapshot the final drop count so
                 // droppedCount() stays stable after teardown.
                 entry.streamDropped = stop.droppedCount;
                 entry.error.set(err);
-                entry.status.set("error");
+                setStatus(entry, "error");
+                if (feed.hook !== null) emitStream("stream:error", entry, entry.streamCount, false, err, "iterator");   // site 19 (iterator)
                 entry.streamStop = null;
                 entry.streamRestart = null;
             },
@@ -153,8 +160,9 @@ function streamQuery(qc, streamOpts) {
             },
             onDone: () => {
                 entry.streamDropped = stop.droppedCount;
-                entry.status.set("success");
+                setStatus(entry, "success");
                 entry.lastCompletedAt = opts.now();
+                if (feed.hook !== null) emitStream("stream:done", entry, entry.streamCount, true, null, null);   // site 18
                 entry.streamStop = null;
                 entry.streamRestart = null;
             },
