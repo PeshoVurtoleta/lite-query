@@ -726,6 +726,32 @@ export function queryClient(options = {}) {
         broadcast({ type: "clear" });
     }
 
+    // Warm an entry into the cache with zero observers -- a route-loader /
+    // hover speculation primitive. The entry fetches (unless already fresh) and
+    // then GCs after cacheTime exactly like an observed one whose observers all
+    // left; a later query() with the same key adopts it (no refetch if fresh).
+    //
+    // OR-4: prefetch of an already-fresh entry is a NO-OP -- no fetch is issued
+    // and the pending cacheTime GC is NOT re-armed (ensureEntry scheduled it
+    // once at creation; a fresh hit must not extend the entry's lease). A
+    // `force` variant is deferred until a consumer needs it.
+    function prefetch(key, fetcher, prefetchOpts = {}) {
+        const e = ensureEntry(key);
+        if (fetcher && !e.fetcher) e.fetcher = fetcher;
+        if (prefetchOpts.staleTime  !== undefined) e.staleTime  = prefetchOpts.staleTime;
+        if (prefetchOpts.cacheTime  !== undefined) e.cacheTime  = prefetchOpts.cacheTime;
+        if (prefetchOpts.timeout    !== undefined) e.timeout    = prefetchOpts.timeout;
+        if (prefetchOpts.retry      !== undefined) e.retry      = prefetchOpts.retry;
+        if (prefetchOpts.retryDelay !== undefined) e.retryDelay = prefetchOpts.retryDelay;
+        if (!e.fetcher) return Promise.resolve(undefined);
+        if (!shouldFetch(e)) {
+            // Fresh -> no-op. Return the in-flight promise if one exists, else
+            // the current data; never re-arm GC, never issue a fetch.
+            return e.promise || Promise.resolve(untrack(() => e.data()));
+        }
+        return runFetch(e).catch(noop);
+    }
+
     // Dispose the entire client. Releases the BroadcastChannel listener which
     // would otherwise keep the client + its entire cache map alive in
     // scenarios where clients are created and discarded -- testing,
@@ -748,6 +774,7 @@ export function queryClient(options = {}) {
         invalidate,
         removeQueries,
         clear,
+        prefetch,
         dispose,
         // Internal API consumed by query()/mutation(). Not part of the public
         // surface; documented as such in llms.txt.

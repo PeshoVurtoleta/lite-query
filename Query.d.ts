@@ -138,6 +138,24 @@ export interface QueryClient {
     /** Empty the entire cache. Cross-tab propagating when enabled. */
     clear(): void;
 
+    /**
+     * Warm an entry into the cache with zero observers (route loaders, hover
+     * speculation). Fetches unless the entry is already fresh; a later query()
+     * with the same key adopts it without refetching. Prefetch of a fresh
+     * entry is a NO-OP -- no fetch, no cacheTime GC re-arm.
+     */
+    prefetch<T = unknown, K extends readonly unknown[] = readonly unknown[]>(
+        key: K,
+        fetcher: Fetcher<T, K>,
+        opts?: {
+            staleTime?: number;
+            cacheTime?: number;
+            timeout?: number;
+            retry?: RetryPolicy;
+            retryDelay?: RetryDelay;
+        },
+    ): Promise<T | undefined>;
+
     /** Clear the cache and close the BroadcastChannel listener. */
     dispose(): void;
 }

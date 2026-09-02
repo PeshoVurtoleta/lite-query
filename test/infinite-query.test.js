@@ -259,3 +259,70 @@ test("infiniteQuery: the enabled gate holds the query idle until flipped", async
     stop();
     qc.dispose();
 });
+
+test("infiniteQuery: cross-tab page write syncs the whole list to a peer entry", async () => {
+    const { BroadcastChannel: BC, reset } = createMockBroadcastChannel();
+    const A = queryClient({ broadcastChannel: BC, crossTab: true, crossTabChannel: "pg", defaultStaleTime: 0 });
+    const B = queryClient({ broadcastChannel: BC, crossTab: true, crossTabChannel: "pg", defaultStaleTime: 0 });
+    // B observes an infinite entry; its fetcher never resolves so the only way
+    // pages appear is the cross-tab whole-list write from A.
+    const qB = infiniteQuery(B, {
+        key: ["feed"],
+        fetcher: () => new Promise(() => {}),
+        getNextCursor: (lastPage, allPages) => allPages.length,
+    });
+    const stop = effect(() => qB.data());
+    await tick();
+    A.setQueryData(["feed"], [["x", "y"], ["z"]]);
+    for (let i = 0; i < 4; i++) await tick();
+    assert.deepEqual(qB.pages(), [["x", "y"], ["z"]], "peer adopts the pages array");
+    assert.deepEqual(qB.data(), ["x", "y", "z"], "peer rebuilds the flat view");
+    stop();
+    A.dispose();
+    B.dispose();
+    reset();
+});
+
+// -----------------------------------------------------------------------------
+// C2 -- qc.prefetch
+// -----------------------------------------------------------------------------
+
+test("prefetch: a later query() adopts the entry with zero refetch", async () => {
+    const qc = queryClient({ defaultStaleTime: 60_000 });
+    let calls = 0;
+    const fetcher = () => { calls++; return Promise.resolve("v"); };
+    await qc.prefetch(["u", 1], fetcher);
+    assert.equal(calls, 1);
+    const q = query(qc, { key: ["u", 1], fetcher });
+    const stop = effect(() => q.data());
+    await tick();
+    assert.equal(q.data(), "v");
+    assert.equal(calls, 1, "adoption served the prefetched entry, no refetch");
+    stop();
+    qc.dispose();
+});
+
+test("prefetch: prefetching an already-fresh entry is a no-op", async () => {
+    const qc = queryClient({ defaultStaleTime: 60_000 });
+    let calls = 0;
+    const fetcher = () => { calls++; return Promise.resolve(1); };
+    await qc.prefetch(["k"], fetcher);
+    assert.equal(calls, 1);
+    await qc.prefetch(["k"], fetcher);
+    assert.equal(calls, 1, "fresh entry: no second fetch");
+    qc.dispose();
+});
+
+test("prefetch: an unobserved prefetched entry GCs at cacheTime", async () => {
+    const clock = createMockClock();
+    const qc = queryClient({
+        now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
+        defaultCacheTime: 1000, defaultStaleTime: 0,
+    });
+    await qc.prefetch(["g"], () => Promise.resolve(42));
+    await tick();
+    assert.equal(qc.getQueryData(["g"]), 42);
+    clock.advance(1001);
+    assert.equal(qc.getQueryData(["g"]), undefined, "no observer ever attached -> GC removes it");
+    qc.dispose();
+});
