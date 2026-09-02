@@ -1218,7 +1218,10 @@ export function queryClient(options = {}) {
             throw err;
         }
         const v = validateHydrateState(state);
-        if (v.reason !== null) return { ok: false, count: 0, reason: v.reason };
+        if (v.reason !== null) {
+            if (feed.hook !== null) emitClient("persist:hydrate", 0, false, null, v.reason);   // site 22 (validation drop)
+            return { ok: false, count: 0, reason: v.reason };
+        }
         // Seed ONLY from the materialized snapshot -- never the caller's objects
         // again (QD-2/QD-5): the entry is keyed by the VALIDATED hash
         // (record.keyHash), so seeding reads no caller object and cannot re-walk
@@ -1243,8 +1246,10 @@ export function queryClient(options = {}) {
                 disposeEntry(e);
                 if (feed.hook !== null) emitEntry("entry:remove", e, 0, "hydrate-rollback");   // site 5c
             }
+            if (feed.hook !== null) emitClient("persist:hydrate", 0, false, null, "malformed-entry");   // site 22 (rollback drop)
             return { ok: false, count: 0, reason: "malformed-entry" };
         }
+        if (feed.hook !== null) emitClient("persist:hydrate", v.records.length, true, null, null);   // site 22 (ok)
         return { ok: true, count: v.records.length, reason: null };
     }
 
@@ -1283,7 +1288,7 @@ export function queryClient(options = {}) {
         // Not part of the public surface; documented as such in llms.txt. `feed`
         // is the live per-client cell (V2: a `let` cannot cross the subpath
         // boundary, so the subpath reads the same object through _internal).
-        _internal: { entries, ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, opts, installPersistHook, feed, setStatus, emitStream },
+        _internal: { entries, ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, opts, installPersistHook, feed, setStatus, emitStream, emitClient },
     };
 }
 
@@ -1758,6 +1763,14 @@ export function mutation(qc, mutOpts) {
     const error = signal(undefined);
     const status = signal("idle");
 
+    // Devtools feed access, read fail-closed at construction (V8: mutation()
+    // never otherwise touches qc, and a stub-client first arg must not throw --
+    // C6.0 confirmed no test passes a non-client, but the guard costs nothing and
+    // keeps a fake qc from wedging the mutation). null feed -> no emit, no throw.
+    const _mi = qc && qc._internal;
+    const feed = _mi ? _mi.feed : null;
+    const emitClient = _mi ? _mi.emitClient : null;
+
     // mutationGen mirrors the fetchGen pattern used in queries. Two rapid
     // mutate() calls -- slow first, fast second -- must not let the first one
     // overwrite the second's settled state. Gen-guarding the SIGNAL writes
@@ -1774,6 +1787,7 @@ export function mutation(qc, mutOpts) {
         // generation by definition, so no gen check needed here.
         status.set("pending");
         error.set(undefined);
+        if (feed !== null && feed.hook !== null) emitClient("mutation:start", gen, false, vars, null);   // site 20
 
         let ctx;
         let resolvedData;
@@ -1801,6 +1815,13 @@ export function mutation(qc, mutOpts) {
                 data.set(resolvedData);
                 status.set("success");
             }
+        }
+        // Site 21: emitted UNCONDITIONALLY so the state machine stays total;
+        // reason "superseded" when a later mutate() has already advanced the gen.
+        if (feed !== null && feed.hook !== null) {
+            emitClient("mutation:settle", gen, !resolvedError,
+                resolvedError ? resolvedError : resolvedData,
+                gen !== mutationGen ? "superseded" : null);
         }
 
         // Phase 3: side-effect callbacks. Errors are contained -- a buggy
@@ -1910,6 +1931,11 @@ export function persistQueryClient(qc, persistOpts) {
     persistInstalled.add(qc);
 
     const opts = qc.options;      // resolved, public -- carries setTimeout/clearTimeout
+    // Devtools feed access (read fail-closed). The adapter REPORTS its saves as
+    // persist:save events; it never CONSUMES the public feed (OR-4).
+    const _pi = qc._internal;
+    const feed = _pi ? _pi.feed : null;
+    const emitClient = _pi ? _pi.emitClient : null;
     let timer = null;
     let uninstall = null;
     let stopped = false;
@@ -1931,12 +1957,14 @@ export function persistQueryClient(qc, persistOpts) {
         try {
             envelope = { version, state: qc.dehydrate() };
         } catch {
+            if (feed !== null && feed.hook !== null) emitClient("persist:save", 0, false, null, "dehydrate-threw");   // site 23 (dehydrate threw)
             return;                // a snapshot build must never wedge the persister
         }
         try {
             const r = save(envelope);
             if (r && typeof r.then === "function") r.then(noop, noop);
         } catch { /* synchronous save throw contained */ }
+        if (feed !== null && feed.hook !== null) emitClient("persist:save", envelope.state.entries.length, true, null, null);   // site 23 (saved)
     }
 
     // Trailing-edge coalescing (OR-7): the first write in a window arms the

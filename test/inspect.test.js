@@ -10,7 +10,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { queryClient, query } from "../Query.js";
+import { queryClient, query, mutation } from "../Query.js";
 import { effect, createRoot } from "@zakkster/lite-signal";
 import { createMockClock, createMockBroadcastChannel, createControlledFetcher } from "./harness.js";
 
@@ -385,4 +385,42 @@ test("shared:serve (leader) when a follower's fetch-req reaches a leader that ow
     assert.ok(serve.some((e) => e.reason === "leader"), "leader emits shared:serve");
     stopL(); stopF(); lq.dispose(); fq.dispose();
     sL(); leader.dispose(); follower.dispose();
+});
+
+// -- mutation lifecycle (C5) -------------------------------------------------
+
+test("mutation:start + mutation:settle (success) carry gen and vars/data", async () => {
+    const { qc, events, stop } = withFeed();
+    const m = mutation(qc, { fn: async (v) => v * 2 });
+    await m.mutate(21);
+    const start = only(events, "mutation:start");
+    assert.equal(start.length, 1);
+    assert.equal(start[0].count, 1, "count is the mutation generation");
+    assert.equal(start[0].value, 21, "start value is the vars");
+    assert.equal(start[0].key, null, "mutation events are client-scope (no key)");
+    const settle = only(events, "mutation:settle");
+    assert.equal(settle.length, 1);
+    assert.equal(settle[0].ok, true, "ok is !error");
+    assert.equal(settle[0].value, 42, "settle value is the mutation data");
+    assert.equal(settle[0].reason, null);
+    stop();
+});
+
+test("mutation:settle reason 'superseded' when a slower mutation resolves after a newer one", async () => {
+    const { qc, events, stop } = withFeed();
+    let releaseA = null;
+    const m = mutation(qc, {
+        fn: (v) => v === "a"
+            ? new Promise((res) => { releaseA = () => res("A"); })
+            : Promise.resolve("B"),
+    });
+    const pA = m.mutate("a");                        // gen 1, parked pending
+    const pB = m.mutate("b");                        // gen 2, resolves immediately
+    await pB;                                        // gen 2 settles (reason null)
+    releaseA();
+    await pA;                                        // gen 1 settles LATE -> superseded
+    const settle = only(events, "mutation:settle");
+    assert.ok(settle.some((e) => e.reason === "superseded"), "the stale gen settles superseded");
+    assert.ok(settle.some((e) => e.reason === null), "the winning gen settles cleanly");
+    stop();
 });
