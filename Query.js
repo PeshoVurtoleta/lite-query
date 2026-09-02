@@ -145,7 +145,7 @@ const FEED_NOW = (typeof performance === "object" && performance !== null &&
     ? () => performance.now()
     : () => Date.now();
 
-// The 26 frozen event types, in vocabulary order. One preallocated record per
+// The 31 frozen event types, in vocabulary order. One preallocated record per
 // type is built at inspect() install and dropped at uninstall (T3 ratified): an
 // installed panel under a 60Hz stream allocates zero bytes per frame, and an app
 // that never calls inspect() retains zero feed objects.
@@ -163,6 +163,10 @@ const FEED_TYPES = [
     // is already told by tab:send + stream:value, so a fourth per-frame emit
     // would double 60Hz work for zero new truth (recorded trim).
     "stream:project", "stream:promote", "stream:gap",
+    // Offline-queue vocabulary (Q9, 26 -> 31; the 10-key record is unchanged).
+    // There is deliberately NO per-frame queue emit -- the queue lifecycle is
+    // enqueue/restore/replay/settle/drop, all cold events (OR-7 trim carried).
+    "queue:enqueue", "queue:restore", "queue:replay", "queue:settle", "queue:drop",
 ];
 
 // Build the per-type pooled record table (cold, once per install). Every record
@@ -432,6 +436,20 @@ export function queryClient(options = {}) {
         ev.reason = null; ev.count = 0; ev.ok = false; ev.value = null;
         fire(ev);
     }
+    // The queue emit closure (Q9). key/keyHash come from the queue record (never
+    // an entry -- a queued mutation may target a key with no live entry); count is
+    // the queue length after the transition; ok is control-flow (!rejected), never
+    // a truthiness read; value is vars on enqueue / data-or-error verbatim on
+    // settle; reason is the drop/settle reason code. All 10 fields overwritten --
+    // never a partial write. Reached only from behind a feed.hook !== null test.
+    function emitQueue(type, key, keyHash, count, ok, value, reason) {
+        const ev = feed.pool[type];
+        ev.type = type; ev.ts = FEED_NOW();
+        ev.key = key; ev.keyHash = keyHash;
+        ev.from = null; ev.to = null;
+        ev.reason = reason; ev.count = count; ev.ok = ok; ev.value = value;
+        fire(ev);
+    }
 
     // The status write funnel (site 6). Emits entry:status AFTER the signal
     // commit so a re-entering hook observes committed state; fires even when
@@ -492,6 +510,50 @@ export function queryClient(options = {}) {
     // Math.random is acceptable here -- it never touches a warm path.
     const clientId = "c" + Math.random().toString(36).slice(2, 10) +
         Math.random().toString(36).slice(2, 6);
+
+    // -- offline mutation queue (Q9) --
+    //
+    // Durable per-client store of mutations enqueued while the caller's offline()
+    // oracle reported the transport down (T1). null until the first enqueue --
+    // null is not zero: no queue is not an empty queue (OR-3). queueSeq is the
+    // monotone per-client counter that stamps every record's stable id
+    // (clientId + ":" + (++queueSeq)); it survives a persist round trip so ids
+    // never collide within a client's lifetime.
+    const maxQueue = options.maxQueue === undefined ? 100 : options.maxQueue;
+    if (!Number.isInteger(maxQueue) || maxQueue < 1) {
+        throw new TypeError("lite-query: maxQueue must be a positive integer");
+    }
+    let queueStore = null;
+    let queueSeq = 0;
+
+    // Number of durably-enqueued mutations (0 when the queue was never touched).
+    // Read-only introspection for retention assertions and caller UI.
+    function queueSize() {
+        return queueStore === null ? 0 : queueStore.length;
+    }
+
+    // Enqueue a mutation record (cold, one per offline dispatch). Builds the
+    // monomorphic 7-key record at THIS one site, in the frozen order, and pushes
+    // it onto the durable store (lazily created -- null is not an empty array).
+    // Returns the record on success, or null when the queue is full (the caller
+    // -- mutate() -- surfaces LQ_QUEUE_FULL; queueSeq is NOT advanced on a full
+    // queue, so a rejected enqueue leaves both length and the id counter intact).
+    function enqueue(name, key, keyHash, vars) {
+        if (queueStore === null) queueStore = [];
+        if (queueStore.length >= maxQueue) return null;
+        const rec = {
+            id: clientId + ":" + (++queueSeq),
+            name,
+            key,
+            keyHash,
+            vars,
+            at: opts.now(),
+            tries: 0,
+        };
+        queueStore.push(rec);
+        if (feed.hook !== null) emitQueue("queue:enqueue", key, keyHash, queueStore.length, true, vars, null);
+        return rec;
+    }
 
     // Highest epochSeq this client has ever seen on any shared-stream key.
     // Whoever opens a stream stamps it with max(seen) + 1, so epochs are
@@ -1690,11 +1752,14 @@ export function queryClient(options = {}) {
         // are pooled per type and overwritten in place. Returns an idempotent
         // uninstall thunk.
         inspect,
+        // Read-only count of durably-enqueued offline mutations (Q9). 0 when the
+        // queue was never touched (queueStore === null); null is not zero.
+        queueSize,
         // Internal API consumed by query()/mutation() and the /stream subpath.
         // Not part of the public surface; documented as such in llms.txt. `feed`
         // is the live per-client cell (V2: a `let` cannot cross the subpath
         // boundary, so the subpath reads the same object through _internal).
-        _internal: { entries, ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, sharedStreamActive, broadcast, clientId, claimStreamEpoch, armWatchdog, disarmWatchdog, closeStream, opts, installPersistHook, feed, setStatus, emitStream, emitStreamPromote, emitClient },
+        _internal: { entries, ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, sharedStreamActive, broadcast, clientId, claimStreamEpoch, armWatchdog, disarmWatchdog, closeStream, opts, installPersistHook, feed, setStatus, emitStream, emitStreamPromote, emitClient, enqueue },
     };
 }
 
