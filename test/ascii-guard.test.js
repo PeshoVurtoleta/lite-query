@@ -18,6 +18,11 @@ import { dirname, join, relative } from 'node:path';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
 
+// Repo docs that are NOT in package.json files[] (so the files[] walk misses
+// them) but are still source-law ASCII-only. Listed explicitly and statSync'd
+// so a missing entry fails the walk closed rather than being skipped.
+const ROOT_DOCS = ['INCONCLUSIVE.md'];
+
 // Printable ASCII (0x20-0x7E) plus LF (0x0A). Anything else is a violation
 // unless its codepoint is in `allow`. Operates on a Buffer so the failure-path
 // controls below can exercise it without mutating a repo file.
@@ -77,6 +82,11 @@ function buildWalkList() {
   collectByExt(join(ROOT, 'test'), '.mjs', out);
   // bench/**/*.mjs -- the whole bench tree, benchmark + torture harnesses.
   collectByExt(join(ROOT, 'bench'), '.mjs', out);
+  // ROOT_DOCS -- repo docs outside files[]. statSync via collectFiles fails
+  // closed if a listed doc is missing.
+  for (const doc of ROOT_DOCS) {
+    collectFiles(join(ROOT, doc), out);
+  }
   return [...new Set(out)].sort();
 }
 
