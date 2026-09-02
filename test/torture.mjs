@@ -582,6 +582,56 @@ async function runStreamSoak() {
   if (!ok) process.exitCode = 1;
 }
 
+// ---- OR-10 attempt E: leader teardown with live follower projection buffers -
+// The carry_from_q7 attempt through the NEW Q8 surface. The honest control is a
+// projection slot -- specifically the streamPromote closure, which captures the
+// /stream body's scope, plus the buffer window array -- deliberately carried
+// past disposeEntry with the follower still projecting. If C8's releaseProjection
+// leaves either reachable, the owner-cascade / async-retention kernels trip.
+// Runs AFTER the frozen gate (ON-2); NOT a gate clause (ON-3). Honest pass-or-
+// fail; the outcome is recorded verbatim in INCONCLUSIVE.md as Attempt E.
+async function runAttemptE() {
+  const beforeSize = tracker.size();
+  const CYC = 2048;
+  const bc = createMockBroadcastChannel();
+  let eSink = 0;
+  for (let i = 0; i < CYC; i++) {
+    const clock = createMockClock();
+    const qc = queryClient({
+      crossTab: true, broadcastChannel: bc.BroadcastChannel, crossTabChannel: 'attemptE',
+      sharedStream: true, isLeader: () => false,
+      now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
+      streamIdleTimeout: 1e9,
+    });
+    const h = streamQuery(qc, { key: ['e'], mode: 'buffer', maxBuffer: 4, stream: () => ({ async *[Symbol.asyncIterator]() {} }) });
+    const stop = createRoot(() => effect(() => { const v = h.data(); eSink = Array.isArray(v) ? v.length : 0; }));
+    const peer = new bc.BroadcastChannel('attemptE');
+    peer.postMessage({ type: 'stream-frame', key: ['e'], epochSeq: 1, clientId: 'L', seq: 1, value: { p: i } });
+    peer.postMessage({ type: 'stream-frame', key: ['e'], epochSeq: 1, clientId: 'L', seq: 2, value: { p: i } });
+    await Promise.resolve(); await Promise.resolve();
+    // Track the streamPromote closure (captures the /stream scope) OUTSIDE any
+    // lite-signal owner; neither the tag nor the release closes over it.
+    const entry = qc._internal.entries.get(JSON.stringify(['e']));
+    if (entry && entry.streamPromote) tracker.track(entry.streamPromote, NOOP_RELEASE, 'stream-promote', { audit: true });
+    // Tear down the follower + client WHILE it was projecting; releaseProjection
+    // must null the window + promote closure at detach and disposeEntry.
+    stop();
+    h.dispose();
+    qc.removeQueries(['e']);
+    qc.dispose();
+    peer.close();
+  }
+  globalThis.gc?.();
+  await new Promise((r) => setTimeout(r, 50));
+  const liveE = tracker.size() - beforeSize;
+  const findingsE = tracker.audit();
+  const fired = liveE !== 0 || findingsE.length !== 0;
+  if (eSink === Number.MIN_SAFE_INTEGER) console.log('unreachable');
+  console.log('phase H OR-10 attempt E (leader teardown w/ live follower projection; NOT a gate clause):');
+  console.log('  cycles=' + CYC + ' tracked-promote live-delta=' + liveE + ' audit-findings=' +
+    findingsE.length + ' -> ' + (fired ? 'FIRED' : 'DID NOT FIRE (carried; recorded verbatim in INCONCLUSIVE.md)'));
+}
+
 // ---- orchestration --------------------------------------------------------
 // Fail closed on a missing --expose-gc BEFORE any phase runs: without it the
 // census settle cycles cannot collect and phase H reports a leak-shaped
@@ -638,4 +688,6 @@ if (BREAK) {
   // C11 (Q8): the 5-tab shared-stream soak + leader-failover churn + G5, all
   // AFTER the frozen gate evaluation, printing their own lines (never the GATE).
   await runStreamSoak();
+  // C12 (OR-10): attempt E through the new follower-projection teardown surface.
+  await runAttemptE();
 }

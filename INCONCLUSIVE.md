@@ -171,6 +171,46 @@ resolve the cause, do not widen the budget.
   by an adversarial probe or a reviewer, not by the churn loop. Recorded, not
   spun; the clause stays carried.
 
+  Q8 (OR-10) added NEW public surface (`sharedStream` -- cross-tab shared
+  streams: a follower projects a leader's frames into its local entry, holding
+  no iterator) and re-attempted a legal trigger through the follower-projection
+  teardown path. The attempt was run this session against the real entry points,
+  as a section of phase H that executes AFTER the frozen gate evaluation (ON-2),
+  so it can never move the byte-frozen GATE line:
+
+    Attempt E -- carry a live follower's projection slots past disposeEntry while
+      the leader is torn down. 2048 cycles of: a follower `queryClient({
+      sharedStream: true, isLeader: () => false })` + `streamQuery(qc, { mode:
+      "buffer", maxBuffer: 4, ... })` subscribed inside `createRoot(effect)`, a
+      raw peer broadcasts two `stream-frame`s so the entry builds a `projWindow`
+      array AND installs a `streamPromote` closure (which captures the /stream
+      body's scope -- the strongest retention candidate); then
+      `tracker.track(entry.streamPromote, NOOP_RELEASE, 'stream-promote', {
+      audit: true })` OUTSIDE any lite-signal owner (held-value contract
+      preserved -- neither tag nor release closes over the target), followed by
+      `stop()` + `h.dispose()` + `qc.removeQueries(['e'])` + `qc.dispose()` -- the
+      promote closure carried the whole way through the teardown. Result (this
+      session): `tracker.size()` returned to its pre-attempt value (live-delta
+      `0`) and `tracker.audit().length === 0` after `gc()` + a settle tick. C8's
+      `releaseProjection` nulls every projection slot -- the window array, the
+      epoch/seq cursors, the watchdog, and the streamPromote closure -- at BOTH
+      detach and disposeEntry (V5), and the follower uses the same
+      `createRoot(effect)` watcher discipline as query()/streamQuery(), so
+      tearing it down touches no lite-signal owner tree the owner-cascade kernel
+      watches and leaves nothing for the async-retention kernel. It cannot leave
+      either kernel's trip state.
+
+  OUTCOME: does NOT fire. Attempt E re-recorded verbatim above; the
+  findings-clause stays uncontrolled and is carried forward. Per ON-3, Attempt E
+  is explicitly NOT a gate clause (a control that cannot trip is decorative). The
+  live controls remain `alloc` / `detach` / `fuzz` / `pages` / `feed`
+  (`tripped=5/5` under `QUERY_TORTURE_BREAK=1`). The lesson A/B/C/D/E keep
+  teaching holds: a hand-run attempt that does not fire is not proof of absence
+  -- a keyed retention like the QD-4 `_se` pin is found by an adversarial probe
+  or a reviewer, not by the churn loop. The honest Q8 gate additions that DO
+  gate are the N-tab fuzzer generalization (echo/ledger laws over N) and the
+  5-tab shared-stream soak (dup/reorder=0, one connection under churn, G5).
+
 The census clause (`censusOk`) WAS uncontrolled between commit e56af54 and its
 fix: C-detach hardcoded `censusOk: true` (an undeclared drift from PLAN
 Assertion 3). It is now controlled -- C-detach builds a WeakRef census over its
