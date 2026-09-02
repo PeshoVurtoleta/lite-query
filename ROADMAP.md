@@ -944,8 +944,19 @@ DONE WHEN
 ---
 package: "@zakkster/lite-query"
 version_target: 2.0.0
-status: planned
-tests_min: 354   # re-rebased 2026-09-02 post-Q7 pipeline (314 base; the charter's original +40 delta preserved; a floor below the shipped suite is decorative)
+status: pipeline-complete (2026-09-02; SPLIT per STOP-DECISION-1 -- streams
+  ship, the queue defers to Q9/2.1. Ladder C1 baeb53f .. C13 b152acd incl.
+  C10b bdc16b6 (the ON-3 falsy-rejection BREAKING fix, no test retired) +
+  reviewer-REJECTED delta QD-1..QD-3 874f079 (two structural OR-4 defects
+  in the epoch-collision window: clientId-blind dedup interleave, owner
+  projecting a straggler -- both closed by construction, concurrency-phase
+  soak added, maxLive=3 proves the window is entered) -> DELTA APPROVED;
+  QA FAIL(3, docs-only) -> QD-4 ca41d30 -> QA PASS (G1-G9 evidenced,
+  45/45 fresh adversarial probes incl. a three-way epoch collision and a
+  re-entrant-teardown vector); suite 314 -> 362/0/0, GATE byte-identical,
+  controls 5/5; attempt E DID NOT FIRE; awaiting /release 2.0.0 +
+  operator publish per OR-1)
+tests_min: 354   # re-rebased 2026-09-02 post-Q7 pipeline (314 base; the charter's original +40 delta preserved); pipeline closed at 362
 carry_from_q7: the findings-clause control -- STILL uncontrolled after
   FOUR attempts (Q5 A/B, Q6 C, Q7 D; INCONCLUSIVE.md holds all four
   verbatim + the QD-4 postscript: review's adversarial probe caught the
@@ -1135,8 +1146,12 @@ OBLIGATIONS, offline queue bullet) and carries forward INTACT:
     also rides 2.1 if LS4 has shipped by then (parity test unchanged --
     it is the contract).
 tests_min: set at session start from the then-shipped base (the Q8 rule:
-a floor below the shipped suite is decorative). carry_from_q8: whatever
-INCONCLUSIVE.md holds after attempt E.
+a floor below the shipped suite is decorative). carry_from_q8: the
+findings-clause control -- STILL uncontrolled after FIVE attempts (Q5 A/B,
+Q6 C, Q7 D, Q8 E; INCONCLUSIVE.md holds all five verbatim; Q8's attempt E
+DID NOT FIRE -- releaseProjection nulls every slot at both teardown
+sites); re-attempt via the queue's replay teardown or re-record and carry
+again.
 
 ---
 
