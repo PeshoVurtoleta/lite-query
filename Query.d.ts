@@ -253,6 +253,7 @@ export type RestoreReason =
     | "malformed-envelope"
     | "version-mismatch"
     | "cache-not-empty"
+    | "hydrate-threw"
     | HydrateReason;
 
 /** The settled restore outcome (the `restored` promise always RESOLVES). */

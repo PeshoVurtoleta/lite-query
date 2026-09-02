@@ -889,36 +889,73 @@ export function queryClient(options = {}) {
         return { entries: out };
     }
 
-    // Validate a hydrate payload in ONE pass over the whole state BEFORE any
-    // mutation (OR-3 all-or-nothing). Returns a stable ASCII reason code on the
-    // first defect, or null when the whole payload is clean. A malformed STORED
-    // payload is external data -> a reason, never a throw (the throw is reserved
-    // for the OR-2 empty-cache precondition, a programming error).
+    // Validate a hydrate payload in ONE contained pass over the whole state
+    // BEFORE any mutation (OR-3 all-or-nothing), MATERIALIZING a snapshot as it
+    // goes: each field (key, data, dataUpdatedAt, infinite) is read EXACTLY ONCE
+    // per record into flat internal storage, and seeding consumes ONLY that
+    // snapshot -- so a TOCTOU getter that returns clean data to validation and
+    // evil data to seeding cannot exist (QD-2, first-read wins). The traversal is
+    // exception-contained: any throw during payload access (a throwing getter,
+    // QD-4a) returns the malformed reason for that level, never escapes. Symbol
+    // own-keys are malformed at both levels (QD-3: JSON carries no symbols, so
+    // nothing legitimate is rejected). Returns { reason } on the first defect, or
+    // { reason: null, records } (materialized) when the whole payload is clean.
     function validateHydrateState(state) {
-        if (state === null || typeof state !== "object" || Array.isArray(state)) {
-            return "malformed-state";
+        try {
+            if (state === null || typeof state !== "object" || Array.isArray(state)) {
+                return { reason: "malformed-state" };
+            }
+            if (Object.getOwnPropertySymbols(state).length !== 0) {
+                return { reason: "malformed-state" };
+            }
+            const list = state.entries;                 // single read of the field
+            if (!Array.isArray(list)) return { reason: "malformed-entries" };
+            if (Object.keys(state).length !== 1) return { reason: "malformed-state" };
+            const seen = new Set();
+            const records = [];
+            for (let i = 0; i < list.length; i++) {
+                const r = validateRecord(list, i, seen);
+                if (r.reason !== null) return { reason: r.reason };
+                records.push(r.record);
+            }
+            return { reason: null, records };
+        } catch {
+            return { reason: "malformed-state" };
         }
-        if (!Array.isArray(state.entries)) return "malformed-entries";
-        if (Object.keys(state).length !== 1) return "malformed-state";
-        const seen = new Set();
-        for (const rec of state.entries) {
+    }
+
+    // Validate + materialize ONE record, exception-contained (any throw returns a
+    // record-level malformed reason). Reads the array slot and each of the four
+    // fields exactly once; the returned snapshot is what seeds.
+    function validateRecord(list, i, seen) {
+        try {
+            const rec = list[i];                        // single read of the slot
             if (rec === null || typeof rec !== "object" || Array.isArray(rec)) {
-                return "malformed-entry";
+                return { reason: "malformed-entry" };
             }
-            if (Object.keys(rec).length !== 4) return "malformed-entry";
-            if (!Array.isArray(rec.key)) return "malformed-key";
-            if (typeof rec.infinite !== "boolean") return "malformed-entry";
-            if (!Number.isFinite(rec.dataUpdatedAt)) return "malformed-timestamp";
-            if (rec.infinite) {
-                if (!Array.isArray(rec.data)) return "malformed-pages";
-            } else if (rec.data === undefined) {
-                return "malformed-data";
+            if (Object.getOwnPropertySymbols(rec).length !== 0) {
+                return { reason: "malformed-entry" };
             }
-            const h = hashKey(rec.key);
-            if (seen.has(h)) return "duplicate-key";
-            seen.add(h);
+            if (Object.keys(rec).length !== 4) return { reason: "malformed-entry" };
+            const key = rec.key;                        // one read per field
+            const data = rec.data;
+            const dataUpdatedAt = rec.dataUpdatedAt;
+            const infinite = rec.infinite;
+            if (!Array.isArray(key)) return { reason: "malformed-key" };
+            if (typeof infinite !== "boolean") return { reason: "malformed-entry" };
+            if (!Number.isFinite(dataUpdatedAt)) return { reason: "malformed-timestamp" };
+            if (infinite) {
+                if (!Array.isArray(data)) return { reason: "malformed-pages" };
+            } else if (data === undefined) {
+                return { reason: "malformed-data" };
+            }
+            const keyHash = hashKey(key);
+            if (seen.has(keyHash)) return { reason: "duplicate-key" };
+            seen.add(keyHash);
+            return { reason: null, record: { key, keyHash, data, dataUpdatedAt, infinite } };
+        } catch {
+            return { reason: "malformed-entry" };
         }
-        return null;
     }
 
     // Seed a plain entry from a validated record. Writes the signals directly
@@ -967,18 +1004,24 @@ export function queryClient(options = {}) {
     //   3. Seeds only after a clean pass; never broadcasts, never notifies (V5).
     function hydrate(state) {
         if (entries.size > 0) {
-            throw new Error("lite-query: hydrate requires an empty cache (" +
+            // The ONLY throw hydrate makes -- the empty-cache precondition. Tagged
+            // so the adapter can distinguish it from any other (contained) defect.
+            const err = new Error("lite-query: hydrate requires an empty cache (" +
                 entries.size + " entries present) -- hydrate at boot, before " +
                 "any observer attaches");
+            err.code = "LQ_HYDRATE_NOT_EMPTY";
+            throw err;
         }
-        const reason = validateHydrateState(state);
-        if (reason !== null) return { ok: false, count: 0, reason };
-        for (const rec of state.entries) {
-            const e = ensureEntry(rec.key);
-            if (rec.infinite) seedInfinite(e, rec);
-            else seedEntry(e, rec);
+        const v = validateHydrateState(state);
+        if (v.reason !== null) return { ok: false, count: 0, reason: v.reason };
+        // Seed ONLY from the materialized snapshot -- never the caller's objects
+        // again (QD-2). What was validated IS what seeds, by construction.
+        for (const record of v.records) {
+            const e = ensureEntry(record.key);
+            if (record.infinite) seedInfinite(e, record);
+            else seedEntry(e, record);
         }
-        return { ok: true, count: state.entries.length, reason: null };
+        return { ok: true, count: v.records.length, reason: null };
     }
 
     // Dispose the entire client. Releases the BroadcastChannel listener which
@@ -1699,11 +1742,16 @@ export function persistQueryClient(qc, persistOpts) {
         let result;
         try {
             result = qc.hydrate(envelope.state);
-        } catch {
-            // OR-2 precondition: a late load() whose entries already exist. The
-            // adapter CATCHES the throw and resolves a drop -- never a merge,
-            // never an unhandled rejection, never a silent nothing.
-            return { status: "dropped", count: 0, reason: "cache-not-empty" };
+        } catch (err) {
+            // The empty-cache precondition (a late load() whose entries already
+            // exist) resolves cache-not-empty. Any OTHER throw out of hydrate
+            // resolves the sanctioned "hydrate-threw" (belt-and-braces so
+            // restored ALWAYS resolves even if a future defect reintroduces a
+            // throw). QD-4b: honest labeling, never mislabel as cache-not-empty.
+            if (err && err.code === "LQ_HYDRATE_NOT_EMPTY") {
+                return { status: "dropped", count: 0, reason: "cache-not-empty" };
+            }
+            return { status: "dropped", count: 0, reason: "hydrate-threw" };
         }
         if (!result.ok) {
             return { status: "dropped", count: 0, reason: result.reason };
@@ -1718,8 +1766,12 @@ export function persistQueryClient(qc, persistOpts) {
         return outcome;
     });
 
-    // Force the pending save now.
+    // Force the pending save now. QD-1: a strict no-op once stopped (stop()
+    // already flushed and uninstalled) -- flush-after-stop must not re-save.
+    // While running, an explicit flush()/flush() double-saves by design ("force
+    // now" semantics).
     function flush() {
+        if (stopped) return;
         doSave();
     }
 

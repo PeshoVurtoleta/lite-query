@@ -644,3 +644,98 @@ test("adapter: the restore outcome is observable before the first observer attac
     assert.equal(qc.getQueryData(["a"]), 41, "readable with no observer ever attached");
     p.stop(); qc.dispose();
 });
+
+// -----------------------------------------------------------------------------
+// QA fixes -- QD-1..QD-4 (fail-closed defects)
+// -----------------------------------------------------------------------------
+
+test("adapter: flush() after stop() is a strict no-op (QD-1)", async () => {
+    const clock = createMockClock();
+    const qc = queryClient({ now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, defaultStaleTime: 0 });
+    let saves = 0;
+    const p = persistQueryClient(qc, { save: () => saves++, load: () => null, version: "v1", throttle: 1000 });
+    await p.restored;
+    qc.setQueryData(["a"], 1);       // pending throttled save
+    p.stop();                        // flush-on-stop -> exactly one save
+    assert.equal(saves, 1, "stop flushed the pending save once");
+    p.flush();                       // must be a no-op once stopped
+    assert.equal(saves, 1, "flush() after stop() does not re-save");
+    p.stop();                        // still idempotent
+    assert.equal(saves, 1);
+    qc.dispose();
+});
+
+test("hydrate: a TOCTOU index getter -- the validated (first-read) value is what seeds (QD-2)", () => {
+    const qc = queryClient({ defaultStaleTime: 0 });
+    const clean = { key: ["k"], data: "clean", dataUpdatedAt: 0, infinite: false };
+    const evil = { key: ["k"], data: "EVIL", dataUpdatedAt: 0, infinite: false };
+    let reads = 0;
+    const arr = [];
+    Object.defineProperty(arr, 0, {
+        enumerable: true, configurable: true,
+        get() { reads++; return reads === 1 ? clean : evil; },
+    });
+    const res = qc.hydrate({ entries: arr });
+    assert.equal(res.ok, true);
+    assert.equal(res.count, 1);
+    assert.equal(reads, 1, "the entries slot is read exactly once (materialized snapshot)");
+    assert.equal(qc.getQueryData(["k"]), "clean", "validated first-read value seeds, never the evil second read");
+    qc.dispose();
+});
+
+test("hydrate: symbol-keyed state and symbol-keyed record both drop the whole payload (QD-3)", () => {
+    const qc = queryClient({ defaultStaleTime: 0 });
+
+    const symState = { entries: [] };
+    symState[Symbol("x")] = "sneaky";
+    const r1 = qc.hydrate(symState);
+    assert.equal(r1.ok, false);
+    assert.equal(r1.reason, "malformed-state", "symbol-keyed state is malformed");
+
+    const symRec = { key: ["k"], data: 1, dataUpdatedAt: 0, infinite: false };
+    symRec[Symbol("extra")] = "sneaky";
+    const r2 = qc.hydrate({ entries: [symRec] });
+    assert.equal(r2.ok, false);
+    assert.equal(r2.reason, "malformed-entry", "symbol-keyed record is malformed");
+
+    // both dropped the whole payload -> cache still empty -> a good hydrate works
+    assert.equal(qc.hydrate({ entries: [rec(["ok"], 1, 0, false)] }).ok, true);
+    qc.dispose();
+});
+
+test("hydrate: a throwing data getter returns a reason, never throws (QD-4a)", () => {
+    const qc = queryClient({ defaultStaleTime: 0 });
+    const bad = { key: ["k"], dataUpdatedAt: 0, infinite: false };
+    Object.defineProperty(bad, "data", { enumerable: true, get() { throw new Error("boom getter"); } });
+    let threw = false; let result = null;
+    try { result = qc.hydrate({ entries: [bad] }); } catch { threw = true; }
+    assert.equal(threw, false, "a malformed stored payload never throws (ON-3a asymmetry)");
+    assert.equal(result.ok, false);
+    assert.equal(result.count, 0);
+    assert.equal(typeof result.reason, "string");
+    assert.equal(qc.getQueryData(["k"]), undefined, "nothing seeded");
+    qc.dispose();
+});
+
+test("adapter: a throwing-getter payload is labeled by its hydrate reason, not cache-not-empty (QD-4b)", async () => {
+    const bad = { key: ["k"], dataUpdatedAt: 0, infinite: false };
+    Object.defineProperty(bad, "data", { enumerable: true, get() { throw new Error("boom getter"); } });
+    const qc = queryClient({ defaultStaleTime: 0 });
+    const p = persistQueryClient(qc, { save: () => {}, load: () => ({ version: "v1", state: { entries: [bad] } }), version: "v1" });
+    const outcome = await p.restored;
+    assert.equal(outcome.status, "dropped");
+    assert.notEqual(outcome.reason, "cache-not-empty", "a contained malformed payload is not mislabeled cache-not-empty");
+    assert.equal(typeof outcome.reason, "string");
+    p.stop(); qc.dispose();
+});
+
+test("adapter: a hydrate that throws a non-precondition error resolves hydrate-threw (QD-4b belt-and-braces)", async () => {
+    const qc = queryClient({ defaultStaleTime: 0 });
+    const orig = qc.hydrate;
+    qc.hydrate = () => { throw new Error("unexpected defect"); };   // no LQ_HYDRATE_NOT_EMPTY code
+    const p = persistQueryClient(qc, { save: () => {}, load: () => ({ version: "v1", state: { entries: [] } }), version: "v1" });
+    const outcome = await p.restored;
+    assert.deepEqual(outcome, { status: "dropped", count: 0, reason: "hydrate-threw" });
+    qc.hydrate = orig;
+    p.stop(); qc.dispose();
+});

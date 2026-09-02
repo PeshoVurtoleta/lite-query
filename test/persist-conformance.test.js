@@ -133,6 +133,19 @@ const MATRIX = [
         { key: ["b"], data: 2, dataUpdatedAt: NaN, infinite: false },   // the one bad entry
         { key: ["c"], data: 3, dataUpdatedAt: 0, infinite: false },
     ] }) },
+    // Rows 18-19: adversarial classes QA found (QD-3 / QD-4a). Symbols are
+    // ignored by Object.keys, and a throwing getter escapes an unguarded read --
+    // both must drop the whole payload.
+    { row: 18, name: "symbol-keyed extra property on a record", reason: "malformed-entry", make: () => {
+        const r = { key: ["k"], data: 1, dataUpdatedAt: 0, infinite: false };
+        r[Symbol("sneaky")] = "y";
+        return wrap(r);
+    } },
+    { row: 19, name: "throwing data getter on a record", reason: "malformed-entry", make: () => {
+        const r = { key: ["k"], dataUpdatedAt: 0, infinite: false };
+        Object.defineProperty(r, "data", { enumerable: true, get() { throw new Error("boom getter"); } });
+        return wrap(r);
+    } },
 ];
 
 // The refusal driver, reused across the real reader (Part B) and the witness
@@ -203,7 +216,7 @@ function mergeHydrate(state) {
 }
 
 test("C: the matrix is not vacuous -- a fail-open witness is rejected on every refusal case", () => {
-    assert.equal(MATRIX.length, 21, "the corruption-matrix row table length changed");
+    assert.equal(MATRIX.length, 23, "the corruption-matrix row table length changed");
     let realRefused = 0;
     let witnessRejected = 0;
     for (const c of MATRIX) {

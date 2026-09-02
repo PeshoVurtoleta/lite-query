@@ -96,10 +96,10 @@ after the pipeline closes.
 
 ### Tests + torture
 
-- 56 new core tests (`test/persist.test.js` 29, `test/persist-conformance.test.js`
-  27); the suite is 259 (was 203), 0 fail, 0 skip. The conformance file mirrors
+- 64 new core tests (`test/persist.test.js` 35, `test/persist-conformance.test.js`
+  29); the suite is 267 (was 203), 0 fail, 0 skip. The conformance file mirrors
   the SHAPE of bake-stream's `test/DehydratedCache.test.js` (Part A round-trip,
-  Part B corruption matrix with a pinned `MATRIX.length` of 21, Part C fail-open
+  Part B corruption matrix with a pinned `MATRIX.length` of 23, Part C fail-open
   witness) and imports nothing from bake.
 - Torture phase H gains a 4096-cycle dehydrate/hydrate/teardown loop through the
   adapter (install -> restored -> pending throttled save -> flush-on-stop),
@@ -112,6 +112,35 @@ after the pipeline closes.
   owner tree, so it cannot leave the owner-cascade kernel's trip state. No
   `ctlPersist` control was added (a control that cannot trip is decorative); the
   clause stays uncontrolled and the non-firing is recorded, not faked.
+
+### Fixed (QA QD-1..QD-4, fail-closed hardening)
+
+- QD-1: `persistQueryClient` `flush()` is now a strict no-op once `stop()` has
+  run (it was missing the `stopped` guard `onWrite()` already had, so a
+  flush-after-stop double-saved). `stop()` stays idempotent; an explicit
+  `flush()`/`flush()` while running still double-saves by design ("force now").
+- QD-2: `hydrate` validation now MATERIALIZES a snapshot -- each of the four
+  fields is read EXACTLY ONCE per record into internal flat storage, and seeding
+  consumes only that snapshot, never the caller's objects again. A TOCTOU index
+  getter (clean to validation, evil to seeding) can no longer diverge validated
+  data from seeded data; first-read wins by construction.
+- QD-3: symbol own-keys are malformed at both levels -- the own-key guards on the
+  state object and each record now also require
+  `Object.getOwnPropertySymbols(x).length === 0` (a symbol-keyed extra property
+  slipped past the `Object.keys(...).length !== 4` guard). JSON carries no
+  symbols, so nothing legitimate is rejected.
+- QD-4: the entire validation traversal (including the QD-2 snapshot reads) is
+  exception-contained -- a throwing getter during payload access returns the
+  malformed reason for that level instead of escaping, so `hydrate`'s ONLY throw
+  is the OR-2 empty-cache precondition (now tagged `err.code =
+  "LQ_HYDRATE_NOT_EMPTY"`). The adapter's restore catch distinguishes: the
+  precondition resolves `"cache-not-empty"`; any OTHER throw out of `hydrate`
+  resolves a new sanctioned reason `"hydrate-threw"` (symmetric with
+  `"load-threw"`, belt-and-braces so `restored` ALWAYS resolves even if a future
+  defect reintroduces a throw). `"hydrate-threw"` is added to the RestoreOutcome
+  reason union (Query.d.ts) and the llms.txt reason list. The conformance matrix
+  gains the two adversarial classes (symbol-keyed record, throwing getter),
+  moving `MATRIX.length` from 21 to 23.
 
 ## [1.3.0] -- 2026-09-02
 
