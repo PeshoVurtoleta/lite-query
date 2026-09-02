@@ -167,7 +167,12 @@ function streamQuery(qc, streamOpts) {
             // closed if it is passed with mode "latest".
             maxBuffer: mode === "buffer" ? maxBuffer : undefined,
             onValue: (v) => {
-                if (entry.streamCount === 0) setStatus(entry, "streaming");
+                // A value means the connection is live: drive the status to
+                // "streaming" from any non-streaming state. Gating on the status
+                // (not streamCount) lets an adopt-promoted owner recover from a
+                // dead leader's "error"/"success" back to "streaming" (F7); a
+                // signal read is allocation-free, so the warm path is untouched.
+                if (entry.status() !== "streaming") setStatus(entry, "streaming");
                 entry.streamCount = (entry.streamCount + 1) | 0;
                 // Leader send path (cold relative to local reads): stamp a
                 // monotone seq and broadcast the frame. Built ONLY here and on

@@ -680,6 +680,245 @@ test("shared-stream: clear releases an owner's projection slots + watchdog (V5)"
     dl(); ls.dispose(); leader.dispose();
 });
 
+// -- C9: the seven failover cells (F1-F7) -----------------------------------
+
+// A mock upstream that counts LIVE connections (A2/G4): every open increments
+// `live`, every iterator return/throw/abort decrements it. pushAll/endAll/failAll
+// drive whichever connections are currently open (losers abort and discard).
+function makeCountedSource() {
+    let live = 0, opened = 0;
+    const conns = new Set();
+    const factory = (ctx) => {
+        opened++;
+        const conn = { buf: [], wake: null, done: false, err: null, aborted: false, closed: false };
+        conn.k = () => { if (conn.wake) { const r = conn.wake; conn.wake = null; r(); } };
+        const close = () => { if (!conn.closed) { conn.closed = true; live--; conns.delete(conn); } };
+        conns.add(conn); live++;
+        if (ctx && ctx.signal) ctx.signal.addEventListener("abort", () => { conn.aborted = true; conn.k(); close(); });
+        return {
+            async *[Symbol.asyncIterator]() {
+                try {
+                    while (true) {
+                        if (conn.buf.length) { yield conn.buf.shift(); continue; }
+                        if (conn.aborted) return;
+                        if (conn.err) throw conn.err;
+                        if (conn.done) return;
+                        await new Promise((r) => { conn.wake = r; });
+                    }
+                } finally { close(); }
+            },
+        };
+    };
+    return {
+        factory,
+        get live() { return live; },
+        get opened() { return opened; },
+        pushAll(v) { for (const c of conns) { c.buf.push(v); c.k(); } },
+        endAll() { for (const c of conns) { c.done = true; c.k(); } },
+        failAll(e) { for (const c of conns) { c.err = e; c.k(); } },
+    };
+}
+
+// Record every distinct data() a handle projects (OR-4 dup/reorder detector:
+// strictly-increasing integer frames make any duplicate or reorder visible).
+function observeRec(handle) {
+    const values = [];
+    const dispose = createRoot(() => effect(() => {
+        const v = handle.data();
+        if (typeof v === "number") values.push(v);
+    }));
+    return { dispose, values };
+}
+function assertStrictlyIncreasing(vals, label) {
+    for (let i = 1; i < vals.length; i++) {
+        assert.ok(vals[i] > vals[i - 1], `${label}: no dup/reorder (${vals[i - 1]} -> ${vals[i]})`);
+    }
+}
+
+test("failover: leader closes gracefully -- exactly one follower promotes, connections stay 1", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const src = makeCountedSource();
+    const leader = makeTab(bc, clock, "F1", () => true, { streamIdleTimeout: 1000 });
+    const fa = makeTab(bc, clock, "F1", () => false, { streamIdleTimeout: 1000 });
+    const fb = makeTab(bc, clock, "F1", () => false, { streamIdleTimeout: 1000 });
+    const hl = streamQuery(leader, { key: ["k"], stream: src.factory });
+    const ha = streamQuery(fa, { key: ["k"], stream: src.factory });
+    const hb = streamQuery(fb, { key: ["k"], stream: src.factory });
+    const rl = observeRec(hl); const ra = observeRec(ha); const rb = observeRec(hb);
+    await drain();
+    let n = 0;
+    for (; n < 5; n++) { src.pushAll(n); await drain(); }
+    assert.equal(src.live, 1, "one upstream connection while the leader owns");
+    hl.dispose();                                    // graceful close
+    await drain(20);
+    for (; n < 10; n++) { src.pushAll(n); await drain(); }
+    assert.equal(src.live, 1, "exactly one connection survives the handover");
+    assert.equal(owners([fa, fb], ["k"]), 1, "exactly one follower promoted");
+    assertStrictlyIncreasing(ra.values, "fa");
+    assertStrictlyIncreasing(rb.values, "fb");
+    rl.dispose(); ra.dispose(); rb.dispose();
+    ha.dispose(); hb.dispose(); leader.dispose(); fa.dispose(); fb.dispose();
+});
+
+test("failover: leader tab killed -- watchdog promotes within streamIdleTimeout, no dup", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const src = makeCountedSource();
+    const follower = makeTab(bc, clock, "F2", () => false, { streamIdleTimeout: 1000 });
+    const h = streamQuery(follower, { key: ["k"], stream: src.factory });
+    const rec = observeRec(h);
+    await drain();
+    // a raw "leader" peer streams a few frames, then is KILLED (channel closed,
+    // NO stream-end). The watchdog is the only detector.
+    const peer = new bc.BroadcastChannel("F2");
+    peer.postMessage({ type: "stream-open", key: ["k"], epochSeq: 3, clientId: "killedLeader" });
+    for (let s = 1; s <= 3; s++) peer.postMessage({ type: "stream-frame", key: ["k"], epochSeq: 3, clientId: "killedLeader", seq: s, value: s });
+    await drain();
+    assert.equal(follower.getQueryData(["k"]), 3, "projected the killed leader's frames");
+    peer.close();                                    // tab killed, no farewell
+    assert.equal(ent(follower, ["k"]).streamOwner, false);
+    clock.advance(1000); await drain(20);
+    assert.equal(ent(follower, ["k"]).streamOwner, true, "watchdog self-connected within streamIdleTimeout");
+    src.pushAll(4); await drain();
+    assert.equal(follower.getQueryData(["k"]), 4);
+    assertStrictlyIncreasing(rec.values, "F2");
+    rec.dispose(); h.dispose(); follower.dispose();
+});
+
+test("failover: leader hung -- follower self-connects, old leader abdicates on higher epoch", async () => {
+    // OR-3 cell: correctness is invariant under a lying oracle -- run it with an
+    // all-true and an all-false oracle; only connection count would differ.
+    for (const oracle of [() => true, () => false]) {
+        const clock = createMockClock();
+        const bc = createMockBroadcastChannel();
+        const src = makeCountedSource();
+        const follower = makeTab(bc, clock, "F3", oracle, { streamIdleTimeout: 1000 });
+        const h = streamQuery(follower, { key: ["k"], stream: src.factory });
+        const rec = observeRec(h);
+        await drain(6);
+        // a hung leader: channel alive, frames stopped. If the oracle says the
+        // follower leads, it opened its own connection already; either way the
+        // watchdog/self-connect must leave it owning after silence.
+        const peer = new bc.BroadcastChannel("F3");
+        peer.postMessage({ type: "stream-open", key: ["k"], epochSeq: 2, clientId: "hungLeader" });
+        peer.postMessage({ type: "stream-frame", key: ["k"], epochSeq: 2, clientId: "hungLeader", seq: 1, value: 1 });
+        await drain(6);
+        clock.advance(1000); await drain(20);
+        src.pushAll(2); await drain(6);
+        assert.equal(ent(follower, ["k"]).streamOwner, true, "self-connected on a hung leader (oracle-invariant)");
+        assertStrictlyIncreasing(rec.values, "F3");
+        rec.dispose(); h.dispose(); follower.dispose(); peer.close();
+    }
+});
+
+test("failover: follower promoted mid-buffer -- window and counters survive", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const leaderSrc = makeControllable();
+    const followerSrc = makeControllable();
+    const leader = makeTab(bc, clock, "F4", () => true, { streamIdleTimeout: 1000 });
+    const follower = makeTab(bc, clock, "F4", () => false, { streamIdleTimeout: 1000 });
+    const hl = streamQuery(leader, { key: ["k"], mode: "buffer", maxBuffer: 5, stream: () => leaderSrc.iterable });
+    const hf = streamQuery(follower, { key: ["k"], mode: "buffer", maxBuffer: 5, stream: () => followerSrc.iterable });
+    const dl = observe(hl); const df = observe(hf);
+    await drain();
+    leaderSrc.push("a"); await drain();
+    leaderSrc.push("b"); await drain();
+    const fe = ent(follower, ["k"]);
+    const windowAt = follower.getQueryData(["k"]);
+    const countAt = fe.streamCount;
+    const droppedAt = hf.droppedCount();
+    hl.dispose();                                    // promote mid-buffer
+    await drain(20);
+    assert.equal(fe.streamOwner, true, "promoted");
+    assert.equal(follower.getQueryData(["k"]), windowAt, "data() array unchanged across the promotion instant");
+    assert.ok(fe.streamCount >= countAt, "count continues from k, never resets to 0");
+    assert.ok(hf.droppedCount() >= droppedAt, "droppedCount monotonic");
+    assert.notEqual(fe.status(), "pending", "no status regression to pending");
+    dl(); df(); hl.dispose(); hf.dispose(); leader.dispose(); follower.dispose();
+});
+
+test("failover: two tabs racing promotion -- exactly one connection survives", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const src = makeCountedSource();
+    const tabs = []; const handles = []; const recs = [];
+    for (let i = 0; i < 5; i++) {
+        const t = makeTab(bc, clock, "F5", () => false, { streamIdleTimeout: 1000 });
+        const h = streamQuery(t, { key: ["k"], stream: src.factory });
+        recs.push(observeRec(h));
+        tabs.push(t); handles.push(h);
+    }
+    await drain(20);
+    clock.advance(1000); await drain(30);           // all five watchdogs race
+    src.pushAll(1); await drain(10);
+    src.pushAll(2); await drain(10);
+    assert.equal(owners(tabs, ["k"]), 1, "exactly one owner across five tabs");
+    assert.equal(src.live, 1, "exactly one upstream connection survives");
+    recs.forEach((r, i) => assertStrictlyIncreasing(r.values, `F5-tab${i}`));
+    recs.forEach((r) => r.dispose());
+    handles.forEach((h) => h.dispose());
+    tabs.forEach((t) => t.dispose());
+});
+
+test("failover: stream completes during failover -- success in every tab, no dup", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const leaderSrc = makeControllable();
+    const leader = makeTab(bc, clock, "F6", () => true, { streamIdleTimeout: 1000 });
+    const fa = makeTab(bc, clock, "F6", () => false, { streamIdleTimeout: 1000 });
+    const fb = makeTab(bc, clock, "F6", () => false, { streamIdleTimeout: 1000 });
+    const hl = streamQuery(leader, { key: ["k"], stream: () => leaderSrc.iterable });
+    const ha = streamQuery(fa, { key: ["k"], stream: () => makeControllable().iterable });
+    const hb = streamQuery(fb, { key: ["k"], stream: () => makeControllable().iterable });
+    const rl = observeRec(hl); const ra = observeRec(ha); const rb = observeRec(hb);
+    await drain();
+    leaderSrc.push(1); await drain();
+    leaderSrc.push(2); await drain();
+    leaderSrc.end(); await drain(20);                // completes -> stream-end ok:true
+    assert.equal(ent(fa, ["k"]).status(), "success", "follower A settled success");
+    assert.equal(ent(fb, ["k"]).status(), "success", "follower B settled success");
+    assert.equal(ent(leader, ["k"]).status(), "success", "leader settled success");
+    assertStrictlyIncreasing(ra.values, "F6-a");
+    assertStrictlyIncreasing(rb.values, "F6-b");
+    rl.dispose(); ra.dispose(); rb.dispose();
+    hl.dispose(); ha.dispose(); hb.dispose(); leader.dispose(); fa.dispose(); fb.dispose();
+});
+
+test("failover: stream errors during failover -- error surfaces then recovery, no inherited wedge", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const src = makeCountedSource();
+    const follower = makeTab(bc, clock, "F7", () => false, { streamIdleTimeout: 1000 });
+    const h = streamQuery(follower, { key: ["k"], stream: src.factory });
+    const rec = observeRec(h);
+    await drain();
+    const peer = new bc.BroadcastChannel("F7");
+    peer.postMessage({ type: "stream-open", key: ["k"], epochSeq: 2, clientId: "leaderX" });
+    peer.postMessage({ type: "stream-frame", key: ["k"], epochSeq: 2, clientId: "leaderX", seq: 1, value: 1 });
+    await drain();
+    const boom = new Error("upstream failed");
+    peer.postMessage({ type: "stream-end", key: ["k"], epochSeq: 2, clientId: "leaderX", ok: false, error: boom });
+    await drain();
+    const fe = ent(follower, ["k"]);
+    assert.equal(fe.status(), "error", "the dead leader's error is observable");
+    assert.equal(follower.getQueryData ? untrackErr(follower, ["k"]) : true, boom, "error value surfaced");
+    // a follower must never be wedged by a dead leader's failure: the watchdog
+    // self-connects and recovery returns it to streaming.
+    clock.advance(1000); await drain(20);
+    assert.equal(fe.streamOwner, true, "self-connected after the error (no inherited wedge)");
+    src.pushAll(5); await drain();
+    assert.equal(fe.status(), "streaming", "recovered to streaming");
+    assertStrictlyIncreasing(rec.values, "F7");
+    rec.dispose(); h.dispose(); follower.dispose(); peer.close();
+});
+
+function untrackErr(tab, key) {
+    const e = tab._internal.entries.get(JSON.stringify(key));
+    return e ? e.error() : undefined;
+}
+
 test("shared-stream: sharedStreamActive requires opt-in + a leader oracle + a channel", async () => {
     const clock = createMockClock();
     const bc = createMockBroadcastChannel();

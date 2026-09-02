@@ -720,6 +720,7 @@ export function queryClient(options = {}) {
             closeStream(e);                          // F3/F5: loser reverts to projecting
             e.projEpoch = m.epochSeq;
             e.projSeq = -1;
+            armWatchdog(e);                          // and stay live if the winner then hangs (F3)
         }
     }
 
@@ -737,6 +738,7 @@ export function queryClient(options = {}) {
         if (e.streamOwner &&
             rankBelow(e.streamEpoch, clientId, m.epochSeq, m.clientId)) {
             closeStream(e);                          // a higher-ranked owner won
+            armWatchdog(e);                          // stay live if it then hangs (F3/F7)
         }
         projectFrame(e, m.epochSeq, m.seq, m.value);
     }
