@@ -58,6 +58,27 @@ BRIEF.md OR-1..OR-11 remain in force; where this header speaks, it rules.
   as specified (monotonic integers + one cold ASCII clientId; never
   derived from opts.now -- a mock clock must not decide ownership).
 
+- ON-6 (post-review amendment, 2026-09-02): the reviewer REJECTED the
+  ladder on two structural OR-4 defects living in the epoch-collision
+  window (two uncoordinated watchdog promotions both claim max(seen)+1 --
+  G5 forbids the shared counter that would prevent the collision). The
+  spec itself seeded defect 1: the "Ordering and dedup law" bullets below
+  gate on (epochSeq, seq) only, while F5's own mechanism text requires the
+  (epochSeq, clientId) follower gate -- the bullets were incomplete, F5
+  was right. Operator contracts QD-1..QD-3 (Q8) supersede the bullets:
+  QD-1 the projection cursor is the TRIPLE (projEpoch, projClientId,
+  projSeq); equal-epoch different-owner frames resolve by the ownership
+  rank order (adopt if outranking, drop if outranked -- convergent,
+  arrival-order-independent); seq dedup applies only within one
+  (epochSeq, clientId) pair; the stream:gap reason enum does not grow
+  (owner boundaries report "epoch-change"). QD-2 an OWNER never projects
+  (guard the projection call on !streamOwner; abdication first, then
+  projection on later frames). QD-3 the soak gains a concurrency phase --
+  distinct per-connection values, pushes DURING the promotion drain, a
+  nonzero concurrent-owner counter proving the window is entered, and the
+  per-(epoch,owner)-segment subsequence law asserted in every follower --
+  plus counted regressions for both falsifying scenarios verbatim.
+
 Pipeline: coder implements C1..C13 (with C10b inserted) in order, one
 commit per rung, suite + guards green at every rung, the frozen GATE
 byte-identical throughout; reviewer audits the full diff before qa; QA
