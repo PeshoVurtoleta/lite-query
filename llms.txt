@@ -1,6 +1,6 @@
 # @zakkster/lite-query
 
-Reactive async cache with cross-tab coherence. Built on @zakkster/lite-signal (>=1.5.0). ~6KB min+gzip core. Framework-agnostic. 199 deterministic tests (138 core incl. zero-GC hot-path contract + infiniteQuery + prefetch + 31 await + 24 stream + 6 repo drift guards). TypeScript types shipped for every entry point (Query.d.ts, StreamQuery.d.ts, Awaitable.d.ts). Three entry points: `.` (core), `./stream` (streamQuery, optional peer lite-stream), `./await` (async coordination, optional peer lite-await). Every entry exports `VERSION` -- lite-query's own version string, the single runtime version source (defined in Query.js, re-exported by /stream and /await, asserted equal to package.json).
+Reactive async cache with cross-tab coherence. Built on @zakkster/lite-signal (>=1.5.0). ~6KB min+gzip core. Framework-agnostic. 203 deterministic tests (142 core incl. zero-GC hot-path contract + infiniteQuery + prefetch + 31 await + 24 stream + 6 repo drift guards). TypeScript types shipped for every entry point (Query.d.ts, StreamQuery.d.ts, Awaitable.d.ts). Three entry points: `.` (core), `./stream` (streamQuery, optional peer lite-stream), `./await` (async coordination, optional peer lite-await). Every entry exports `VERSION` -- lite-query's own version string, the single runtime version source (defined in Query.js, re-exported by /stream and /await, asserted equal to package.json).
 
 ## Performance vs @tanstack/query-core (5.101)
 
@@ -58,6 +58,8 @@ Warm an entry into the cache with zero observers (route loaders, hover speculati
 
 Decision (OR-4): prefetch of an already-fresh entry is a NO-OP -- no fetch is issued and the pending cacheTime GC is NOT re-armed (the entry keeps the lease it was created with). A `force` variant is deferred until a consumer needs it. This is a pinned decision, not an oversight.
 
+prefetch is ALSO a strict no-op on an infinite entry (one with a live infiniteQuery): it carries no page cursor and must never advance live pagination, so it returns the in-flight promise or current data without fetching. Paginated prefetch is a deliberate future API, not this path.
+
 ### infiniteQuery(qc, opts)
 Cursor-paginated sibling of query(): one cache entry holds the whole list. Returns { pages, data, hasNextPage, fetchNextPage, status, error, fetching, refetch, dispose } -- all functions. Same lazy + abort-on-detach + reactive-key + enabled lifecycle as query(); lives in the SAME cache (getQueryData/setQueryData/invalidate/removeQueries/cross-tab operate uniformly).
 
@@ -72,6 +74,9 @@ Semantics:
 - pages() is the array of raw page results; data() is the flattened accumulation. data() returns a LIVE array grown in place on each fetchNextPage -- copy it ([...q.data()]) if you retain a snapshot across pages (aliasing contract).
 - fetchNextPage() fetches at the current cursor and appends in place (flat loop-append, no O(n) re-copy); dedups on the in-flight promise; no-op once hasNextPage() is false.
 - invalidate()/refetch() refetch from page one and replace the array on success (stale-while-revalidate over the whole list). A generation guard (pageGen) swallows a late page from a superseded generation -- no partial two-generation mixing.
+- getNextCursor throw is contained: if your getNextCursor throws while resolving a page, it routes into the error ladder exactly as a rejected fetcher would (status "error", error() = the thrown value, fetching false, promise cleared), the already-committed pages are preserved, and a later fetchNextPage()/refetch() re-attempts the same cursor cleanly. It never wedges the entry.
+- setQueryData(key, value) on an infinite entry requires value to be a pages ARRAY (it rebuilds flat + cursor). A non-array is fail-closed asymmetric: a LOCAL setQueryData throws TypeError; a REMOTE/cross-tab non-array payload is dropped silently (cannot throw across tabs) leaving the entry untouched.
+- qc.prefetch is a strict NO-OP on an infinite entry: prefetch carries no page cursor and must never advance live pagination. It returns the in-flight promise or current data without fetching. Paginated prefetch, if ever wanted, is a deliberate future API.
 - Cross-tab: the pages array syncs via the single entry's setData broadcast; under sharedFetch the leader dedups per page fetch and broadcasts the whole list, followers rebuild flat + cursor.
 - ZERO extra signals per entry: pages ride the entry's data signal (recreated once with a never-equal comparator so a same-ref set after an in-place push still notifies); flat is a non-reactive view. A plain query() entry pays nothing for the seven uniform infinite slots (all null/false/0).
 - One accessor kind per key: do not point a query() and an infiniteQuery() at the same cache key. There is one entry per key, and configuring it as infinite gives its data signal never-equal notification semantics a plain query() observer on that key would inherit -- outside the supported contract.
@@ -155,7 +160,7 @@ Optional companion:
 
 ## Test approach
 
-138 core deterministic tests using:
+142 core deterministic tests using:
 - Controlled fetcher (test resolves/rejects manually)
 - Mock clock (now/setTimeout injectable)
 - Mock BroadcastChannel (cross-tab simulated without spawning workers)

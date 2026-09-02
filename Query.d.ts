@@ -116,6 +116,11 @@ export interface QueryClient {
     /**
      * Imperatively set an entry's data. Accepts a value OR an updater
      * `(prev) => next`. When `crossTab: true`, propagates to peer tabs.
+     *
+     * On an infinite entry the value must be a pages ARRAY (it rebuilds the flat
+     * view + cursor). A non-array is fail-closed asymmetric: a LOCAL call throws
+     * `TypeError`; a REMOTE/cross-tab non-array payload is dropped silently
+     * (cannot throw across tabs) and leaves the entry untouched.
      */
     setQueryData<T = unknown>(
         key: readonly unknown[],
@@ -143,6 +148,10 @@ export interface QueryClient {
      * speculation). Fetches unless the entry is already fresh; a later query()
      * with the same key adopts it without refetching. Prefetch of a fresh
      * entry is a NO-OP -- no fetch, no cacheTime GC re-arm.
+     *
+     * Prefetch is ALSO a strict no-op on an infinite entry (one with a live
+     * infiniteQuery): it carries no page cursor and must never advance live
+     * pagination, so it returns without fetching or touching the pages.
      */
     prefetch<T = unknown, K extends readonly unknown[] = readonly unknown[]>(
         key: K,
@@ -251,6 +260,11 @@ export interface InfiniteQueryOptions<
      * Derive the next page's cursor from the last page (and all pages so far).
      * Return `null`/`undefined` to signal exhaustion -- `hasNextPage()` reads
      * false and `fetchNextPage()` becomes a no-op.
+     *
+     * A throw here is CONTAINED into the error ladder (status `"error"`,
+     * `error()` = the thrown value, `fetching` false, promise cleared); the
+     * already-committed pages are preserved and a later `fetchNextPage()` /
+     * `refetch()` re-attempts the same cursor cleanly. It never wedges the entry.
      */
     getNextCursor: (lastPage: T, allPages: T[]) => C | null | undefined;
     /** Override `defaultStaleTime` for this query. */

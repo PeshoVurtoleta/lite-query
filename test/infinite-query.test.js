@@ -326,3 +326,104 @@ test("prefetch: an unobserved prefetched entry GCs at cacheTime", async () => {
     assert.equal(qc.getQueryData(["g"]), undefined, "no observer ever attached -> GC removes it");
     qc.dispose();
 });
+
+// -----------------------------------------------------------------------------
+// QA regressions -- D1 / D2 / D3 contract fixes
+// -----------------------------------------------------------------------------
+
+test("infiniteQuery: a throwing getNextCursor routes to the error ladder + re-attempts cleanly (D1)", async () => {
+    const qc = queryClient({ defaultStaleTime: 0, retry: 0 });
+    let shouldThrow = true;
+    const q = infiniteQuery(qc, {
+        key: ["d1"],
+        fetcher: ({ cursor }) => Promise.resolve(cursor == null ? [1] : [2]),
+        getNextCursor: (lastPage, allPages) => {
+            if (allPages.length === 1) return 1;           // page one -> a next cursor
+            if (shouldThrow) throw new Error("boom");       // page two -> throw
+            return null;
+        },
+    });
+    const stop = effect(() => q.data());
+    await tick();
+    assert.deepEqual(q.pages(), [[1]], "page one committed");
+    const p = q.fetchNextPage();
+    await tick();
+    await p.catch(() => {});
+    await tick();
+    assert.equal(q.status(), "error", "throw -> error status, not a wedge");
+    assert.equal(q.error().message, "boom");
+    assert.equal(q.fetching(), false, "fetching cleared");
+    assert.deepEqual(q.pages(), [[1]], "committed page preserved through the throw");
+    assert.deepEqual(q.data(), [1]);
+    // clean re-attempt: no dead-promise reuse, same cursor re-tried
+    shouldThrow = false;
+    const p2 = q.fetchNextPage();
+    await tick();
+    await p2.catch(() => {});
+    await tick();
+    assert.equal(q.status(), "success");
+    assert.deepEqual(q.pages(), [[1], [2]], "re-attempt appends the page cleanly");
+    stop();
+    qc.dispose();
+});
+
+test("setQueryData: a non-array on an infinite entry throws TypeError locally (D2)", async () => {
+    const qc = queryClient({ defaultStaleTime: 0 });
+    const q = infiniteQuery(qc, { key: ["d2a"], fetcher: () => Promise.resolve([1]), getNextCursor: () => null });
+    const stop = effect(() => q.data());
+    await tick();
+    assert.throws(
+        () => qc.setQueryData(["d2a"], { not: "an array" }),
+        /infinite entries accept an array of pages/,
+    );
+    qc.setQueryData(["d2a"], [[9]]);                        // array still works
+    assert.deepEqual(q.pages(), [[9]]);
+    stop();
+    qc.dispose();
+});
+
+test("setQueryData: a remote non-array on an infinite entry drops silently, state coherent (D2)", async () => {
+    const { BroadcastChannel: BC, reset } = createMockBroadcastChannel();
+    const A = queryClient({ broadcastChannel: BC, crossTab: true, crossTabChannel: "d2", defaultStaleTime: 0 });
+    const B = queryClient({ broadcastChannel: BC, crossTab: true, crossTabChannel: "d2", defaultStaleTime: 0 });
+    const qB = infiniteQuery(B, {
+        key: ["d2b"], fetcher: () => new Promise(() => {}), getNextCursor: (lastPage, allPages) => allPages.length,
+    });
+    const stop = effect(() => qB.data());
+    await tick();
+    A.setQueryData(["d2b"], [[1], [2]]);                    // valid array write -> B rebuilds
+    for (let i = 0; i < 4; i++) await tick();
+    assert.deepEqual(qB.pages(), [[1], [2]]);
+    // A's entry is plain (no infinite handle) so the non-array write is legal on A
+    // and broadcasts; B (infinite) must DROP it -- cannot throw across tabs.
+    A.setQueryData(["d2b"], { rogue: true });
+    for (let i = 0; i < 4; i++) await tick();
+    assert.deepEqual(qB.pages(), [[1], [2]], "remote non-array dropped; infinite state untouched");
+    assert.equal(qB.status(), "success", "coherence preserved");
+    stop();
+    A.dispose();
+    B.dispose();
+    reset();
+});
+
+test("prefetch: a strict no-op on an active infinite entry -- never advances pagination (D3)", async () => {
+    const qc = queryClient({ defaultStaleTime: 0, retry: 0 });
+    let calls = 0;
+    const q = infiniteQuery(qc, {
+        key: ["d3"],
+        fetcher: ({ cursor }) => { calls++; return Promise.resolve([cursor == null ? 0 : cursor]); },
+        getNextCursor: (lastPage, allPages) => (allPages.length < 5 ? allPages.length : null),
+    });
+    const stop = effect(() => q.data());
+    await tick();
+    assert.equal(calls, 1, "page one only");
+    assert.deepEqual(q.pages(), [[0]]);
+    let otherCalled = 0;
+    await qc.prefetch(["d3"], () => { otherCalled++; return Promise.resolve([999]); });
+    await tick();
+    assert.equal(otherCalled, 0, "supplied fetcher never called");
+    assert.equal(calls, 1, "no new page fetched");
+    assert.deepEqual(q.pages(), [[0]], "pagination unchanged");
+    stop();
+    qc.dispose();
+});

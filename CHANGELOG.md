@@ -39,15 +39,32 @@ Cursor pagination and route-loader prefetch, both first-class. The last honest
   LIVE array that grows in place as pages arrive -- copy it (`[...q.data()]`) to
   retain a snapshot across a `fetchNextPage`.
 
+### Contracts (fail-closed)
+
+- `getNextCursor` throw containment: a throw from user `getNextCursor` while
+  resolving a page routes into the error ladder exactly as a rejected fetcher
+  would (status `"error"`, `error()` set, `fetching` false, promise cleared);
+  the staged page is rolled back so committed pages are preserved, and a later
+  `fetchNextPage()`/`refetch()` re-attempts the same cursor cleanly. It never
+  wedges the entry.
+- `setQueryData` on an infinite entry requires a pages ARRAY. Non-array is
+  asymmetric: a LOCAL call throws `TypeError`; a REMOTE/cross-tab non-array
+  payload is dropped silently (cannot throw across tabs), leaving the entry
+  untouched -- coherence preserved.
+- `qc.prefetch` is a strict NO-OP on an infinite entry: it carries no page
+  cursor and must never advance live pagination. Returns the in-flight promise
+  or current data without fetching. Paginated prefetch is a deliberate future
+  API, not this path.
+
 ### Tests + torture
 
-- 199 deterministic tests (138 core + 31 await + 24 stream + 6 drift guards),
-  up from 181: `test/infinite-query.test.js` (17 -- accumulation/flat order,
+- 203 deterministic tests (142 core + 31 await + 24 stream + 6 drift guards),
+  up from 181: `test/infinite-query.test.js` (21 -- accumulation/flat order,
   cursor exhaustion, concurrent-fetchNextPage dedup, invalidate/refetch page-one
   replace, late-page-from-dead-generation swallow, detach + key-change mid-page
   abort, error ladder, enabled gate, cross-tab page sync, prefetch adoption /
-  fresh no-op / cacheTime GC) plus a zero-GC warm-read contract for infinite
-  handles.
+  fresh no-op / cacheTime GC, plus the three contract regressions above) and a
+  zero-GC warm-read contract for infinite handles.
 - `test/torture.mjs` phase H reads a prefilled 4-page infinite handle inside the
   200000 warm loop at zero allocation; the GATE line is byte-identical:
   `GATE leak=size 0/0 findings=0 warnings=0 | gc major=0 minor=0 maxMs=0.00 | ok`.

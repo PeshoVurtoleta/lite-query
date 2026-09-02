@@ -145,20 +145,38 @@ function resetPages(entry) {
 // pages). `startGen` guards against a page resolving into a generation a later
 // invalidate already superseded (the mid-flight let-finish path does not bump
 // fetchGen, so this pageGen check is what swallows the stale page).
+//
+// ATOMIC: user `getNextCursor` runs AFTER the page is staged but BEFORE the
+// commit is published, and a throw rolls the staged mutation back to exactly the
+// pre-commit state (fresh arrays discarded on replace; page + its flat items
+// popped on append) then re-throws. The resolution path routes that throw into
+// the error ladder, so a getNextCursor that throws cannot wedge the entry and a
+// later fetchNextPage()/refetch() re-attempts the same cursor cleanly.
 function commitPage(entry, pageData, startGen, startCursor) {
     if (startGen !== entry.pageGen) return;         // dead generation -- swallow
-    if (startCursor === null) {                     // page one -> replace
-        entry.pages = [];
-        entry.flat = [];
-    }
-    entry.pages.push(pageData);
-    const flat = entry.flat;
+    // Stage into fresh arrays on a page-one replace (so a throw leaves the old
+    // pages intact), or into the live arrays on an append (rolled back on throw).
+    const pagesArr = startCursor === null ? [] : entry.pages;
+    const flatArr  = startCursor === null ? [] : entry.flat;
+    const flatMark = flatArr.length;
+    pagesArr.push(pageData);
     if (Array.isArray(pageData)) {
-        for (let i = 0; i < pageData.length; i++) flat.push(pageData[i]);
+        for (let i = 0; i < pageData.length; i++) flatArr.push(pageData[i]);
     } else {
-        flat.push(pageData);
+        flatArr.push(pageData);
     }
-    const cursor = entry.getNextCursor(pageData, entry.pages);
+    let cursor;
+    try {
+        cursor = entry.getNextCursor(pageData, pagesArr);
+    } catch (err) {
+        if (startCursor !== null) {                 // append -> undo the staging
+            pagesArr.pop();
+            flatArr.length = flatMark;
+        }                                           // replace -> fresh arrays discarded
+        throw err;
+    }
+    entry.pages = pagesArr;
+    entry.flat = flatArr;
     entry.nextCursor = cursor === undefined ? null : cursor;
     entry.hasNext = entry.nextCursor !== null;
     entry.data.set(entry.pages);
@@ -578,10 +596,28 @@ export function queryClient(options = {}) {
 
             if (outcome.superseded) return;
 
-            if (outcome.ok) {
-                if (entry.isInfinite) {
+            if (outcome.ok && entry.isInfinite) {
+                // A throw from user getNextCursor (via commitPage) is contained
+                // into the error ladder exactly as a rejected fetcher would be:
+                // committed pages are preserved (commitPage rolled the staged
+                // page back), status/error/fetching/promise are settled, and a
+                // later fetchNextPage()/refetch() re-attempts cleanly.
+                try {
                     commitPage(entry, outcome.data, startPageGen, startCursor);
-                } else if (!entry.equals(entry.data(), outcome.data)) {
+                } catch (commitErr) {
+                    entry.error.set(commitErr);
+                    entry.status.set("error");
+                    entry.lastCompletedAt = opts.now();
+                    entry.invalidatedSinceCompletion = false;
+                    entry.fetching.set(false);
+                    entry.promise = null;
+                    entry.abortController = null;
+                    return Promise.reject(commitErr);
+                }
+            }
+
+            if (outcome.ok) {
+                if (!entry.isInfinite && !entry.equals(entry.data(), outcome.data)) {
                     entry.data.set(outcome.data);
                 }
                 entry.error.set(undefined);
@@ -636,10 +672,20 @@ export function queryClient(options = {}) {
         const newVal = typeof valueOrFn === "function"
             ? valueOrFn(untrack(() => e.data()))
             : valueOrFn;
-        // Infinite entries store the pages array in `data`; a manual or
+        // Infinite entries store the pages ARRAY in `data`; a manual or
         // cross-tab write replaces the whole list and rebuilds the flat view +
-        // cursor so hasNextPage()/fetchNextPage() stay coherent.
-        if (e.isInfinite && Array.isArray(newVal)) {
+        // cursor so hasNextPage()/fetchNextPage() stay coherent. A non-array on
+        // an infinite entry is a contract violation, handled fail-closed but
+        // asymmetric: a LOCAL caller gets a TypeError (a programming error);
+        // a REMOTE/cross-tab apply cannot throw across tabs, so it drops the
+        // payload and leaves the entry untouched (coherence preserved).
+        if (e.isInfinite && !Array.isArray(newVal)) {
+            if (processingRemote) return;
+            throw new TypeError(
+                "setQueryData: infinite entries accept an array of pages, got " +
+                (newVal === null ? "null" : typeof newVal));
+        }
+        if (e.isInfinite) {
             rebuildInfinite(e, newVal);
         } else {
             e.data.set(newVal);
@@ -737,6 +783,14 @@ export function queryClient(options = {}) {
     // `force` variant is deferred until a consumer needs it.
     function prefetch(key, fetcher, prefetchOpts = {}) {
         const e = ensureEntry(key);
+        // Infinite entries are never prefetched: prefetch carries no page cursor
+        // and must not advance live pagination (with staleTime 0 the entry is
+        // always stale, so an unguarded runFetch would silently fetch the NEXT
+        // page). Strict no-op -- return the in-flight promise or current data,
+        // never runFetch, never touch pagination or GC arming.
+        if (e.isInfinite) {
+            return e.promise || Promise.resolve(untrack(() => e.data()));
+        }
         if (fetcher && !e.fetcher) e.fetcher = fetcher;
         if (prefetchOpts.staleTime  !== undefined) e.staleTime  = prefetchOpts.staleTime;
         if (prefetchOpts.cacheTime  !== undefined) e.cacheTime  = prefetchOpts.cacheTime;

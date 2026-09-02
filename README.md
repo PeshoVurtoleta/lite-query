@@ -1,6 +1,6 @@
 # @zakkster/lite-query
 
-Reactive async cache with cross-tab coherence. Built on `@zakkster/lite-signal`. ~6KB minified+gzipped, framework-agnostic, 158 tests, zero runtime dependencies outside the lite ecosystem.
+Reactive async cache with cross-tab coherence. Built on `@zakkster/lite-signal`. ~6KB minified+gzipped, framework-agnostic, 203 tests, zero runtime dependencies outside the lite ecosystem.
 
 [![npm version](https://img.shields.io/npm/v/@zakkster/lite-query.svg?style=for-the-badge&color=latest)](https://www.npmjs.com/package/@zakkster/lite-query)
 ![Zero-GC](https://img.shields.io/badge/Zero--GC-Hot%20path-00C853?style=for-the-badge&logo=leaf&logoColor=white)
@@ -63,7 +63,7 @@ The honest comparison. Numbers are min+gzip, current as of writing.
 | Abort reason vocabulary | Yes (`signal.reason`) | No | No |
 | Per-query timeout | Yes | No (manual via fetcher) | No (manual via fetcher) |
 | Devtools UI | Roadmap | Yes (mature) | Yes |
-| Tests | 199 | ~hundreds | ~hundreds |
+| Tests | 203 | ~hundreds | ~hundreds |
 | Foundation | Signals (lite-signal) | Observer pattern | SWR algo + hooks |
 
 Where lite-query trails: the devtools panel is on the roadmap. Where it leads: cross-tab, cursor pagination, and the signal-native composition story.
@@ -345,16 +345,16 @@ If you're new to the family, start with lite-signal -- every other library here 
 npm test
 ```
 
-181 deterministic tests. Run output:
+203 deterministic tests. Run output:
 
 ```
-# tests 181
-# pass 181
+# tests 203
+# pass 203
 # fail 0
 # skipped 0
 ```
 
-The core suite (120) uses a controlled fetcher, mock clock, and mock `BroadcastChannel` so every test is deterministic -- no real timers, no real network. The optional entry points add 31 (`/await`) and 24 (`/stream`) tests, the latter driving a manually-pumped async iterator through every termination path, and 6 repo drift guards keep the shipped files ASCII-clean, the documented surface in sync with the real exports, and the runtime `VERSION` const equal to `package.json`. See `test/harness.js` for the mocks.
+The core suite (142) uses a controlled fetcher, mock clock, and mock `BroadcastChannel` so every test is deterministic -- no real timers, no real network, and it covers `infiniteQuery` cursor pagination and `qc.prefetch`. The optional entry points add 31 (`/await`) and 24 (`/stream`) tests, the latter driving a manually-pumped async iterator through every termination path, and 6 repo drift guards keep the shipped files ASCII-clean, the documented surface in sync with the real exports, and the runtime `VERSION` const equal to `package.json`. See `test/harness.js` for the mocks.
 
 Every entry point exports `VERSION` -- lite-query's own version string, the single runtime version source. It lives in `Query.js`, is re-exported by `/stream` and `/await`, and `test/version-sync.test.js` asserts it equals `package.json`.
 
