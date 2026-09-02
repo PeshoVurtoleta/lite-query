@@ -1170,6 +1170,28 @@ scripts; Q4 onward: the law harness). No gate output is a FAIL.
   silent drop): it rides a future docs pass when a consumer asks for a
   reactive ingest-progress UI. The persistQueryClient recipes (localStorage
   / IndexedDB, recipe 17; bake-backed, recipe 18) shipped this pass.
+  CROSS-REVIEW FIX 2026-09-02 (same day): bake's session reviewed recipes
+  18/19 against shipped bake 1.7.1 and reported three sample defects;
+  verification against the registry tarball confirmed all three and found a
+  fourth. Fixed in Cookbook.md: (a) PascalCase subpaths
+  (`/PreserveReader`, `/RangeReader`) are not in bake's exports map
+  (kebab-case only) -- recipe 18 now imports PreserveReader from the root
+  (a verified root export), recipe 19 from `/range-reader`. RangeReader is
+  NOT a root export at 1.7.1, correcting the reviewer's own "both are root
+  exports" fix suggestion -- artifact-level verification earns its keep in
+  both directions. (b) Recipe 19's `new RangeReader({ fetch, signal })`
+  never shipped: the surface is `await RangeReader.open(adapter,
+  { signal })` over an adapter carrying `.fetch` AND `.size`;
+  `HTTPRangeAdapter.open(url, { signal })` replaced the hand-rolled fetch
+  (which also returned ArrayBuffer where the adapter contract requires
+  Uint8Array). (c) The fourth: recipe 19 called `reader.getJSON(i)` --
+  that is PreserveReader's tri-API; RangeReader is columnar -- rewritten
+  to prefetchRange/syncRange windowed field reads. (d) Recipe 18 passed
+  pooled `bytes.buffer` to PreserveReader, which fails closed to
+  'load-threw'/dropped on Node (never wrong bytes, never restores) -- now
+  slices the unpooled copy, bake's own suite idiom. Cookbook.md SHIPS in
+  the pack, so 1.4.0's tarball carries the broken samples; the fix rides
+  the next publish (owed a `[1.5.0]` CHANGELOG Fixed line).
 - **Baked torture fixtures** (optional, Q4+): a deterministic LBK1 fixture
   for large-payload churn would keep JSON.parse allocation noise out of
   the profiler-gated phase H measurement, borrowing lite-bake-stream's

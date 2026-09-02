@@ -582,8 +582,7 @@ For a large cache, bake each dehydrated entry as one JSON record in a preserve-m
 Below the crossover, use plain JSON (whole-cache `JSON.parse` wins full hydration); the bake container wins above it, and for lazy first-entry boot the O(1) preserve open always wins. And carry bake's read rule: a `getJSON(i)` that throws a native `SyntaxError` (its `.code` is undefined) means the stored record is not JSON -- discard the cache and re-fetch, never retry the same bytes.
 
 ```js
-import { serialize } from '@zakkster/lite-bake-stream';
-import { PreserveReader } from '@zakkster/lite-bake-stream/PreserveReader';
+import { serialize, PreserveReader } from '@zakkster/lite-bake-stream';
 import { persistQueryClient } from '@zakkster/lite-query';
 
 const persister = persistQueryClient(qc, {
@@ -597,7 +596,10 @@ const persister = persistQueryClient(qc, {
   load: () => {
     const bytes = readFromDisk('lq.lbk');
     if (bytes == null) return null;
-    const reader = new PreserveReader(bytes.buffer, { verifyCrc: true });   // fails closed on CRC mismatch/absence
+    // A Node Buffer is a VIEW into a shared pool: bytes.buffer is the pool, not
+    // the container, and fails closed at open -- slice the unpooled copy out.
+    const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    const reader = new PreserveReader(ab, { verifyCrc: true });   // fails closed on CRC mismatch/absence
     const entries = [];
     for (let i = 0; i < reader.totalRows; i++) {
       try {
@@ -620,22 +622,23 @@ Bake-stream's `RangeReader` reads a remote LBK1 container over HTTP Range with z
 
 ```js
 import { streamQuery } from '@zakkster/lite-query/stream';
-import { RangeReader } from '@zakkster/lite-bake-stream/RangeReader';
+import { RangeReader, HTTPRangeAdapter } from '@zakkster/lite-bake-stream/range-reader';
 
-// The stream factory yields rows from a pruned range scan; `signal` is the
+// The stream factory yields rows in prefetched shard windows; `signal` is the
 // streamQuery abort signal (fires on detach / removeQueries / key change).
 const feed = streamQuery(qc, {
   key: ['remote-feed', filter()],
   mode: 'buffer',
   maxBuffer: 200,
   stream: async function* ({ signal }) {
-    const reader = new RangeReader({
-      fetch: (byteOffset, byteLength, sig) =>
-        fetch(URL, { headers: { Range: `bytes=${byteOffset}-${byteOffset + byteLength - 1}` }, signal: sig })
-          .then((r) => r.arrayBuffer()),
-      signal,                                        // abort-on-detach cancels the in-flight range read (R_ABORTED)
-    });
-    for (let i = 0; i < reader.totalRows; i++) yield reader.getJSON(i);
+    const adapter = await HTTPRangeAdapter.open(FEED_URL, { signal });   // probes size; every Range fetch rides it
+    const reader = await RangeReader.open(adapter, { signal });          // abort-on-detach -> R_ABORTED, no partial cache
+    for (let first = 0; first < reader.totalRows; first += 200) {
+      const last = Math.min(first + 200, reader.totalRows);
+      await reader.prefetchRange(first, last);       // one ranged fetch per uncached shard in the window
+      const win = reader.syncRange(first, last);     // await-free field reads inside the cached window
+      for (let i = first; i < last; i++) yield { ts: win.get(i, 'ts'), msg: win.get(i, 'msg') };
+    }
   },
 });
 effect(() => render(feed.data()));                   // detach -> abort -> no partial cache
