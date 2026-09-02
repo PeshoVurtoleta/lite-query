@@ -63,11 +63,12 @@ The honest comparison. Numbers are min+gzip, current as of writing.
 | Cache persistence + boot hydration | **`persistQueryClient` + `qc.dehydrate`/`hydrate` (built-in)** | Plugin (`@tanstack/query-persist-client`) | Manual |
 | Abort reason vocabulary | Yes (`signal.reason`) | No | No |
 | Per-query timeout | Yes | No (manual via fetcher) | No (manual via fetcher) |
-| Devtools UI | Roadmap | Yes (mature) | Yes |
-| Tests | 268 | ~hundreds | ~hundreds |
+| Devtools feed | **`qc.inspect` (23-type push feed)** | Feed + bundled UI | Feed + UI |
+| Devtools UI | External (lite-studio) | Yes (mature) | Yes |
+| Tests | 312 | ~hundreds | ~hundreds |
 | Foundation | Signals (lite-signal) | Observer pattern | SWR algo + hooks |
 
-Where lite-query trails: the devtools panel is on the roadmap. Where it leads: cross-tab, cursor pagination, and the signal-native composition story.
+Where lite-query trails: the devtools *panel* is external (lite-studio), not bundled. What lite-query ships is the FEED a panel renders (`qc.inspect`, zero-cost when off). Where it leads: cross-tab, cursor pagination, and the signal-native composition story.
 
 ## Performance
 
@@ -268,6 +269,27 @@ Boundaries worth keeping straight -- the re-exports and `query()` are complement
 - **`createAwaitScope(ctrl?)`** binds N signal-aware awaiters to one `AbortController` (owns a fresh one when omitted; borrows when passed, and `scope.abort()` then throws). Upstream `decisions/0007` owns the documented contract; we only re-export it.
 - **`fromPromise` vocabulary is final** -- lite-await `decisions/0009` verdict = REJECT (accepted 2026-09-01). The name and its signal-state projection are locked; the mapping table is permanent.
 
+## Devtools feed -- `qc.inspect(hook)`
+
+Observability with a zero-cost off switch. `qc.inspect(hook)` installs ONE observe-only hook -- a push-mode stream of cache truth a panel renders -- and returns an idempotent uninstall thunk. The **panel is not here**: it belongs to [lite-studio](https://www.npmjs.com/search?q=%40zakkster) (its repo, its session), which consumes this feed's vocabulary. lite-query owes the feed, not a UI; nothing is imported in either direction.
+
+```ts
+const stop = qc.inspect((e) => {
+    // e is POOLED per type -- copy what you keep
+    if (e.type === "fetch:settle") console.log(e.keyHash, e.ok ? "ok" : "error");
+});
+// ... later
+stop();   // idempotent
+```
+
+Every event is one **monomorphic record -- exactly 10 own keys, always present**: `{ type, ts, key, keyHash, from, to, reason, count, ok, value }` (a field that does not apply is `null`; `count` is `0`, `ok` is `false`). The 23 `domain:verb` types cover the whole lifecycle: `entry:create|attach|detach|gc|remove|status|stale`, `fetch:dispatch|settle|abort`, `tab:send|receive`, `shared:request|fallback|serve`, `stream:start|value|done|error`, `mutation:start|settle`, `persist:hydrate|save`. Full field table in `llms.txt`.
+
+Three contracts to keep straight:
+
+- **Hook-must-copy.** Records are pooled per type and overwritten in place -- the same object is handed back for every event of that type. Copy what you retain (`{ ...e }` or the fields you need). This is what makes an installed hook allocate **zero** per event.
+- **Observe-only, synchronous.** Dispatch is synchronous at the emit site (emission order is the truth). A throwing hook is contained fail-closed: the feed auto-uninstalls, logs once via `console.error`, and the in-progress cache write completes -- a panel bug never aborts a commit. Never throw, never mutate from a hook.
+- **Zero cost when off.** With no hook installed the warm read path allocates exactly what 1.4.0 does and the byte-frozen torture GATE line is unchanged -- every emit site is a single branch-predicted `!== null` test. The feed is also independent of `persistQueryClient`'s private write seam: uninstalling either never disturbs the other.
+
 ## Honest behaviour notes
 
 A few things to know that aren't obvious from the API:
@@ -348,16 +370,16 @@ If you're new to the family, start with lite-signal -- every other library here 
 npm test
 ```
 
-203 deterministic tests. Run output:
+312 deterministic tests. Run output:
 
 ```
-# tests 203
-# pass 203
+# tests 312
+# pass 312
 # fail 0
 # skipped 0
 ```
 
-The core suite (207) uses a controlled fetcher, mock clock, and mock `BroadcastChannel` so every test is deterministic -- no real timers, no real network, and it covers `infiniteQuery` cursor pagination, `qc.prefetch`, and the persistence primitive + adapter (with a dependency-free dehydrated-cache corruption matrix). The optional entry points add 31 (`/await`) and 24 (`/stream`) tests, the latter driving a manually-pumped async iterator through every termination path, and 6 repo drift guards keep the shipped files ASCII-clean, the documented surface in sync with the real exports, and the runtime `VERSION` const equal to `package.json`. See `test/harness.js` for the mocks.
+The core suite (251) uses a controlled fetcher, mock clock, and mock `BroadcastChannel` so every test is deterministic -- no real timers, no real network, and it covers `infiniteQuery` cursor pagination, `qc.prefetch`, the persistence primitive + adapter (with a dependency-free dehydrated-cache corruption matrix), and the devtools feed `qc.inspect` (all 23 event types, the 10-key monomorphic shape + pooled-reuse identity, two-seam independence, and throwing-hook containment). The optional entry points add 31 (`/await`) and 24 (`/stream`) tests, the latter driving a manually-pumped async iterator through every termination path, and 6 repo drift guards keep the shipped files ASCII-clean, the documented surface in sync with the real exports, and the runtime `VERSION` const equal to `package.json`. See `test/harness.js` for the mocks.
 
 Every entry point exports `VERSION` -- lite-query's own version string, the single runtime version source. It lives in `Query.js`, is re-exported by `/stream` and `/await`, and `test/version-sync.test.js` asserts it equals `package.json`.
 

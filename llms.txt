@@ -1,6 +1,6 @@
 # @zakkster/lite-query
 
-Reactive async cache with cross-tab coherence. Built on @zakkster/lite-signal (>=1.5.0). ~6KB min+gzip core. Framework-agnostic. 268 deterministic tests (207 core incl. zero-GC hot-path contract + infiniteQuery + prefetch + persistence/dehydrated-cache conformance + 31 await + 24 stream + 6 repo drift guards). TypeScript types shipped for every entry point (Query.d.ts, StreamQuery.d.ts, Awaitable.d.ts). Three entry points: `.` (core), `./stream` (streamQuery, optional peer lite-stream), `./await` (async coordination, optional peer lite-await). Every entry exports `VERSION` -- lite-query's own version string, the single runtime version source (defined in Query.js, re-exported by /stream and /await, asserted equal to package.json).
+Reactive async cache with cross-tab coherence. Built on @zakkster/lite-signal (>=1.5.0). ~6KB min+gzip core. Framework-agnostic. 312 deterministic tests (251 core incl. zero-GC hot-path contract + infiniteQuery + prefetch + persistence/dehydrated-cache conformance + the devtools feed qc.inspect + 31 await + 24 stream + 6 repo drift guards). TypeScript types shipped for every entry point (Query.d.ts, StreamQuery.d.ts, Awaitable.d.ts). Three entry points: `.` (core), `./stream` (streamQuery, optional peer lite-stream), `./await` (async coordination, optional peer lite-await). Every entry exports `VERSION` -- lite-query's own version string, the single runtime version source (defined in Query.js, re-exported by /stream and /await, asserted equal to package.json).
 
 ## Performance vs @tanstack/query-core (5.101)
 
@@ -21,7 +21,7 @@ A query/mutation cache layer like TanStack Query or SWR, but signals-based and f
 ## Public API
 
 ### queryClient(options)
-Creates a cache client. Returns { options, getQueryData, setQueryData, invalidate, removeQueries, clear, prefetch, dehydrate, hydrate, dispose }.
+Creates a cache client. Returns { options, getQueryData, setQueryData, invalidate, removeQueries, clear, prefetch, dehydrate, hydrate, inspect, dispose }.
 
 ### Persistence: qc.dehydrate() / qc.hydrate(state) / persistQueryClient(qc, opts)
 
@@ -30,6 +30,42 @@ qc.dehydrate() -> { entries } snapshots the SUCCESS entries only (cold path; wal
 qc.hydrate(state) -> { ok, count, reason } seeds a fresh cache at boot, fail-closed and all-or-nothing (OR-2/OR-3). Boot order: create qc -> hydrate -> attach observers. It THROWS if the cache holds ANY entry (observed or not -- entry count, not observer count); that throw is reserved for the empty-cache precondition (a programming error, the ABA bug of this domain). A malformed STORED payload instead RETURNS { ok: false, count: 0, reason } (external data drops, never throws -- the asymmetry mirrors setQueryData's local-throw / remote-drop law). Validation runs over the WHOLE payload BEFORE any mutation; the reason codes (stable, ASCII) are: malformed-state, malformed-entries, malformed-entry, malformed-key, malformed-data, malformed-timestamp, malformed-pages, duplicate-key. Seeded entries are stale-aware (lastCompletedAt = min(dataUpdatedAt, now()) -- a finite FUTURE timestamp is clamped to now(), bounding freshness at one staleTime from boot; a NON-finite timestamp drops the whole payload). A restored, unobserved entry arms the normal cacheTime GC and expires like a prefetched one. Hydrate NEVER broadcasts and never fires the write hook (no cross-tab echo of what we just loaded). Infinite records restore the shape itself (pages + flat rebuilt), with hasNext false and getNextCursor null until the first infiniteQuery attach, where configure() installs getNextCursor and recomputes the cursor/hasNext from the restored pages (a getNextCursor that throws at adoption resets to a clean page-one fetch, never wedges).
 
 persistQueryClient(qc, { save, load, version, throttle? }) -> { restored, flush, stop } is the storage-agnostic adapter (a CORE export, OR-5; zero new deps). save/load are caller thunks (localStorage, IndexedDB, a bake container -- see Cookbook); the write seam it subscribes to is PRIVATE (one persistHook !== null test at six commit/settle sites; the public feed is Q7's). Install validation (throws): save/load must be functions; version is REQUIRED with no default (string/number, strict === at compare); throttle ?? 1000 must be finite >= 0; a second install on the same client throws (single-slot seam). Restore: handle.restored is a promise that always RESOLVES (never rejects) with { status: "restored" | "empty" | "dropped", count, reason }; reasons are null | "load-threw" | "malformed-envelope" | "version-mismatch" | "cache-not-empty" | "hydrate-threw" | a hydrate reason code. ("hydrate-threw" is belt-and-braces: hydrate's only throw is the empty-cache precondition -- which maps to "cache-not-empty" -- but any other throw out of hydrate resolves "hydrate-threw" rather than escaping, symmetric with "load-threw".) load() returning null/undefined is "empty" (normal boot) and never reaches hydrate; a version mismatch or malformed envelope drops everything and fetches fresh; a late async load() whose entries already exist hits the OR-2 precondition and the adapter CATCHES the throw and resolves "dropped" / "cache-not-empty". The envelope is exactly { version, state } (two own keys). The write hook is armed only AFTER the restore outcome settles (all three branches), so seeding can never trigger a save. throttle is trailing-edge coalescing on qc.options.setTimeout/clearTimeout (mock-clock testable, unref-guarded); the timer is nulled BEFORE the flush builds state, so a write during save() opens a fresh window; save() rejections are contained. flush() forces the pending save; stop() is idempotent and FLUSHES a pending save (flush-on-stop, ON-3c -- a pending timer means a committed write not yet on disk), then uninstalls the hook and clears the timer. The logout path is qc.clear() then stop(): clear is a hook site, so emptiness persists.
+
+### Devtools feed: qc.inspect(hook) -> uninstall
+
+qc.inspect(hook) installs ONE observe-only feed hook (a panel multiplexes -- no hook arrays, no second slot) and returns an IDEMPOTENT uninstall thunk. It mirrors persistQueryClient's install semantics exactly: a non-function (an array included) throws TypeError; a second install while one is live throws Error (single-slot seam). The feed and the persist write-seam are TWO INDEPENDENT slots (OR-4): uninstalling either never disturbs the other -- a devtools panel cannot evict the persistence adapter, or vice versa. The panel belongs to lite-studio (their repo, their session); lite-query owes the FEED, not a UI. Import NOTHING from lite-studio/lite-devtools in either direction.
+
+Zero-cost off switch (OR-5/G3): with no hook installed the warm read path allocates exactly what 1.4.0 allocates and the byte-frozen torture GATE line is unchanged -- every emit site is one branch-predicted `feed.hook !== null` test and nothing (no object, array, string, or ts read) is built before it passes. When installed, dispatch is SYNCHRONOUS at the emit site (emission order is the truth; no queue, no microtask). A THROWING hook is contained fail-closed TOWARD THE FEED: the funnel nulls the slot (instant return to the zero-cost path), logs once via console.error, and returns so the in-progress cache write completes -- it never propagates and never re-throws out-of-band.
+
+Event shape -- one MONOMORPHIC record, exactly 10 own keys, always present, in this order: { type, ts, key, keyHash, from, to, reason, count, ok, value }. A field that does not apply is null (count is 0, ok is false). One hidden class per type keeps a panel's property reads monomorphic. ts is performance.now() (else Date.now()) resolved once at module load -- NOT opts.now (a mock staleness clock must not stamp the feed); monotonic non-decreasing. key/keyHash/value are BY REFERENCE, never copied, never serialized (the panel's job). HOOK-MUST-COPY CONTRACT: records are POOLED per type and OVERWRITTEN in place, so the same object is handed to the hook for every event of a given type -- copy what you keep (`{ ...event }` or the fields you need), or a retained reference reads stale fields after the next event of that type. This is what buys zero allocation per event when installed.
+
+Vocabulary -- 23 frozen types (domain:verb, lower-case; our domain words win over lite-devtools' connect/disconnect, OR-8):
+
+| type | key/keyHash | from/to | reason | count | ok | value |
+|---|---|---|---|---|---|---|
+| entry:create | yes | - | - | 0 | false | - |
+| entry:attach | yes | - | - | observerCount after | false | - |
+| entry:detach | yes | - | - | observerCount after | false | - |
+| entry:gc | yes | - | - | 0 | false | - |
+| entry:remove | yes | - | remove \| clear \| hydrate-rollback | 0 | false | - |
+| entry:status | yes | yes/yes | - | 0 | false | - |
+| entry:stale | yes | - | invalidate | 0 | false | - |
+| fetch:dispatch | yes | - | force \| null | fetchGen | false | cursor \| null |
+| fetch:settle | yes | - | null \| commit-throw | fetchGen | ok | data \| error |
+| fetch:abort | yes | - | lite-query:detach\|refetch\|removed\|timeout | fetchGen | false | - |
+| tab:send | - | - | msg type | 0 | postMessage ok | - |
+| tab:receive | - | - | msg type | 0 | false | - |
+| shared:request | yes | - | follower | 0 | false | - |
+| shared:fallback | yes | - | follower-timeout | 0 | false | - |
+| shared:serve | yes | - | leader | 0 | false | - |
+| stream:start | yes | - | - | 0 | false | - |
+| stream:value | yes | - | - | streamCount after | false | frame value |
+| stream:done | yes | - | - | streamCount final | true | - |
+| stream:error | yes | - | open \| iterator | streamCount | false | error |
+| mutation:start | - | - | - | mutationGen | false | vars |
+| mutation:settle | - | - | null \| superseded | mutationGen | !error | data \| error |
+| persist:hydrate | - | - | null \| a hydrate reason code | records seeded | ok | - |
+| persist:save | - | - | null \| dehydrate-threw | entries in envelope | ok | - |
 
 Options:
 - defaultStaleTime: number (default 0) -- ms before cache entries are considered stale
@@ -161,7 +197,7 @@ Optional companion:
 ## What it doesn't do (intentional v1 scope)
 
 - No focus/reconnect revalidation triggers (deferred to 1.x as injectable hooks)
-- No devtools (roadmap for 1.x)
+- The devtools FEED now ships (Q7): qc.inspect installs a push-mode stream of cache truth a panel renders (see "Devtools feed" above). The devtools UI/PANEL is NOT lite-query's -- it belongs to lite-studio (consumes this feed's vocabulary; no import in either direction). No feed history/replay/ring-buffer, no serialization, no formatting (the panel's job).
 - Boot-time cache persistence + hydration NOW SHIP (Q6): qc.dehydrate / qc.hydrate + persistQueryClient (see Persistence above). Framework server-render (SSR) streamed hydration remains deferred (no consumer); the boot-only single-shot into an empty cache is the shipped model.
 - No bidirectional pagination: infiniteQuery is forward-cursor only. fetchPreviousPage is deferred until a consumer exists (no speculative API).
 - Persistence of infinite pages NOW SHIPS (Q6): dehydrate marks the entry and carries a copy of its pages array; hydrate rebuilds pages + flat; cursor/hasNext recompute at the first infiniteQuery attach and the list keeps paginating from where it stopped.

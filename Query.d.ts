@@ -106,6 +106,60 @@ export interface QueryClientOptions {
 }
 
 /** Returned by `queryClient(...)`. The cache + lifecycle owner. */
+// --- Devtools feed (qc.inspect) ----------------------------------------------
+
+/** The 23 frozen feed event types -- `domain:verb`, lower-case. */
+export type FeedEventType =
+    | "entry:create" | "entry:attach" | "entry:detach" | "entry:gc"
+    | "entry:remove" | "entry:status" | "entry:stale"
+    | "fetch:dispatch" | "fetch:settle" | "fetch:abort"
+    | "tab:send" | "tab:receive"
+    | "shared:request" | "shared:fallback" | "shared:serve"
+    | "stream:start" | "stream:value" | "stream:done" | "stream:error"
+    | "mutation:start" | "mutation:settle"
+    | "persist:hydrate" | "persist:save";
+
+/**
+ * One monomorphic feed record: exactly 10 own keys, always present, in this
+ * order (one hidden class per type -- a panel's property reads stay monomorphic).
+ * A field that does not apply is null (`count` is 0, `ok` is false).
+ *
+ * POOLED per type and OVERWRITTEN in place: the SAME object is handed to the hook
+ * for every event of a given type. The hook MUST COPY what it keeps -- reading a
+ * retained reference after the next event of that type reads stale fields. This
+ * is the zero-GC feed contract (an installed hook allocates nothing per event).
+ *
+ * `ts` is performance.now() (else Date.now()), resolved once at module load --
+ * NOT opts.now (a mock staleness clock never stamps the feed); monotonic
+ * non-decreasing. `key` / `value` are BY REFERENCE, never copied, never
+ * serialized (that is the panel's job).
+ */
+export interface QueryFeedEvent {
+    /** The discriminant. */
+    type: FeedEventType;
+    /** performance.now()/Date.now() timestamp; monotonic non-decreasing. */
+    ts: number;
+    /** The entry's key array by reference; null for client-scope events. */
+    key: readonly unknown[] | null;
+    /** entry.keyHash -- the panel's identity. null where key is null. */
+    keyHash: string | null;
+    /** Prior status (entry:status only), else null. */
+    from: string | null;
+    /** New status (entry:status only), else null. */
+    to: string | null;
+    /** Abort reason / remove cause / hydrate code / role / stream phase / msg type. */
+    reason: string | null;
+    /** Numeric payload (observerCount / fetchGen / streamCount / records); 0 if N/A. */
+    count: number;
+    /** Outcome flag; false if N/A. */
+    ok: boolean;
+    /** By-reference payload (data / error / frame / cursor / vars); null if N/A. */
+    value: unknown;
+}
+
+/** A hook installed via qc.inspect. Observe-only: never throw, never mutate. */
+export type FeedHook = (event: QueryFeedEvent) => void;
+
 export interface QueryClient {
     /** Frozen reference to the resolved options. */
     readonly options: Readonly<QueryClientOptions>;
@@ -184,6 +238,21 @@ export interface QueryClient {
      * broadcast.
      */
     hydrate(state: DehydratedState): HydrateResult;
+
+    /**
+     * Install a devtools feed hook -- a push-mode stream of cache truth a panel
+     * (e.g. lite-studio) renders. ONE hook per client (a panel multiplexes): a
+     * second install while one is live throws Error; a non-function (including an
+     * array) throws TypeError. Returns an IDEMPOTENT uninstall thunk. Dispatch is
+     * SYNCHRONOUS at the emit site (emission order is the truth); a throwing hook
+     * is contained fail-closed -- the feed auto-uninstalls and logs once via
+     * console.error, and the in-progress cache write completes. The hook MUST
+     * COPY what it keeps (events are pooled per type -- see QueryFeedEvent).
+     * Independent of persistQueryClient's private write seam (two seams, never
+     * one): uninstalling either never disturbs the other. Zero cost when
+     * uninstalled -- every emit site is a single branch-predicted null test.
+     */
+    inspect(hook: FeedHook): () => void;
 
     /** Clear the cache and close the BroadcastChannel listener. */
     dispose(): void;

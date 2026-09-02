@@ -5,6 +5,116 @@ All notable changes to `@zakkster/lite-query` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] -- unreleased
+
+The devtools FEED (`qc.inspect`) -- observability with a zero-cost off switch.
+SPEC promised devtools; the PANEL belongs to lite-studio (its repo), so what
+lite-query owes the ecosystem is the feed a panel renders: a synchronous,
+push-mode stream of cache truth. The whole design tension is the off switch --
+law 4 says the hot path buys nothing it does not use, so the uninstalled branch
+is the product. Per OR-1 the version stamp lands only with the `/release 1.5.0`
+drill after the pipeline closes; this head lands in-session with `package.json`
+and the `VERSION` const held at `1.4.0`.
+
+### Added
+
+- **`qc.inspect(hook) -> uninstall`** -- install ONE observe-only feed hook (a
+  panel multiplexes; hook arrays are rejected). Mirrors `persistQueryClient`'s
+  install semantics exactly (TypeError on a non-function, Error on double-install,
+  `=== hook`-guarded idempotent uninstall). Two INDEPENDENT single slots (OR-4):
+  uninstalling the feed never disturbs the persister and vice versa. Emits from
+  36 sites across 23 frozen `domain:verb` event types (entry lifecycle
+  create/attach/detach/gc/remove, status + staleness, fetch dispatch/settle/abort
+  with reason, cross-tab send/receive, sharedFetch request/fallback/serve, stream
+  start/value/done/error, mutation start/settle, persist hydrate/save).
+- **One monomorphic feed record** -- exactly 10 own keys, always present, in one
+  order (`type, ts, key, keyHash, from, to, reason, count, ok, value`); a field
+  that does not apply is `null` (`count` 0, `ok` false). One hidden class per
+  type keeps a panel's reads monomorphic. `ts` is `performance.now()` (else
+  `Date.now()`) resolved once at module load -- NOT `opts.now` -- monotonic
+  non-decreasing. `key`/`value` are by reference, never copied, never serialized.
+- **`QueryFeedEvent` + `FeedEventType` + `FeedHook`** typed in `Query.d.ts`; the
+  full field table + 23-type vocabulary in `llms.txt`; README "Devtools feed"
+  section + lite-studio pointer; Cookbook recipe 20 (a console logger in ten
+  lines). The hook-must-copy contract is documented in all four.
+
+### Decisions
+
+- **OR-1** -- no in-session version stamp; the `[1.5.0]` head lands now, the
+  `/release 1.5.0` drill stamps `package.json` / `VERSION` / `llms.txt` after the
+  pipeline closes.
+- **ON-1 (resolves STOP-1)** -- the charter's `qc._hook` spelling is
+  unimplementable (no `qc` self-binding inside the client closure; `StreamQuery`
+  destructures `_internal` once, so a core `let` can never be read live by the
+  subpath). Shipped as a per-client cell `const feed = { hook: null, pool: null }`
+  shared through `_internal.feed`, tested `feed.hook !== null` at every emit site
+  in both files. One cold allocation per client; no per-entry slot (OR-5 holds).
+- **OR-4 / V11** -- two seams, never one; OR-4's install/uninstall semantics win
+  over the lite-signal `onGraphMutation` variant (no prior-listener restore, two
+  throw shapes). The public feed REPORTS persist/hydrate activity; the adapter
+  never consumes it.
+- **ON-4 / OR-7** -- a throwing hook is contained fail-closed TOWARD THE FEED:
+  the single synchronous dispatch funnel nulls the slot (instant return to the
+  zero-cost path), logs exactly one `console.error`, and returns so the
+  in-progress cache write completes. Re-throwing out-of-band via a microtask was
+  rejected (it can kill the host process -- louder is not fail-closed).
+- **OR-8** -- events speak lite-query's own lower-case domain vocabulary
+  (attach/detach, dispatch/settle/abort, leader/follower); our shipped words win
+  over lite-devtools' connect/disconnect. Mirroring means conventions (flat
+  shape, lower-case string `type`, `ts`, idempotent uninstall), not renaming.
+- **T3 / ON-4 (ratified)** -- the event object is ONE preallocated record PER
+  TYPE, built at install, dropped at uninstall: an installed panel under a 60Hz
+  stream allocates zero bytes per frame, and an app that never calls `inspect()`
+  retains zero feed objects. The cost is the hook-must-copy contract, pinned by a
+  counted identity test (two sequential same-type events share object identity).
+- **ON-2 (resolves STOP-2)** -- the phase-H profiled window and its GATE line
+  stay BYTE-FROZEN. The feed double-run (absent / installed-pooled /
+  installed-fresh) plus a 20000-write sub-loop run as a separate provenance
+  section of phase H AFTER the frozen gate evaluation, printing their own lines.
+- **ON-3 / OR-10** -- the gating Q7 control is C-feed
+  (`QUERY_TORTURE_BREAK=feed` -> a guaranteed `detach-without-attach` in the
+  fuzzer feed state machine; controls now trip 5/5). Attempt D (a tracked
+  inspect-hook closure carried across install/uninstall while the owner tree is
+  torn down) DID NOT FIRE -- recorded verbatim in `INCONCLUSIVE.md` beside A/B/C;
+  it is explicitly NOT a gate clause (a control that cannot trip is decorative).
+
+### Phase H provenance -- T3 candidates measured (OR-6)
+
+Both candidate designs measured under the same warm body (200000 reads) with a
+20000-write emit sub-loop for the installed runs, outside the frozen GATE window.
+The absent run's GC profile is byte-identical to the frozen GATE line (major 0 /
+minor 0 / maxMs 0.00) -- the true zero-added-allocation signal; `heapDelta` is
+V8 heap bookkeeping noise even at minor 0, so the GC-event count is what is gated,
+not the byte count. Representative run:
+
+| run | major | minor | maxMs | heapDelta bytes | B/op |
+|---|---|---|---|---|---|
+| absent (no hook) | 0 | 0 | 0.00 | ~31900 | ~0.14 |
+| installed-pooled (candidate c) | 0 | 1 | 0.08 | ~61000 | ~0.28 |
+| installed-fresh (candidate b) | 0 | 1 | 0.07 | ~41600 | ~0.19 |
+
+Candidate (c) -- one pooled record per type -- ships: it holds `maxMajor 0` under
+the emit load and allocates zero per event (the pooled record is overwritten in
+place); candidate (b), a fresh per-event object, is the same order but pays the
+allocation the hook-must-copy contract lets callers opt into only when they keep.
+
+### Fixed
+
+Four bake-facing Cookbook sample defects (commit 033e670, folded here per OR-2 --
+no 1.4.1 docs patch; the verbatim bake-floors quote in recipe 18 is untouched):
+
+- Recipes 18/19 imported PascalCase subpaths absent from lite-bake-stream's
+  exports map (kebab-case only): `PreserveReader` is now root-imported
+  (`RangeReader` is not a root export at 1.7.1 -- `/range-reader` subpath).
+- Recipe 19 constructed `new RangeReader({ fetch, signal })`; the shipped API is
+  `await RangeReader.open(adapter, { signal })` with `HTTPRangeAdapter.open`
+  replacing the hand-rolled fetch (which also returned `ArrayBuffer` where the
+  adapter contract requires `Uint8Array`).
+- Recipe 19 called `reader.getJSON(i)` (a `PreserveReader` API); `RangeReader` is
+  columnar -- rewritten to `prefetchRange`/`syncRange` windowed reads.
+- Recipe 18 passed pooled `bytes.buffer`; now slices the unpooled copy (the bake
+  suite idiom) so the cache actually restores on Node.
+
 ## [1.4.0] -- 2026-09-02
 
 Persistence: a dehydrate/hydrate primitive and a `persistQueryClient` adapter on

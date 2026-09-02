@@ -648,6 +648,33 @@ Cite only what bake-stream's `llms.txt` states about `RangeReader` and its adapt
 
 ---
 
-That's the cookbook. Recipes for devtools integration, SSR hydration, and shared (one-connection-per-cluster) streams will land as those features ship. The bake-backed ingest-progress recipe (`ingestStream` `onProgress` as a `streamQuery` source) is parked in ROADMAP.md until a consumer asks for it.
+## 20. A console logger for the devtools feed -- ten lines
+
+`qc.inspect(hook)` installs one observe-only hook and returns an idempotent
+uninstall. The record is **pooled per type and overwritten in place**, so copy
+what you keep. Zero cost when uninstalled; a throwing hook is contained (the feed
+auto-uninstalls, the cache write completes) -- so a logger bug never wedges the
+cache.
+
+```ts
+const stop = qc.inspect((e) => {
+  const id = e.keyHash ?? '-';                         // null for tab:*/mutation:*/persist:*
+  if (e.type === 'entry:status') console.log(`[lq] ${id} ${e.from} -> ${e.to}`);
+  else if (e.type === 'fetch:settle') console.log(`[lq] ${id} fetch ${e.ok ? 'ok' : 'error'} gen=${e.count}`);
+  else if (e.type === 'fetch:abort') console.log(`[lq] ${id} abort ${e.reason}`);
+  else if (e.type === 'stream:value') console.log(`[lq] ${id} frame #${e.count}`);
+  else console.log(`[lq] ${e.type} ${id}`);            // the other 19 types
+});
+// ... later, on teardown:
+stop();
+```
+
+The full 23-type vocabulary and the 10-key record shape are in `llms.txt`. The
+rendering **panel** is lite-studio's job -- this feed is what it renders; nothing
+is imported in either direction.
+
+---
+
+That's the cookbook. Recipes for SSR hydration and shared (one-connection-per-cluster) streams will land as those features ship. The bake-backed ingest-progress recipe (`ingestStream` `onProgress` as a `streamQuery` source) is parked in ROADMAP.md until a consumer asks for it.
 
 If you have a pattern that should live here, open an issue or a PR.
