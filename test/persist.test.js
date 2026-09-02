@@ -365,3 +365,138 @@ test("infinite: a getNextCursor that throws at adoption resets to a clean page-o
     assert.deepEqual(q.pages(), [[100]], "list rebuilt from page one");
     stop(); q.dispose(); qc.dispose();
 });
+
+// -----------------------------------------------------------------------------
+// C3 -- the private write seam (six V4 hook sites)
+// -----------------------------------------------------------------------------
+
+test("write hook: fires on setData / fetch settle / commitPage throw / removeQueries / clear / GC expiry (6 sites)", async () => {
+    // site 1: setQueryData (covers local writes AND remote applies)
+    {
+        const qc = queryClient({ defaultStaleTime: 0 });
+        let hits = 0;
+        qc._internal.installPersistHook(() => hits++);
+        qc.setQueryData(["a"], 1);
+        assert.equal(hits, 1, "site 1: setQueryData");
+        qc.dispose();
+    }
+    // site 2: fetch settle (success), no hook while pending
+    {
+        const qc = queryClient({ defaultStaleTime: 0, retry: 0 });
+        let hits = 0;
+        qc._internal.installPersistHook(() => hits++);
+        const cf = createControlledFetcher();
+        const q = query(qc, { key: ["b"], fetcher: cf.fetcher });
+        const stop = effect(() => q.data());
+        await tick();
+        assert.equal(hits, 0, "no hook while a fetch is pending");
+        cf.resolve("ok");
+        await tick();
+        assert.equal(hits, 1, "site 2: fetch settle");
+        stop(); q.dispose(); qc.dispose();
+    }
+    // site 3: commitPage-throw branch (returns before site 2, so exactly one)
+    {
+        const qc = queryClient({ defaultStaleTime: 0, retry: 0 });
+        let hits = 0;
+        qc._internal.installPersistHook(() => hits++);
+        const iq = infiniteQuery(qc, {
+            key: ["c"], fetcher: () => Promise.resolve([1]),
+            getNextCursor: () => { throw new Error("commit boom"); },
+        });
+        const stop = effect(() => iq.data());
+        await tick(); await tick();
+        assert.equal(iq.status(), "error");
+        assert.equal(hits, 1, "site 3: commitPage-throw branch fires exactly once");
+        stop(); iq.dispose(); qc.dispose();
+    }
+    // site 4: removeQueries, only when >= 1 entry matched
+    {
+        const qc = queryClient({ defaultStaleTime: 0 });
+        qc.setQueryData(["d"], 1);
+        let hits = 0;
+        qc._internal.installPersistHook(() => hits++);
+        qc.removeQueries(["nope"]);
+        assert.equal(hits, 0, "no match -> no hook");
+        qc.removeQueries(["d"]);
+        assert.equal(hits, 1, "site 4: removeQueries matched");
+        qc.dispose();
+    }
+    // site 5: clear, only when the map was non-empty
+    {
+        const qc = queryClient({ defaultStaleTime: 0 });
+        let hits = 0;
+        qc._internal.installPersistHook(() => hits++);
+        qc.clear();
+        assert.equal(hits, 0, "empty clear -> no hook");
+        qc.setQueryData(["e"], 1);
+        assert.equal(hits, 1, "setData fired site 1");
+        qc.clear();
+        assert.equal(hits, 2, "site 5: clear on a non-empty map persists emptiness");
+        qc.dispose();
+    }
+    // site 6: cacheTime GC expiry of an unobserved entry
+    {
+        const clock = createMockClock();
+        const qc = queryClient({ now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, defaultCacheTime: 1000 });
+        qc.setQueryData(["g"], 5);   // before install, so site 1 is not counted
+        let hits = 0;
+        qc._internal.installPersistHook(() => hits++);
+        clock.advance(1001);
+        assert.equal(hits, 1, "site 6: an expired entry leaves the snapshot");
+        qc.dispose();
+    }
+});
+
+test("write hook: does NOT fire on invalidate, attach, detach, or hydrate seeding", async () => {
+    // invalidate: no content change; invalidatedSinceCompletion is not serialized
+    {
+        const qc = queryClient({ defaultStaleTime: 0, retry: 0 });
+        qc.setQueryData(["a"], 1);
+        let hits = 0;
+        qc._internal.installPersistHook(() => hits++);
+        qc.invalidate(["a"]);
+        assert.equal(hits, 0, "invalidate does not persist");
+        qc.dispose();
+    }
+    // attach + detach on a fresh entry: neither is a cache write
+    {
+        const qc = queryClient({ defaultStaleTime: 30_000 });
+        qc.setQueryData(["b"], 1);
+        let hits = 0;
+        qc._internal.installPersistHook(() => hits++);
+        const q = query(qc, { key: ["b"], fetcher: () => Promise.resolve(2), staleTime: 30_000 });
+        const stop = effect(() => q.data());
+        await tick();
+        assert.equal(hits, 0, "attach on a fresh entry does not persist");
+        stop(); q.dispose();
+        await tick();
+        assert.equal(hits, 0, "detach does not persist");
+        qc.dispose();
+    }
+    // hydrate seeding: writing what we just loaded must not re-persist it
+    {
+        const qc = queryClient({ defaultStaleTime: 0 });
+        let hits = 0;
+        qc._internal.installPersistHook(() => hits++);
+        qc.hydrate({ entries: [rec(["h"], 1, 0, false), rec(["h2"], 2, 0, false)] });
+        assert.equal(hits, 0, "hydrate seeding does not fire the write hook");
+        qc.dispose();
+    }
+});
+
+test("write hook: zero calls with no adapter installed; a second install throws", () => {
+    const qc = queryClient({ defaultStaleTime: 0 });
+    // no hook installed: every write path is a silent no-op on the seam
+    qc.setQueryData(["a"], 1);
+    qc.removeQueries(["a"]);
+    qc.setQueryData(["b"], 2);
+    qc.clear();
+    const uninstall = qc._internal.installPersistHook(() => {});
+    assert.throws(() => qc._internal.installPersistHook(() => {}), /single-slot/);
+    uninstall();
+    const u2 = qc._internal.installPersistHook(() => {}); // re-install after uninstall succeeds
+    assert.equal(typeof u2, "function");
+    u2();
+    qc.dispose();
+});

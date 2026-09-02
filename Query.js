@@ -245,6 +245,32 @@ export function queryClient(options = {}) {
     let channel = null;
     let processingRemote = false;
 
+    // Private single-slot cache-write hook (OR-5). The persistence adapter
+    // installs one thunk here; notifyWrite() calls it after every committed
+    // cache write at the six V4 sites. null when no adapter is installed, so an
+    // unused client pays exactly one `!== null` test at each cold write site and
+    // nothing on the warm read path (OR-8/G8). The feed stays PRIVATE until Q7.
+    let persistHook = null;
+    function notifyWrite() {
+        if (persistHook !== null) persistHook();
+    }
+
+    // Install the single write hook. Returns an uninstall thunk that nulls the
+    // slot only if it still holds this fn. A second install while one is live
+    // throws -- the single-slot seam the adapter relies on.
+    function installPersistHook(fn) {
+        if (typeof fn !== "function") {
+            throw new TypeError("lite-query: installPersistHook requires a function");
+        }
+        if (persistHook !== null) {
+            throw new Error("lite-query: a persist hook is already installed on this client (single-slot seam)");
+        }
+        persistHook = fn;
+        return function uninstallPersistHook() {
+            if (persistHook === fn) persistHook = null;
+        };
+    }
+
     if (opts.crossTab && opts.broadcastChannel) {
         channel = new opts.broadcastChannel(opts.crossTabChannel);
         channel.addEventListener("message", onRemoteMessage);
@@ -396,6 +422,7 @@ export function queryClient(options = {}) {
                 if (entry.abortController) entry.abortController.abort(ABORT_REASON.REMOVED);
                 entries.delete(entry.keyHash);
                 disposeEntry(entry);
+                notifyWrite();                           // hook site 6: an expired entry leaves the snapshot
             }
         }, entry.cacheTime);
         // In Node, unref'd timers don't prevent process exit. This means a
@@ -624,6 +651,7 @@ export function queryClient(options = {}) {
                     entry.fetching.set(false);
                     entry.promise = null;
                     entry.abortController = null;
+                    notifyWrite();                       // hook site 3: commitPage-throw returns before site 2
                     return Promise.reject(commitErr);
                 }
             }
@@ -652,6 +680,7 @@ export function queryClient(options = {}) {
             entry.fetching.set(false);
             entry.promise = null;
             entry.abortController = null;
+            notifyWrite();                               // hook site 2: settle -- success AND error uniformly
 
             // Mid-flight invalidation follow-up (option b: let-finish + refetch).
             if (
@@ -710,6 +739,7 @@ export function queryClient(options = {}) {
         // The promise===null guard avoids clobbering a genuine in-flight fetch.
         if (e.promise === null) e.fetching.set(false);
         clearSharedTimer(e);
+        notifyWrite();                                   // hook site 1: local writes AND every remote apply
         broadcast({ type: "setData", key, value: newVal });
     }
 
@@ -762,6 +792,7 @@ export function queryClient(options = {}) {
 
     function removeQueries(key, rmOpts = {}) {
         const exact = rmOpts.exact ?? false;
+        let removed = 0;
         for (const [h, e] of [...entries]) {
             if (!keyMatches(e.key, key, exact)) continue;
             if (e.abortController) e.abortController.abort(ABORT_REASON.REMOVED);
@@ -769,11 +800,14 @@ export function queryClient(options = {}) {
             clearSharedTimer(e);
             entries.delete(h);
             disposeEntry(e);
+            removed++;
         }
+        if (removed > 0) notifyWrite();                  // hook site 4: only when >= 1 entry matched
         broadcast({ type: "remove", key, opts: rmOpts });
     }
 
     function clear() {
+        const had = entries.size > 0;
         for (const e of entries.values()) {
             if (e.abortController) e.abortController.abort(ABORT_REASON.REMOVED);
             cancelGc(e);
@@ -781,6 +815,7 @@ export function queryClient(options = {}) {
             disposeEntry(e);
         }
         entries.clear();
+        if (had) notifyWrite();                          // hook site 5: map was non-empty (persists emptiness)
         broadcast({ type: "clear" });
     }
 
@@ -969,7 +1004,7 @@ export function queryClient(options = {}) {
         dispose,
         // Internal API consumed by query()/mutation(). Not part of the public
         // surface; documented as such in llms.txt.
-        _internal: { entries, ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, opts },
+        _internal: { entries, ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, opts, installPersistHook },
     };
 }
 
