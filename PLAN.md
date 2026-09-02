@@ -1,503 +1,585 @@
-# PLAN -- Q6 -- lite-query v1.4.0 -- persistence (RATIFIED)
+# PLAN -- Q7 -- lite-query v1.5.0 -- the devtools feed (ratified)
 
-Operator ratification of the Q6 planner spec, 2026-09-02. The planner's
-deliverables A-E follow VERBATIM below the rulings. BRIEF.md remains the
-contract; this file is the build order. Where the two disagree, the rulings
-here win (they are the newer operator word).
+Operator ratification, 2026-09-02. The planner spec below is verbatim; this
+header resolves its three STOP items and binds the coder. BRIEF.md OR-1..OR-10
+remain in force; where this header speaks, it is the ruling.
 
-## OPERATOR RULINGS ON THE PLANNER'S STOP ITEMS
+- ON-1 (resolves STOP-1): APPROVED -- the per-client feed cell
+  `const feed = { hook: null, pool: null }`, shared through `_internal.feed`,
+  tested as `feed.hook !== null` at every emit site in both files. The
+  charter's `qc._hook` spelling was the intent (one predictable null-test
+  branch), not a storage mandate: there is no `qc` self-binding inside the
+  client closure (planner V2), a closure `let` cannot cross the subpath
+  boundary, and a public own-property would let user code bypass install
+  validation. One cold allocation per client; no per-entry slots (OR-5
+  holds). BRIEF T1 is read accordingly.
+- ON-2 (resolves STOP-2): option (a). The phase-H profiled window and its
+  GATE line stay BYTE-FROZEN exactly as shipped at 1.4.0. The hook
+  double-run (absent / installed-pooled / installed-fresh) plus the
+  20000-write sub-loop run as a separate provenance section of phase H
+  AFTER the frozen gate evaluation, printing their own lines, gated by
+  checkNoGc { maxMajor: 0, maxPauseMs: 4 } -- they never alter the GATE
+  line. G3's "zero added allocation" is proven by the absent run's
+  heapDelta/op === 0.00 in that section, not by re-freezing the GATE.
+- ON-3 (resolves STOP-3): confirmed. The gating Q7 control addition is
+  C-feed (QUERY_TORTURE_BREAK=feed -> detach-without-attach; controls go
+  4 -> 5, tripped=5/5 under BREAK=1). Attempt D is recorded pass-or-fail
+  verbatim in INCONCLUSIVE.md and is NOT a gate clause -- a control that
+  cannot trip is decorative (OR-10); BRIEF G2 is read accordingly.
+- ON-4 (recorded items, binding notes):
+  - The OR-7 throwing-hook proposal (contain + auto-uninstall + exactly one
+    console.error, the in-progress cache operation completes) is APPROVED
+    as specified, including the guarded console.error.
+  - The T3 recommendation (per-type pooled records built at install,
+    dropped at uninstall) is APPROVED as the implementation target; phase H
+    still measures both candidates per OR-6 and both land in the CHANGELOG.
+  - V8/C6.0 pre-check (stub-client `mutation(` calls in test/) is binding
+    on the coder before C5 lands.
+  - V10: the stale "Suite >= 200" ROADMAP body line is corrected in the
+    closeout docs commit, never mid-pipeline.
+  - V11: OR-4's install/uninstall semantics win over the lite-signal
+    variant, as the planner ruled.
+  - Section 8's heading "268 -> 300" is a typo for the body's computed
+    310 (268 + 42); the binding numbers are: plan +42, QA-asserted floor
+    >= 298, BRIEF floor 278 (G1).
 
-- ON-1 (resolves STOP-1, unblocks C2): RATIFIED. The configure() adoption
-  branch plus the recomputeCursor extraction from rebuildInfinite are approved
-  edits to the Q5-pinned surface. Conditions: the adoption trigger is exactly
-  `entry.isInfinite && entry.getNextCursor === null` (the planner proved the
-  state unambiguous -- only disposeEntry also nulls it, and that entry is
-  already out of the map); there is ONE cursor-recompute site in the file
-  after the extraction, not two; D1/D2/D3 regressions in
-  test/infinite-query.test.js stay green at every rung; the reviewer audits
-  the adoption branch and its throw containment against the Q5 pinned
-  contracts explicitly. No cursors stored, no slot added -- confirmed as the
-  ruling intended.
-- ON-2 (resolves STOP-2): RATIFIED. The "macrotask" wording in OR-2 was
-  wrong for the mock (queueMicrotask, test/harness.js:166); the conclusion
-  survives (synchronous boot safe under both; the mock is stricter, which is
-  the safe direction). BRIEF.md OR-2 has been amended by the operator this
-  session; the [1.4.0] CHANGELOG head records the correction; plan tests 11
-  and 12 are PINNED deliberate contracts (same-tick boot cannot observe a
-  queued remote setData; an awaited boot that raced a remote setData drops as
-  cache-not-empty), never flake.
-- ON-3 (resolves STOP-3): RATIFIED, all three shape decisions, recorded in
-  the CHANGELOG head:
-  (a) hydrate THROWS only on the OR-2 empty-cache precondition (programming
-      error) and RETURNS { ok, count, reason } for malformed stored payloads
-      (external data) -- the asymmetry mirrors setQueryData's local-throw /
-      remote-drop law.
-  (b) a FINITE future dataUpdatedAt is clamped to opts.now() (bounds
-      freshness at exactly one staleTime from boot -- the fail-open direction
-      is the unclamped one); a NON-FINITE dataUpdatedAt (NaN, Infinity,
-      string, missing) is malformed-timestamp and drops the WHOLE payload
-      per OR-3. The boundary is finite-vs-not, stated in the doc comment.
-  (c) stop() FLUSHES the pending save, no opt-out; `qc.clear()` then
-      `stop()` is the documented logout path (clear is hook site 5, so
-      emptiness persists). save() rejections stay contained.
-- ON-4 (floors): tests_min 218 stands as the FLOOR; the plan projects >= 233.
-  The shipped docs print the real recount, never the floor (Q5 discipline).
-- ON-5 (reviewer checklist): the V4 six-site hook list is the reviewer's
-  checklist verbatim. Adding or removing a site is a DECLARED decision in the
-  commit message with a one-line rationale, never silent. The five recorded
-  non-sites (invalidate, ensureEntry, attach/detach, prefetch-passthrough,
-  hydrate seeding) are part of the checklist too -- a hook appearing at one
-  of them is a defect unless declared and justified.
-
-Pipeline note (unchanged from Q5): coder implements C1..C8 in order, one
-commit per rung, suite green and GATE byte-identical at every rung; then
-reviewer (REJECTED goes back to coder); then qa. No version stamp (OR-1).
+Pipeline: coder implements C1..C8 in order, one commit per rung, suite and
+guards green at every rung; reviewer audits the full diff before qa; QA
+count-freeze applies (docs print the frozen final count in C8).
 
 ---
 
-# THE PLANNER SPEC (verbatim)
+# Q7 PLANNER SPEC -- @zakkster/lite-query v1.5.0 -- the devtools feed (`qc.inspect`)
 
-Read: BRIEF.md, ROADMAP.md (Q6 block L733-845; parking ledger L1115-1149),
-Query.js (all 1386 lines), llms.txt, Query.d.ts, test/harness.js,
-test/infinite-query.test.js (D1/D2/D3 at L334/370/385/409), test/torture.mjs,
-test/torture/controls.mjs, test/ascii-guard.test.js, test/surface-guard.test.js,
-package.json, CHANGELOG head, INCONCLUSIVE.md, and cross-repo read-only
-../LiteBakeStream/llms.txt + ../LiteBakeStream/test/DehydratedCache.test.js.
+Read: BRIEF.md, ROADMAP.md:854-925, Query.js (1820 lines, whole),
+StreamQuery.js (whole), test/harness.js, test/torture.mjs,
+test/torture/controls.mjs, bench/torture/cache-fuzzer.mjs, llms.txt,
+CHANGELOG.md [1.4.0] head, LiteDevtools/llms.txt, LiteSignal/llms.txt.
 
-## A. SPEC
+---
 
-**Hot body vs cold path (decided before anything else).** The hot body is:
-the accessor reads in query()/infiniteQuery() (Query.js:985-1012, 1176-1197),
-entry.data/error/status/fetching signal reads, and the entry slot table
-(createEntry, Query.js:281-327). Persistence adds ZERO bytes there: no new
-entry slot, no new signal, no read-path branch. The cold path is: dehydrate
-(walks the map), hydrate (boot-only), persistQueryClient, and ONE
-client-scope null-test (persistHook !== null) on six settle/commit sites --
-none of which is in the 200000-iteration warm loop that phase H measures.
-G8 therefore holds by construction.
+## 1. V-FINDINGS (verified, file:line)
 
-### Findings (verification duties)
+**V1 -- the persist seam is exactly as OR-4 describes.** `let persistHook =
+null` Query.js:258; `notifyWrite()` 259-261; `installPersistHook` 266-277
+(TypeError 267-269 non-function; Error 270-272 double-install;
+`persistHook === fn`-guarded idempotent uninstall 274-276). Six
+`notifyWrite()` sites: **439** (gc expiry), **668** (commitPage-throw
+branch), **697** (settle, success+error uniformly), **756** (setQueryData,
+covers every remote apply), **819** (removeQueries, `removed > 0`), **832**
+(clear, `had`). Q7 touches none of these lines' conditions; every co-located
+feed emit goes **after** the `notifyWrite()` call.
 
-**V1 (OR-2 precondition) -- CONFIRMED, with a correction to the ruling's
-stated mechanism.**
-Real path: channel.addEventListener("message", onRemoteMessage)
-(Query.js:238); the only remote message that can populate an empty cache is
-`case "setData": setQueryData(...)` (Query.js:258) which calls ensureEntry
-(Query.js:671). invalidate/remove/clear/fetch-req never create entries
-(Query.js:259-270, 706, 753).
-Mock path: test/harness.js:166 delivers via queueMicrotask, i.e. a MICROTASK,
-not a macrotask -- the comment on that line ("spec: async delivery") is
-accurate, OR-2's word "macrotask-scheduled" is not, for the mock.
-Consequence: (a) a strictly SYNCHRONOUS create qc -> hydrate is safe under
-both, so OR-2's precondition stands; (b) the mock is STRICTER than the real
-channel (it fires after one await, the real one only after a task), so a test
-that passes under the mock passes against a real channel -- the safe
-direction; (c) any adapter boot with an await between construction and
-hydrate (i.e. every async load()) CAN observe a remote entry under the mock --
-that is exactly OR-6's "resolves the outcome channel as a drop" case, and
-T4/persist.test.js must pin it deliberately rather than discover it as flake.
+**V2 -- there is no `qc` binding inside the client closure.** `queryClient()`
+returns an anonymous object literal (1069-1083); nothing inside can write
+`qc._hook`. Worse, `StreamQuery.js:87` destructures `qc._internal` **once**
+(`const { ensureEntry, attach, detach, opts }`), so a core `let inspectHook`
+is invisible to the subpath forever. The charter's literal
+`if (qc._hook !== null)` is unimplementable across the two files. ->
+**STOP-1** + the feed-cell design (S6 below).
 
-**V2 (OR-4 recompute-at-attach) -- SOUND ONLY WITH A 4-LINE ADOPTION BRANCH;
-the literal mechanism named in OR-4 is not available pre-attach.** Trace:
-setQueryData(key, pagesArray) rebuilds pages+flat+cursor ONLY if
-e.isInfinite is already true (Query.js:682-692 -> rebuildInfinite, 188-203),
-and isInfinite is set exclusively by infiniteQuery's configure()
-(Query.js:1087-1099). On a hydrate-seeded plain entry, configure() runs
-disposeNode(entry.data), allocates a fresh signal(undefined,
-{equals: NEVER_EQUAL}) and calls resetPages(entry) (134-139) -- it DESTROYS
-the restored pages. Conversely, if hydrate seeds the entry as
-already-infinite, configure() early-returns at Query.js:1088 and never
-installs infOpts.getNextCursor, leaving entry.getNextCursor === null;
-rebuildInfinite then skips the cursor recompute (197) and commitPage would
-call null(...) (170) and route a TypeError into the error ladder. So:
-hydrate seeds the infinite shape itself, and configure() gains an adoption
-branch keyed on the already-unambiguous state
-`entry.isInfinite && entry.getNextCursor === null` (only disposeEntry also
-nulls it, Query.js:363, and that entry is already out of the map at
-758/386/771). No new slot. [Ratified: ON-1.]
+**V3 -- entry status is observable only as a signal write.** Status
+transitions occur at 16 `status.set` sites, all fire-and-forget with no
+prior-value read: Query.js **495** (detach pending->idle), **505** (detach
+stream pending|streaming->idle), **548** (requestSharedFetch->pending),
+**593** (runFetch->pending), **662** (commit-throw->error), **678**
+(->success), **689** (->error), **749** (setQueryData->success), **977**
+(seedEntry->success), **1001** (seedInfinite->success), **1353** (configure
+adoption reset->idle); StreamQuery.js **108** (->pending), **115** (factory
+throw->error), **133** (->streaming), **141** (->error), **156** (->success).
+No entry slot mirrors the previous status (createEntry 323-371 has no such
+field), so a `from` field requires reading `entry.status()` -- which must be
+untracked, because `setQueryData`/`invalidate` are legal inside a user effect
+and an added tracked read would subscribe (a behavior change, OR-9). See A-2
+for the allocation-free reader.
 
-**V3 (OR-8 timestamp reuse) -- CONFIRMED, no new slot.** The staleness-math
-source is `entry.lastCompletedAt` -- declared Query.js:291 (-Infinity),
-written at 610, 638, 695, read by shouldFetch at Query.js:469
-(`(opts.now() - entry.lastCompletedAt) >= entry.staleTime`). The ROADMAP's
-"dataUpdatedAt" is a WIRE name, not a runtime slot; the plan keeps
-dataUpdatedAt as the JSON field and lastCompletedAt as the slot. Entry
-monomorphism unchanged.
+**V4 -- staleness is one boolean.** `invalidatedSinceCompletion` set true at
+**764** (invalidate loop, per matched entry); cleared at **664**, **693**,
+**980**, **1003**, StreamQuery.js:**106**. Read only by `shouldFetch` 516-525
+and `shouldStartStream` 175-181. It is the entire staleness surface.
 
-**V4 (hook placement) -- the exact list the reviewer holds against the
-diff.** notifyWrite() (`if (persistHook !== null) persistHook();`) at exactly
-six sites in Query.js:
-1. setQueryData -- after clearSharedTimer(e), beside broadcast (~701).
-   Covers local writes AND every remote apply (remote routes through
-   here, 258).
-2. runFetch settle -- after entry.abortController = null (~642), covering ok
-   AND error uniformly (an entry that flips to error must leave the
-   snapshot).
-3. runFetch commitPage-throw branch -- before return
-   Promise.reject(commitErr) (~615), because that branch returns before
-   site 2.
-4. removeQueries -- after the loop, only if >= 1 entry matched (~760).
-5. clear -- after entries.clear(), only if the map was non-empty (~771).
-6. the cacheTime GC timer callback -- after entries.delete(entry.keyHash)
-   (~386), so an expired entry stops being persisted.
-NOT hook sites (recorded decisions): invalidate (no content change;
-invalidatedSinceCompletion is not serialized), ensureEntry, attach/detach,
-prefetch (its writes land via site 2), and hydrate seeding (would re-save
-what we just loaded).
+**V5 -- abort reasons.** `ABORT_REASON` frozen at Query.js:**119-124**
+(`lite-query:detach|refetch|removed|timeout`). Six `.abort(...)` call sites:
+**436** (gc, REMOVED), **491** (detach, DETACH), **580** (runFetch supersede,
+REFETCH), **602** (timeout timer, TIMEOUT), **812** (removeQueries, REMOVED),
+**826** (clear, REMOVED). The reason string is available literally at each
+site -- no lookup, no construction.
 
-**V5 (no-broadcast seeding) -- CONFIRMED.** broadcast() (Query.js:248-251)
-is reached only from setQueryData:701, invalidate:748, removeQueries:761,
-clear:772, requestSharedFetch:497, runFetch:630. Hydrate must NOT call
-setQueryData; it writes e.data/error/status, e.lastCompletedAt,
-e.invalidatedSinceCompletion directly through a private seedEntry, so it
-never reaches a broadcast site and never fires notifyWrite. It must NOT
-borrow processingRemote = true as a suppression trick: that flag also flips
-the infinite non-array path from throw to silent-drop (Query.js:683) and
-would lie about provenance.
+**V6 -- the fuzzer today asserts four things and no event semantics.**
+bench/torture/cache-fuzzer.mjs: zero thrown errors (272-275), exact echo
+ledger `broadcastsDuringFuzz === localMutations` (276-280), cross-tab
+convergence on 24 sentinel keys (281-284), full entry-map drain + zero
+dangling timers + pool at baseline (285-300). Break hook at **53** + **249**
+injects one phantom broadcast (the C-fuzz control, controls.mjs:141-151).
+`sharedFetch` is OFF (header line 33) -- so no `shared:*` event is
+fuzz-reachable, and the G4 coverage set must exclude them or it lies.
 
-### Dehydrated shape (pinned)
+**V7 -- phase H's warm loop performs zero status writes and zero stream frame
+writes.** torture.mjs:272-279 reads only (`warm.data()`, `buf.count()`,
+`buf.droppedCount()`, `buf.data()`, `inf.pages()/data()/hasNextPage()`); the
+20 stream pushes happen at **268**, before `new GcProfiler().start()` at
+**271**. The byte-frozen GATE line is produced by `evaluateGate` 136-146.
+Consequence: the frozen GATE **cannot** prove zero-cost-uninstalled on the
+stream frame path. -> **STOP-2**.
 
-Primitive emits STATE only; adapter stamps version (OR-6 confirmed):
+**V8 -- `mutation()` never touches `qc`.** Query.js:1552-1655 uses only
+`mutOpts`; the parameter `qc` is unread and unvalidated. Any `qc._internal`
+read added at construction changes the failure mode for a stub client.
+Mandatory coder pre-check (task C6.0).
 
-- `qc.dehydrate() -> { entries: [ EntryRecord, ... ] }` -- exactly one own
-  key, `entries`.
-- EntryRecord -- exactly FOUR own keys, uniform on every record (monomorphic
-  wire shape, mirrors the entry-slot law):
-  - `key` -- the entry's key array, by reference.
-  - `data` -- for a plain entry, entry.data() by reference; for an infinite
-    entry, a SHALLOW COPY of entry.pages (pages.slice(), cold path) because
-    pages is the one structure the cache grows in place.
-  - `dataUpdatedAt` -- entry.lastCompletedAt, must be finite.
-  - `infinite` -- boolean, ALWAYS present (an absent flag is malformed, not
-    "false").
-- Included iff: untrack(status()) === "success" AND !entry.isStream AND
-  Number.isFinite(entry.lastCompletedAt) AND (infinite ?
-  Array.isArray(entry.pages) : entry.data() !== undefined). Pending/error/
-  stream entries are excluded by construction, both exclusions documented in
-  the doc comment and tested.
-- Aliasing contract (documented, tested): key, data, and page CONTENTS are
-  references, not deep copies. Serialize the payload before further cache
-  writes.
-- dehydrate's doc comment states it walks the whole map and is cold by
-  definition (OR-8).
+**V9 -- `disposeEntry` (401-427) is a shared helper on three removal paths**
+(gc 438, removeQueries 816, clear 829). Emitting there loses the cause; emit
+at the three call sites instead.
 
-### Hydrate algorithm
+**V10 -- ROADMAP body line 915 ("Suite >= 200") is stale**; ROADMAP
+frontmatter line 862 and BRIEF `tests_min` both say 278 against a 268 base
+(llms.txt:3). 278 governs; recorded, not a STOP.
 
-`qc.hydrate(state) -> { ok: boolean, count: number, reason: string | null }`
+**V11 -- OR-3 vs OR-4 uninstall semantics diverge and OR-4 wins.**
+lite-signal's `onGraphMutation` unsubscribe "restores prior listener"
+(LiteSignal/llms.txt:519-521) and accepts `null` to replace;
+`installPersistHook` throws on double-install and has no prior listener to
+restore. OR-4's "SAME install/uninstall semantics (mirror the in-repo
+precedent, including the two throw shapes)" is explicit -> mirror
+installPersistHook; mirror lite-signal only for shape/casing/`ts`/idempotence.
+Documented divergence, not a STOP.
 
-1. OR-2 precondition, FIRST, before anything else: if the entries map is
-   non-empty, THROW Error("lite-query: hydrate requires an empty cache
-   (N entries present) -- hydrate at boot, before any observer attaches").
-   Throw is reserved for this programming error; a malformed STORED payload
-   returns { ok: false } (asymmetry mirrors setQueryData's local-throw /
-   remote-drop law, Query.js:682-687). [Ratified: ON-3a.]
-2. OR-3 validation pass over the WHOLE payload BEFORE any mutation. Reason
-   codes (stable, ASCII, pinned): malformed-state, malformed-entries,
-   malformed-entry, malformed-key, malformed-data, malformed-timestamp,
-   malformed-pages, duplicate-key. Nothing is written until the pass
-   completes.
-3. Seeding (only after a clean pass): per record ensureEntry(key) (arms the
-   normal cacheTime GC -- a restored, unobserved entry expires like a
-   prefetched one), then plain entries get data.set(data),
-   error.set(undefined), status.set("success"),
-   lastCompletedAt = Math.min(dataUpdatedAt, opts.now()) (a FINITE future
-   timestamp is clamped to our clock -- bounds freshness, never invents
-   data [ON-3b]), invalidatedSinceCompletion = false. Infinite records go
-   through seedInfinite: isInfinite = true, dispose the plain data node and
-   recreate it with NEVER_EQUAL, pages = record.data, flat rebuilt by the
-   same loop rebuildInfinite uses, nextCursor = null, hasNext = FALSE (fail
-   closed: an unattached restored infinite entry can never auto-fetch at a
-   wrong cursor -- runFetch bails at Query.js:520), pageGen = 0,
-   getNextCursor = null (functions never serialize).
-4. No broadcast, no notifyWrite (V5).
+**V12 -- `ts` convention verified at source.** lite-devtools LifecycleEvent:
+`{ type, id, observed, ts }`, `ts: performance.now() if available, else
+Date.now()` (LiteDevtools/llms.txt:254-259). Flat object, lower-case string
+`type`, idempotent unsubscribe (line 62). We mirror all four.
 
-### Infinite restore (OR-4 mechanics)
+### 1a. Emit-site enumeration (36 sites, 23 types)
 
-configure() (Query.js:1087) gains one adoption branch: when
-`entry.isInfinite && entry.getNextCursor === null`, install
-infOpts.getNextCursor and recompute via recomputeCursor(entry) -- a helper
-EXTRACTED FROM rebuildInfinite's tail (Query.js:197-201) and called by both,
-so there is one cursor-recompute in the file, not two. A getNextCursor that
-THROWS during adoption is contained fail-closed: catch, resetPages(entry),
-data.set(undefined), status.set("idle"), lastCompletedAt = -Infinity -- the
-maybeFetch two lines later (Query.js:1138) then does a clean page-one fetch.
-Post-restore fetchNextPage() therefore starts from the recomputed cursor and
-appends page N+1 (G6). [Ratified: ON-1.]
+| # | type | site(s) | note |
+|---|---|---|---|
+| 1 | `entry:create` | **386-389** (ensureEntryByHash, after `scheduleGc(e)`) | the one creation path (`ensureEntry` 373-375 delegates) |
+| 2 | `entry:attach` | **474** (after `observerCount++`) | before `cancelGc` |
+| 3 | `entry:detach` | **486** (after `observerCount--`) | before the ==0 teardown block |
+| 4 | `entry:gc` | **439** (after `notifyWrite()`) | inside the `observerCount === 0` branch |
+| 5 | `entry:remove` | **817** (removeQueries, reason `remove`), **829** (clear loop, reason `clear`), **1046** (hydrate rollback, reason `hydrate-rollback`) | 1046 closes the create-without-remove hole left by seeding at 1038 |
+| 6 | `entry:status` | ONE funnel inside new `setStatus(entry, to)`; 16 call sites converted: Query.js 495, 505, 548, 593, 662, 678, 689, 749, 977, 1001, 1353; StreamQuery.js 108, 115, 133, 141, 156 | fires even when `from === to` (a `setQueryData` re-write is a real cache write) |
+| 7 | `entry:stale` | **764** (invalidate loop, per matched entry) | |
+| 8 | `fetch:dispatch` | **591** (after `entry.abortController = ac`) | `count = gen`, `value = startCursor` on infinite |
+| 9 | `fetch:settle` | **697** (after notifyWrite site 2), **668** (commit-throw, after notifyWrite site 3, reason `commit-throw`) | |
+| 10 | `fetch:abort` | **436**, **491**, **580**, **602**, **812**, **826** -- immediately after each `.abort(...)` | reason = the ABORT_REASON literal at that site |
+| 11 | `tab:send` | **293** (inside `broadcast`, after the postMessage try/catch) | one funnel covers all 5 callers (550, 757, 804, 820, 833); `ok=false` when postMessage threw |
+| 12 | `tab:receive` | **299-300** (after `const m = evt.data`, before the switch) | reason = `m && m.type` |
+| 13 | `shared:request` | **550** (after the fetch-req broadcast) | reason `follower` |
+| 14 | `shared:fallback` | **557** (inside the timer, when the self-fetch guard holds) | reason `follower-timeout` |
+| 15 | `shared:serve` | **312** (leader branch, when `e && e.fetcher`) | reason `leader` |
+| 16 | `stream:start` | StreamQuery.js **109** | after counter reset + pending |
+| 17 | `stream:value` | StreamQuery.js **134** (in `onValue`, after the increment) | the only true per-frame emit |
+| 18 | `stream:done` | StreamQuery.js **156** (in `onDone`) | |
+| 19 | `stream:error` | StreamQuery.js **141** (reason `iterator`), **115** (factory throw, reason `open`) | |
+| 20 | `mutation:start` | **1572** (after `error.set(undefined)`) | `count = gen` |
+| 21 | `mutation:settle` | **1600** (immediately after the gen-guard block) | emitted unconditionally, `reason="superseded"` when `gen !== mutationGen` -- keeps the state machine total |
+| 22 | `persist:hydrate` | **1025** (validation drop), **1049** (rollback drop), **1051** (ok) | |
+| 23 | `persist:save` | **1733** (after `save(envelope)`), **1730** (dehydrate threw, reason `dehydrate-threw`) | emission BY the adapter, never consumption (OR-4 holds) |
 
-### Adapter
+### 1b. Non-sites (recorded with reasons)
 
-`persistQueryClient(qc, { save, load, version, throttle? })
--> { restored, flush, stop }` -- a CORE export of Query.js (OR-5), zero new
-deps, storage-agnostic thunks.
+| non-site | line(s) | reason |
+|---|---|---|
+| `notifyWrite()` body | 259-261 | the private seam stays private and untouched (OR-4); the feed reports causes, not the persist trigger |
+| `disposeEntry` | 401-427 | shared by 3 paths; emitting here loses the cause (V9) |
+| generation-guard returns | 628, 637, 647, 648, 650 | a superseded resolution changes no state; the matching `fetch:abort` already told the truth |
+| retry backoff | 635-636 | charter lists dispatch/settle/abort only; no consumer for `fetch:retry` in 1.5.0 |
+| runFetch early returns | 567, 568, 573-575 | dedup / no-fetcher / exhausted-infinite: no fetch was dispatched |
+| echo-suppressed broadcast | 292 | nothing was sent; emitting would make the send/receive ledger lie |
+| leader result broadcast | 683-686 | already reported by `tab:send` at 293 -- one action, one event |
+| non-leader fetch-req break | 310 | nothing happened, and every tab would emit on every request |
+| staleness clears | 664, 693, 980, 1003, SQ:106 | implied by `fetch:settle` / `persist:hydrate` / `stream:start` |
+| stream `onAbort` | SQ:145-153 | intentional teardown; covered by `entry:detach` + the following `stream:start` |
+| pre-abort inside startStream | SQ:99-102 | same |
+| mutation `reset` / `dispose` | 1637-1641, 1648-1653 | no cache state; the mutation accessors are the panel's source |
+| mutation callbacks | 1607-1622 | user callbacks, contained by design; their `qc` calls already emit |
+| `hydrate` empty-cache throw | 1018-1022 | the call did nothing and throws out to the caller |
+| `prefetch` | 845-868 | every effect it has routes through ensureEntry / runFetch sites |
+| `dispose()` | 1059-1067 | `clear()` at 1060 emits N `entry:remove` + `tab:send` |
 
-- Install-time validation (fail closed, throws): save/load must be
-  functions; version is REQUIRED with no default (string/number only; strict
-  === at compare, no coercion); throttle ?? 1000 must be a finite number
-  >= 0; a second install on the same client throws (single-slot seam).
-- Restore outcome surface: handle.restored -- a promise that always RESOLVES
-  (never rejects) with { status: "restored" | "empty" | "dropped", count,
-  reason }. Reasons: null | "load-threw" | "malformed-envelope" |
-  "version-mismatch" | "cache-not-empty" | a hydrate reason code. load()
-  returning null/undefined is "empty" (normal boot, OR-3) and never reaches
-  hydrate. A late async load() whose entries already exist hits OR-2: the
-  adapter CATCHES hydrate's throw and resolves "dropped" /
-  "cache-not-empty" -- never a merge, never an unhandled rejection, never a
-  silent nothing.
-- Envelope: exactly { version, state }, two own keys. Anything else ->
-  "malformed-envelope".
-- Hook arming order: the write hook is installed AFTER the restore outcome
-  settles, in all three branches -- so seeding can never trigger a save and
-  a boot-window write can never persist a half cache.
-- Throttle (OR-7): trailing-edge coalescing on
-  qc.options.setTimeout/clearTimeout (the resolved opts object is public,
-  Query.js:825), .unref()-guarded like every other timer in the file. First
-  notify arms the window; the timer is nulled BEFORE the flush builds state,
-  so a write during save() opens a fresh window. save() rejections are
-  contained (never unhandled); the adapter keeps running.
-- flush() forces the pending save now; stop() is idempotent, uninstalls the
-  hook and clears the timer.
-- OR-7 decision: FLUSH-ON-STOP, with no option [Ratified: ON-3c]. A pending
-  timer MEANS there is a committed cache write not yet on disk; stop() fires
-  at page teardown / logout / client dispose -- precisely when the last
-  write matters most, and dropping it loses user-visible state for zero
-  benefit. The logout case does not need a second mode: qc.clear() then
-  stop() persists EMPTINESS (clear is hook site 5), which is the correct
-  logout semantic. Recorded in the CHANGELOG head.
+---
 
-### Docs facts (T6/OR-9)
+## 2. FROZEN EVENT VOCABULARY
 
-The bake recipe cites bake-stream's line VERBATIM (../LiteBakeStream/
-llms.txt:98):
+One **uniform, monomorphic record**: exactly **10 own keys, always present,
+in this order**. A field that does not apply is `null` (`count` is `0`, `ok`
+is `false`). One hidden class for every event type -> the panel's property
+accesses stay monomorphic. This is the table d.ts, llms.txt and lite-studio
+consume.
 
-  "Consumer floors: validated preserve reads need `>= 1.3.1` (the six S1
-  read doors all closed there; the preserve doors themselves shipped in
-  `1.3.0`, but the full validated read set is `1.3.1`); CRC-verified
-  persistence needs `>= 1.6.0` (`{ crc: true }` on write,
-  `{ verifyCrc: true }` on open); abortable range reads need `>= 1.7.0`."
+| field | type | meaning / when valid |
+|---|---|---|
+| `type` | string | the discriminant, lower-case, `domain:verb` (table below). Always. |
+| `ts` | number | `performance.now()` if available else `Date.now()`, resolved ONCE at module load. Always. NOT `opts.now` (that is the staleness clock; a mock clock must not stamp the feed). Monotonic non-decreasing within a process. |
+| `key` | any[] \| null | the entry's key array **by reference, never copied**. null for client-scope (`tab:*`, `persist:*`) and `mutation:*`. |
+| `keyHash` | string \| null | `entry.keyHash`; the panel's identity. null where `key` is null. |
+| `from` | string \| null | prior status, `entry:status` only. |
+| `to` | string \| null | new status, `entry:status` only. |
+| `reason` | string \| null | abort reason (the ABORT_REASON literal), remove cause, hydrate reason code, shared role, stream phase, `tab:receive` message type, `mutation:settle` superseded. |
+| `count` | number | numeric payload; `0` when N/A. observerCount, fetchGen, streamCount, hydrate record count, mutationGen. |
+| `ok` | boolean | outcome flag; `false` when N/A. |
+| `value` | unknown \| null | by-reference payload: fetched data, error, stream frame, cursor. Never serialized (non-goal). |
 
-Plus, from the same line: below the crossover, "use plain JSON", in those
-words; and the getJSON rule -- a native SyntaxError (its .code is undefined)
-means the stored record is not JSON: discard the cache and re-fetch, never
-retry the same bytes. No numbers restated from our ROADMAP; session numbers
-are never semvers.
+**Type table (23, frozen).** OR-8: our domain words win over lite-devtools'
+connect/disconnect.
 
-## B. TASK LADDER
+| type | key/keyHash | from/to | reason | count | ok | value |
+|---|---|---|---|---|---|---|
+| `entry:create` | yes | - | - | 0 | false | - |
+| `entry:attach` | yes | - | - | observerCount after | false | - |
+| `entry:detach` | yes | - | - | observerCount after | false | - |
+| `entry:gc` | yes | - | - | 0 | false | - |
+| `entry:remove` | yes | - | `remove` \| `clear` \| `hydrate-rollback` | 0 | false | - |
+| `entry:status` | yes | yes/yes | - | 0 | false | - |
+| `entry:stale` | yes | - | `invalidate` | 0 | false | - |
+| `fetch:dispatch` | yes | - | `force` \| null | fetchGen | false | cursor \| null |
+| `fetch:settle` | yes | - | null \| `commit-throw` | fetchGen | ok | data \| error |
+| `fetch:abort` | yes | - | `lite-query:detach\|refetch\|removed\|timeout` | fetchGen | false | - |
+| `tab:send` | - | - | msg type | 0 | postMessage ok | - |
+| `tab:receive` | - | - | msg type | 0 | false | - |
+| `shared:request` | yes | - | `follower` | 0 | false | - |
+| `shared:fallback` | yes | - | `follower-timeout` | 0 | false | - |
+| `shared:serve` | yes | - | `leader` | 0 | false | - |
+| `stream:start` | yes | - | - | 0 | false | - |
+| `stream:value` | yes | - | - | streamCount after | false | frame value |
+| `stream:done` | yes | - | - | streamCount final | true | - |
+| `stream:error` | yes | - | `open` \| `iterator` | streamCount | false | error |
+| `mutation:start` | - | - | - | mutationGen | false | vars |
+| `mutation:settle` | - | - | null \| `superseded` | mutationGen | !error | data \| error |
+| `persist:hydrate` | - | - | null \| hydrate reason code | records seeded | ok | - |
+| `persist:save` | - | - | null \| `dehydrate-threw` | entries in envelope | ok | - |
 
-Every rung leaves npm test green, 0 skip, and the GATE line byte-identical.
-No version stamp anywhere (OR-1: package.json:3 and Query.js:41 stay
-"1.3.0").
+---
 
-**C1 -- primitive: dehydrate + hydrate (plain entries).**
-Scope: qc.dehydrate/qc.hydrate, seedEntry, the validation pass, reason
-codes; exported on the client object beside prefetch. Files: Query.js,
-test/persist.test.js (new).
-Commit: `feat(query): qc.dehydrate/qc.hydrate -- boot-only, all-or-nothing
-seeding (T1, OR-2/OR-3/OR-8)`
-Proof: npm test (>= 203 + new, 0 fail 0 skip).
+## 3. T3 DECISION -- recommendation
 
-**C2 -- infinite round-trip.**
-Scope: seedInfinite, recomputeCursor extracted from rebuildInfinite, the
-configure() adoption branch + its throw containment. Files: Query.js,
-test/persist.test.js.
-Commit: `feat(query): infinite entries round-trip -- pages restore,
-cursor/hasNext recompute at first attach (T3, OR-4/ON-1)`
-Proof: npm test; D1/D2/D3 in test/infinite-query.test.js still green.
+**Recommend (c): the measured hybrid -- ONE preallocated record PER TYPE,
+built at install, dropped at uninstall.** `inspect(hook)` builds a 23-slot
+table of pooled records in one cold loop; every emit overwrites the 10 fields
+of its type's record and passes it; `uninstall()` nulls the table. Rationale:
 
-**C3 -- the private write seam.**
-Scope: client-scope persistHook single slot, notifyWrite(), the six V4 call
-sites, _internal.installPersistHook(fn) -> uninstall. Files: Query.js,
-test/persist.test.js.
-Commit: `feat(query): private single-slot cache-write hook -- one null test
-per commit site (T2, OR-5/OR-8)`
-Proof: npm test + node --expose-gc test/torture.mjs (GATE byte-identical,
-first check of G8).
+- Beats (b) allocate-when-installed on steady state: an installed panel under
+  a stream at 60 Hz allocates 0 B/frame instead of one 10-field object per
+  frame; the lite-signal bar (allocation-free dispatch when registered,
+  LiteSignal/llms.txt:386-387) is met, not merely approached.
+- Beats plain (a) preallocated-at-construction on the off switch: an app that
+  never calls `inspect()` retains **zero** feed objects; nothing is built
+  until install (OR-5's "the uninstalled branch is the product" extends to
+  retained bytes, not just cycles).
+- Per-type (not one global record) keeps re-entrancy honest: a hook that
+  calls `qc.setQueryData` inside `stream:value` cannot clobber the record it
+  is still reading unless the nested event is the same type (documented).
+- Cost: the hook **must copy what it keeps**. Documented loudly in README +
+  llms.txt + d.ts + Cookbook 20, and pinned by a counted identity test
+  (OR-6).
 
-**C4 -- the adapter.**
-Scope: persistQueryClient export, install validation, restore ladder,
-throttle, flush/stop (flush-on-stop). Files: Query.js, test/persist.test.js.
-Commit: `feat(query): persistQueryClient(qc, { save, load, version,
-throttle }) -- storage-agnostic, fail-closed restore (T2, OR-5/OR-6/OR-7)`
-Proof: npm test.
+**Phase H measures BOTH candidates, same 200000-iteration warm body, three
+runs:**
+1. `absent` -- no hook. Records: GATE line (byte-compare),
+   `gc.major/minor/maxMs`, heapUsed delta over the profiled window, B/op.
+2. `installed-pooled` -- candidate (c), no-op copying hook
+   (`(e) => { sink = e.type.length + e.count; }`). Records: the same four +
+   hook invocation count.
+3. `installed-fresh` -- candidate (b) simulated by a hook-side allocation
+   twin (`(e) => keep = { type: e.type, ts: e.ts, keyHash: e.keyHash }`
+   discarded per call), same iteration count. Records: the same four.
 
-**C5 -- conformance / corruption matrix.**
-Scope: test/persist-conformance.test.js mirroring the SHAPE of
-../LiteBakeStream/test/DehydratedCache.test.js (Part A round-trip / Part B
-matrix table + single driver / Part C fail-open witness + pinned
-MATRIX.length). Imports nothing from bake, ever. Files: test only.
-Commit: `test(query): dehydrated-cache corruption matrix -- every malformed
-class drops the whole payload (T4, OR-3)`
-Proof: npm test.
+Recorded in bench provenance and in the CHANGELOG `[1.5.0]` head as a 3-row
+table: `run | major | minor | maxMs | heapDelta bytes | B/op`. Because the
+warm loop performs no writes (V7), runs 2 and 3 must additionally drive a
+**write sub-loop** of 20000 `setQueryData` ops outside the frozen GATE window
+(see STOP-2) to produce non-degenerate emit numbers.
 
-**C6 -- torture phase + OR-11 attempt.**
-Scope: phase H gains the 4096-cycle dehydrate/hydrate/teardown loop
-(inserted after the existing phase-1 loop, before globalThis.gc?.() at
-test/torture.mjs:194, so live/findings cover it); module-scope
-release/fetcher discipline preserved; the OR-11 findings-clause attempt
-through adapter stop() with a pending throttled save and a tracked payload
-handle, recorded verbatim in INCONCLUSIVE.md as Attempt C in the Q5 style --
-a ctlPersist control is added to test/torture/controls.mjs IFF it actually
-trips; otherwise the four live controls stay alloc/detach/fuzz/pages and the
-non-firing is recorded, never faked. Files: test/torture.mjs,
-INCONCLUSIVE.md, (conditionally) test/torture/controls.mjs.
-Commit: `test(torture): phase H dehydrate/hydrate cycle loop + OR-11
-findings-clause attempt C (T5, OR-11)`
-Proof: node --expose-gc test/torture.mjs (GATE byte-identical + ok) and
-npm run torture:control (>= 4 tripped: lines).
+---
 
-**C7 -- docs pass.**
-Scope: llms.txt (new surface + the two scope lines flip: "No SSR hydration"
-and "No persistence of infinite pages"), Query.d.ts (dehydrate/hydrate on
-QueryClient, DehydratedState, DehydratedEntry, HydrateResult, PersistOptions,
-RestoreOutcome, PersistHandle, persistQueryClient), README.md (facts-table
-persistence row -- TanStack: plugin; SWR: manual -- plus the
-allocation-table row), Cookbook.md recipes (a) localStorage + IndexedDB
-thunks, (b) the bake-backed variant with the verbatim consumer-floor quote
-(OR-9), (c) streamQuery + RangeReader (OR-10). If the ingest-progress recipe
-does not fit, EXPLICITLY re-park it in the ROADMAP ledger -- no silent drop.
-Files: llms.txt, Query.d.ts, README.md, Cookbook.md, ROADMAP.md.
-Commit: `docs(query): persistence surface -- llms.txt, d.ts, README facts
-row, three Cookbook recipes (T6, OR-9/OR-10)`
-Proof: npm test (surface-guard + ascii-guard are the gate).
+## 4. OR-7 THROWING-HOOK RULING (proposal)
 
-**C8 -- CHANGELOG head + pack.**
-Scope: `## [1.4.0] -- unreleased` head recording every OR decision (incl.
-flush-on-stop, the future-timestamp clamp, the throw/return asymmetry, the
-invalidate non-hook decision, and V1's correction to OR-2's "macrotask"
-wording). Files: CHANGELOG.md.
-Commit: `docs(changelog): 1.4.0 head -- persistence primitive, adapter, OR
-decisions (OR-1: no version stamp)`
-Proof: npm test && npm run torture && npm pack --dry-run.
+**Contain + auto-uninstall + loud, synchronous report. Fail closed toward the
+FEED, never toward the cache.**
 
-## C. ASSERTIONS (qa runs these verbatim)
+The hook is the untrusted party ("observe-only, never throw, never mutate").
+Propagating would let a devtools bug abort a cache write mid-commit (e.g. a
+throw at 817 between `entries.delete` and the loop's next iteration). Silent
+swallowing is forbidden. Auto-uninstall alone would be silent.
 
-1. [G1] npm test -> pass >= 218, fail 0, skip 0, todo 0. Base is 203; C1-C5
-   add >= 30.
-2. [G2] node --expose-gc test/torture.mjs prints, byte for byte,
-   `GATE leak=size 0/0 findings=0 warnings=0 | gc major=0 minor=0
-   maxMs=0.00 | ok` followed by `ok`, exit 0.
-   QUERY_TORTURE_BREAK=1 node --expose-gc test/torture.mjs prints
-   `CONTROL SUMMARY tripped=4/4` (or 5/5 iff C6's attempt tripped).
-3. [G5 / GC budget] Phase H's checkNoGc(summary, { maxMajor: 0,
-   maxPauseMs: 4 }) returns verdict === 'pass' with summary.gc.major === 0
-   and summary.gc.maxMs <= 4.00 across the 200000-iteration warm loop WITH
-   the new cycle loop present.
-4. [G5 / retention] After 4096 dehydrate/hydrate/teardown cycles,
-   tracker.size() === 0 and tracker.audit().length === 0; the WeakRef census
-   over the last 256 sampled payload handles is not 256/256 live.
-5. [G3] For a 5-key success cache: dehydrate ->
-   JSON.parse(JSON.stringify(...)) -> fresh client -> hydrate yields
-   deepStrictEqual getQueryData for all 5 keys, result.ok === true,
-   result.count === 5; and with staleTime: 30_000 and a mock clock advanced
-   29_999 ms the restored client issues 0 fetches, at 30_000 ms exactly 1 --
-   identical to a client that never restarted.
-6. [G4] Every row of the MATRIX table drops the WHOLE payload: hydrate
-   returns ok === false, count === 0, typeof reason === "string", and a
-   subsequent hydrate(goodState) on the same client returns ok === true
-   (proving the cache was still empty). MATRIX.length equals its pinned
-   literal. The fail-open witness is rejected on 100% of rows.
-7. [G4] version: "v2" against a { version: "v1", state } payload resolves
-   handle.restored with { status: "dropped", reason: "version-mismatch",
-   count: 0 } and getQueryData is undefined for ALL stored keys (0 of N
-   hydrated).
-8. [G6] Restored infinite entry: pages() deep-equals the 3 dehydrated pages
-   and data() the flat view; after first attach hasNextPage() === true; one
-   fetchNextPage() produces exactly 1 fetcher call whose cursor equals the
-   recomputed cursor (not null), and pages().length === 4 with page 1
-   unchanged at index 0.
-9. [G8] With no adapter installed, a 4096-cycle no-adapter run leaves the
-   GATE line identical to the 1.3.0 line asserted in (2), and
-   bench/torture/query-soak.mjs, cache-fuzzer.mjs, shared-fetch-soak.mjs all
-   exit 0 under phase P.
-10. [G7] npm test surface-guard passes with persistQueryClient present in
-    both llms.txt and Query.d.ts; ascii-guard walks every new file
-    (test/persist.test.js, test/persist-conformance.test.js, any fixture
-    .mjs) with 0 non-ASCII bytes.
-11. [G9] npm pack --dry-run reports exactly 13 files; test/, bench/,
-    INCONCLUSIVE.md, BRIEF.md, PLAN.md, ROADMAP.md absent; llms.txt +
-    CHANGELOG.md present. (13 = the 12 package.json:29-42 entries +
-    package.json; Q6 ships no new file.)
-12. [G1/OR-1] Query.js:41 is `export const VERSION = "1.3.0"` and
-    package.json:3 is "1.3.0"; test/version-sync.test.js green;
-    CHANGELOG.md has a [1.4.0] head.
+Ruling: the single dispatch funnel wraps the call in `try/catch`. On a throw
+it (1) nulls `feed.hook` and `feed.pool` -- the app instantly returns to the
+zero-cost uninstalled path; (2) calls `console.error("lite-query: inspect
+hook threw; feed uninstalled", err)` exactly once; (3) returns normally so
+the in-progress cache operation completes. The previously-returned uninstall
+thunk stays safe (its `=== hook` guard already fails). A later `inspect(fn)`
+succeeds because the slot is free.
 
-## D. TEST PLAN (>= 30 new; suite 203 -> >= 233, floor 218)
+Rejected alternative, recorded: re-throwing out-of-band via
+`queueMicrotask(() => { throw err; })` -- it converts a panel bug into an
+`uncaughtException` that can kill the host process and the test runner;
+louder is not fail-closed.
 
-**test/persist.test.js** (new):
-1. dehydrate: a success cache round-trips through JSON with identical
-   getQueryData for every key
-2. dehydrate: pending entries are never serialized (a promise is not data)
-3. dehydrate: error entries are never serialized
-4. dehydrate: stream entries are never serialized (a connection is not data)
-5. dehydrate: an infinite entry is marked and carries a COPY of its pages
-   array
-6. dehydrate: the emitted state has no version field (the adapter stamps
-   it, OR-6)
-7. hydrate: seeded entries are stale-aware -- 29999ms no refetch, 30000ms
-   exactly one (mock clock)
-8. hydrate: THROWS on a non-empty cache, and the message names the
-   empty-cache precondition (OR-2)
-9. hydrate: throws even when the existing entry has zero observers (entry
-   count, not observer count)
-10. hydrate: never broadcasts -- a peer tab sees zero messages after seeding
-    (mock BroadcastChannel)
-11. hydrate: a same-tick boot (create qc -> hydrate) cannot observe a queued
-    remote setData (V1)
-12. hydrate: an awaited boot on a crossTab client that received a remote
-    setData drops as cache-not-empty (V1c)
-13. hydrate: a future dataUpdatedAt is clamped to now() -- restored entry is
-    not immortally fresh
-14. hydrate: seeded entries GC at cacheTime like any unobserved entry
-15. infinite: a restored list continues paginating -- fetchNextPage appends
-    page N+1 exactly once (G6)
-16. infinite: hasNextPage is false before attach and correct after the first
-    attach (fail closed)
-17. infinite: a getNextCursor that throws at adoption resets to a clean
-    page-one fetch, never wedges
-18. write hook: fires on setData / fetch settle / commitPage throw /
-    removeQueries / clear / GC expiry (6 sites)
-19. write hook: does NOT fire on invalidate, attach, detach, or hydrate
-    seeding
-20. write hook: zero calls with no adapter installed; a second install
-    throws
-21. adapter: version is REQUIRED -- no default, install throws without it
-    (OR-6)
-22. adapter: load() -> null is an EMPTY store, status "empty", not an error
-    (OR-3)
-23. adapter: a throwing/rejecting load() resolves { status: "dropped",
-    reason: "load-threw" } -- never unhandled
-24. adapter: version mismatch drops 100% of entries and fetches fresh
-25. adapter: throttle coalesces N writes in a window into exactly ONE save
-    (mock clock, trailing edge)
-26. adapter: stop() uninstalls the hook and clears the pending timer;
-    further writes save nothing
-27. adapter: stop() FLUSHES a pending save (OR-7/ON-3c decision); clear() +
-    stop() persists emptiness
-28. adapter: a rejecting save() is contained -- the adapter keeps running,
-    no unhandled rejection
-29. adapter: the restore outcome is observable before the first observer
-    attaches
+**Pinning test** (A8): stub `console.error`; install a hook that throws on
+its first call; run `qc.setQueryData(["t"], 1)`; assert the write landed
+(`getQueryData === 1`), the hook was called exactly 1 time, `console.error`
+exactly 1 time, no further calls after 20 more cache ops, and a fresh
+`inspect(noop)` returns a function.
 
-**test/persist-conformance.test.js** (new): Part A -- byte-shape round-trip
-of a mixed corpus (plain + infinite + 0-entry cache + a ~1 MB payload),
-3 tests. Part B -- the driver dropsWholePayload(state) over MATRIX rows (one
-test() per row, name `B row N: <case> -> <reason>`): (1) state null;
-(2) state an array; (3) state a string; (4) entries missing; (5) entries not
-an array; (6) extra top-level key; (7) entry not an object; (8) key missing /
-not an array; (9) entry with a 5th key; (10) dataUpdatedAt NaN / Infinity /
-string / missing; (11) infinite missing; (12) infinite non-boolean;
-(13) infinite: true with non-array data; (14) infinite: true with data:
-null; (15) data: undefined on a plain entry; (16) duplicate key hashes;
-(17) one bad entry among three good ones -> nothing hydrates. Plus two
-legal, non-refusing rows pinned separately (bake's row-8/17 analogue):
-{ entries: [] } hydrates as ok: true, count: 0; a legal null DATA VALUE
-hydrates fine (null is a value, not a missing field). Part C -- the
-fail-open mergeHydrate witness that seeds what it can, rejected on 100% of
-refusal rows, with MATRIX.length pinned to a literal.
+---
 
-## E. STOP -- resolved by the operator rulings above
+## 5. ALGORITHMS
 
-- STOP-1 -> ON-1 (ratified; C2 unblocked).
-- STOP-2 -> ON-2 (ratified; BRIEF.md amended, CHANGELOG records it).
-- STOP-3 -> ON-3 (ratified: throw/return asymmetry, finite-future clamp with
-  non-finite = whole-payload drop, flush-on-stop with clear()+stop() as the
-  logout path).
+**A-1 The feed cell + install/uninstall (mirrors installPersistHook 266-277
+exactly).**
+
+```
+// client closure, beside persistHook (Query.js ~258). ONE cell so the core and
+// the /stream subpath read the same live slot (V2); a `let` cannot cross files.
+const feed = { hook: null, pool: null };
+
+function inspect(hook) {
+    if (typeof hook !== "function") {
+        throw new TypeError("lite-query: inspect requires a function");     // arrays land here
+    }
+    if (feed.hook !== null) {
+        throw new Error("lite-query: an inspect hook is already installed on this client (single-slot seam)");
+    }
+    feed.pool = buildEventPool();      // cold: 23 records, once per install
+    feed.hook = hook;
+    return function uninstallInspect() {
+        if (feed.hook === hook) { feed.hook = null; feed.pool = null; }     // idempotent
+    };
+}
+```
+`inspect` is added to the returned object literal (1069-1083) and `feed` to
+`_internal` (1082) for the subpath. Installing/uninstalling `inspect` never
+reads or writes `persistHook`, and vice versa (OR-4).
+
+**A-2 The emit-site pattern (the null-test discipline).** Nothing is
+constructed before the test -- no object, no array, no template string, no
+`ts` read, no `arguments`:
+
+```
+if (feed.hook !== null) emitEntry("entry:attach", entry, entry.observerCount);
+```
+`emitEntry` / `emitFetch` / `emitTab` / `emitStream` / `emitClient` are five
+cold closures defined once per client; each grabs its pooled record,
+overwrites all 10 fields (never a partial write -- stale fields are lies),
+and calls `fire()`. `fire()` is the single try/catch funnel of A-4. Status
+funnel:
+
+```
+function setStatus(entry, to) {
+    if (feed.hook !== null) {
+        _se = entry; const from = untrack(READ_STATUS);   // hoisted module-level reader
+        entry.status.set(to);
+        emitStatus(entry, from, to);
+        return;
+    }
+    entry.status.set(to);
+}
+```
+`const READ_STATUS = () => _se.status();` is module-level and hoisted -- zero
+allocation per call, the same trick as `cleanupObserver` (1199-1206);
+`untrack` is already imported (31). Uninstalled cost per status write: one
+call frame + one null test. Uninstalled cost on the warm read path: **zero**
+(no status write occurs there, V7).
+
+**A-3 Ordering law.** At any site co-located with `notifyWrite()`, the feed
+emits **after** it. Every emit is placed **after** the state commit it
+reports, except `fetch:dispatch` (which reports the start) -- so a hook
+re-entering the cache always observes committed state.
+
+**A-4 Dispatch funnel (synchronous, OR-7).**
+```
+function fire(ev) {
+    const h = feed.hook;
+    try { h(ev); }
+    catch (err) { feed.hook = null; feed.pool = null;
+        try { console.error("lite-query: inspect hook threw; feed uninstalled", err); } catch {} }
+}
+```
+No queue, no microtask, no reordering.
+
+**A-5 Fuzzer assertion mode (cache-fuzzer.mjs, env `TORTURE_FEED=1`, ON by
+default under phase P).** Per-`keyHash` state record (plain object in a Map,
+cold path -- the fuzzer is not a hot body):
+`{ live, observers, inFlight, status, stream }` with
+`stream in { none, open, done }`.
+
+Legal transitions and violations:
+- `entry:create` -> `live=true, observers=0, status="idle", stream="none"`.
+  On an already-live hash: violation `create-over-live`.
+- `entry:attach` -> `observers++`. `entry:detach` -> `observers--`; if it
+  would go negative: **`detach-without-attach`**.
+- `entry:gc` / `entry:remove` -> `live=false`. Any subsequent event for that
+  hash other than `entry:create`: **`event-after-remove`**.
+- `fetch:dispatch` -> if `inFlight` already true: **`dispatch-without-clear`**
+  (a supersede must emit `fetch:abort` at 580 first). Else `inFlight=true`.
+- `fetch:settle` / `fetch:abort` -> if `!inFlight`:
+  **`settle-without-dispatch`**. Else `inFlight=false`.
+- `entry:status` -> if `from !== state.status`: **`status-from-mismatch`**;
+  else `state.status = to`.
+- `stream:start` -> `stream="open"` (legal from any stream state: restart).
+  `stream:value` when `stream !== "open"`: **`value-after-done`** /
+  `value-without-start`. `stream:done`/`stream:error` -> `stream="done"`; a
+  second one: `terminal-twice`.
+- `tab:send` vs `tab:receive`: counted, and asserted
+  `receives <= sends * (tabs-1)` -- an echo-loop shows as a strict violation
+  `receive-overflow`.
+
+Coverage gate (G4): an expected-set of the **14 fuzz-reachable** types
+(`entry:create|attach|detach|gc|remove|status|stale`,
+`fetch:dispatch|settle|abort`, `tab:send|receive`, `stream:start|value`;
+`stream:done/error` counted but not required, since a random abort may
+pre-empt them). Any expected type with count 0 -> `uncovered-event-class`,
+exit 1. `shared:*`, `mutation:*`, `persist:*` are explicitly excluded because
+the fuzzer sets `sharedFetch` off (V6) and issues neither -- an inclusive set
+would be a lie.
+
+Reporting: `violations[]` of `{ rule, keyHash, detail }`; print the first 10
+to stderr, print `FAIL: feed state machine -- N violations`, `exit 1`. Break
+hook: `QUERY_TORTURE_BREAK=feed` skips exactly one `entry:attach` bookkeeping
+update, producing a guaranteed `detach-without-attach` -> the new **C-feed**
+control.
+
+---
+
+## 6. C-LADDER
+
+- **C1 -- seam.** `feed` cell, `inspect()`, `buildEventPool()`, `fire()`, the
+  5 emit helpers, `_internal.feed`. Zero emit sites.
+  `Query.js:queryClient/inspect`, `Query.js:queryClient/fire`.
+- **C2 -- entry lifecycle + status funnel.** Sites 1-7 incl. the 11 core
+  `setStatus` conversions. `Query.js:ensureEntryByHash`, `attach`, `detach`,
+  `scheduleGc`, `removeQueries`, `clear`, `hydrate`, `invalidate`,
+  `setStatus`.
+- **C3 -- fetch + cross-tab + shared.** Sites 8-15. `Query.js:runFetch`,
+  `broadcast`, `onRemoteMessage`, `requestSharedFetch`.
+- **C4 -- stream.** Sites 16-19 + the 5 stream `setStatus` conversions,
+  through `_internal.feed` / `_internal.setStatus`.
+  `StreamQuery.js:streamQuery/startStream`.
+- **C5 -- mutation + persist.** Sites 20-23. `Query.js:mutation`,
+  `Query.js:persistQueryClient/doSave`. Prereq **C6.0**: grep `test/` for any
+  `mutation(` call whose first arg is not a real client (V8); if one exists,
+  the `_internal` read is guarded `qc && qc._internal ? ... : null`.
+- **C6 -- fuzzer assertion mode + C-feed control.**
+  `bench/torture/cache-fuzzer.mjs`, `test/torture/controls.mjs:ctlFeed`,
+  `runControls` id list.
+- **C7 -- torture phase H double-run + bench provenance. Carries OR-10
+  attempt D.** `test/torture.mjs:runPhaseH`. Attempt D: 4096 cycles of
+  `inspect(hookClosure)` / uninstall where `hookClosure` is
+  `tracker.track`ed with `{ audit: true }` **outside any owner** and carried
+  across the install/uninstall boundary while the client's owner tree is torn
+  down; honest pass-or-fail, recorded verbatim in INCONCLUSIVE.md as Attempt
+  D beside A/B/C. If it does not fire, it is re-recorded and carried -- never
+  faked, never added as a ctl that cannot fire.
+- **C8 -- docs, last.** README "Devtools feed" section + lite-studio pointer
+  (no panel promises), llms.txt (scope line flip + the full vocabulary table
+  + the copy contract), Query.d.ts (`inspect` signature + `QueryFeedEvent` +
+  the type union), Cookbook recipe 20 (console logger in 10 lines),
+  CHANGELOG `[1.5.0]` head with every OR decision, the T3 3-row measured
+  table, and the four **Fixed** lines for 033e670 (OR-2). No version stamp
+  (OR-1).
+
+---
+
+## 7. FALSIFIABLE ASSERTIONS (qa verifies verbatim)
+
+1. `node --expose-gc test/torture.mjs` prints exactly `GATE leak=size 0/0
+   findings=0 warnings=0 | gc major=0 minor=0 maxMs=0.00 | ok` then `ok`,
+   exit 0 -- byte-identical to the 1.4.0 line.
+2. **GC budget:** phase H run 2 (hook installed, no-op copying hook, 200000
+   warm iterations + 20000-write sub-loop) reports `checkNoGc` verdict `pass`
+   under `{ maxMajor: 0, maxPauseMs: 4 }`, `gc.major === 0`, and
+   `heapDelta / 220000 <= 1.0` bytes-per-op. Run 1 (absent) reports
+   `heapDelta / 220000 === 0.0` to two decimals. Both numbers printed in
+   bench provenance.
+3. **Retention:** over 4096 install/uninstall cycles (attempt D),
+   `tracker.size()` returns to **0** and the 256-sample WeakRef census is not
+   256/256 live.
+4. Fuzzer assertion mode: **0** violations over 2 runs (`TORTURE_SECONDS=5`,
+   seeds `0x1234567` and `0x7654321`), and all **14** expected event types
+   have count `>= 1`.
+5. `QUERY_TORTURE_BREAK=feed` trips: child exit 1 containing `FAIL: feed
+   state machine` and `detach-without-attach`. The four existing controls
+   (`alloc`, `detach`, `fuzz`, `pages`) still print `CONTROL <id> tripped`,
+   summary `tripped=5/5` under `QUERY_TORTURE_BREAK=1`.
+6. Suite: `npm test` reports `>= 298` pass, **0** fail, **0** skip.
+   `git diff --stat` over the 268 pre-existing test files is empty (OR-9).
+7. Identity (OR-6): two sequential `entry:status` events satisfy
+   `Object.is(a, b) === true`; `Object.keys(a).length === 10` on both; a
+   manual copy taken after event 1 is unchanged after event 2; two events of
+   **different** types are never identical.
+8. Throwing hook: cache write completes, hook called exactly **1** time,
+   stubbed `console.error` called exactly **1** time, **0** further hook
+   calls over 20 subsequent ops, re-install returns a function.
+9. Zero emission when uninstalled: install a counting hook, run 100 ops
+   (`n1 > 0`), uninstall, run 1000 mixed ops -> counter still `=== n1`.
+10. Two seams (OR-4): with both a persister and an inspect hook installed,
+    `uninstallInspect()` leaves `save` firing (`>= 1` call after a write);
+    `handle.stop()` leaves the feed firing (`>= 1` event after stop);
+    `inspect()` twice throws `Error`, and `null` / `undefined` / `[]` / `{}`
+    each throw `TypeError` (4 counted cases).
+11. All 23 frozen types fire with the documented 10-key shape under counted
+    tests (G5).
+
+---
+
+## 8. TEST PLAN (268 -> 310)
+
+New files only (OR-9 forbids editing existing tests).
+
+- **`test/inspect.test.js` -- 26 tests.** Install/uninstall/idempotence/
+  double-install/4 rejections (8); entry lifecycle create/attach/detach/gc/
+  remove x3 causes (7); status `from`/`to` + `entry:stale` (3); fetch
+  dispatch/settle/abort x4 reasons (4); tab send/receive + shared
+  request/serve/fallback (2 -- shared covered in the cross-tab section, 2
+  tests); mutation start/settle+superseded (2).
+- **`test/inspect-shape.test.js` -- 6 tests.** 10-key monomorphic shape; `ts`
+  type + monotonicity; reuse identity (OR-6); different-type non-identity;
+  `key` is by-reference; uninstalled emits nothing (A9).
+- **`test/inspect-stream.test.js` -- 4 tests.** `stream:start`/`value`/
+  `done`, `stream:error` both phases (open + iterator).
+- **`test/inspect-seams.test.js` -- 6 tests.** Two-seam independence x2
+  (A10), throwing hook (A8), persist:hydrate ok + dropped, persist:save.
+
+Total **+42 -> 310**; a conservative floor of **>= 298** is asserted so a
+merged/split test does not miss the gate. `tests_min 278` cleared with
+margin; `skip_max 0` (no `{ skip: true }`, no `test:gc`-only tests).
+llms.txt's count line is updated to the QA-frozen final number in C8.
+
+---
+
+## 9. STOP ITEMS (operator ruling required; do not design around)
+
+- **STOP-1 -- `qc._hook` is unimplementable as written (V2).** BRIEF T1 /
+  charter line 896 specify `if (qc._hook !== null)`. There is no `qc` binding
+  inside `queryClient` (1069-1083), and `StreamQuery.js:87` destructures
+  `_internal` once, so a core `let` can never be read live by the subpath.
+  Proposal: a per-client cell `const feed = { hook: null, pool: null }` (one
+  cold allocation per client, no per-entry slot), tested as
+  `feed.hook !== null` at every site in both files. This is a literal
+  deviation from the charter's spelled form and needs the operator's word
+  before C1.
+- **STOP-2 -- the byte-frozen GATE cannot prove the stream frame path (V7).**
+  OR-5/G3 demand a byte-identical GATE **and** "zero added allocation" proof;
+  but phase H's profiled window (torture.mjs:271-279) performs zero status
+  writes and zero stream frame writes, so the hardest emit site
+  (`stream:value`, StreamQuery.js:134, on a path llms.txt:105 documents as
+  "one signal write per frame, ZERO allocation") is measured by nothing.
+  Adding pushes/writes **inside** the profiled window can move `maxMs` and
+  break byte-identity. Ruling needed: (a) keep the GATE window frozen and
+  prove the write/frame paths in a **separate** provenance loop outside it
+  (planner's preference), or (b) extend the window and re-freeze a new GATE
+  line (contradicts "byte-frozen"). Everything in C7 depends on this answer.
+- **STOP-3 -- G2's "plus any honest Q7 addition per OR-10" is ambiguous
+  against three failed attempts.** controls.mjs:22-27 records that the
+  findings clause has no control after A/B/C. If attempt D again does not
+  fire, G2 must not be read as requiring a fifth *tripping* control.
+  Proposal: the honest Q7 addition that gates is **C-feed** (the fuzzer
+  state-machine control, guaranteed to trip); attempt D is recorded
+  pass-or-fail in INCONCLUSIVE.md and is explicitly **not** a gate clause.
+  Confirm before C7, or the ladder stalls on an unfirable control.
+
+**Recorded, not STOP:** ROADMAP line 915's "Suite >= 200" is stale against
+278 (V10); OR-3 vs OR-4 uninstall semantics resolved in favour of OR-4
+(V11); `mutation()`'s unvalidated `qc` is a coder pre-check, not a
+contradiction (V8, task C6.0).
