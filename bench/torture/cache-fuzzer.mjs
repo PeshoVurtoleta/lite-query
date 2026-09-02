@@ -41,8 +41,9 @@ import {createMockClock, createMockBroadcastChannel} from "../../test/harness.js
 // -- knobs --------------------------------------------------------------------
 const SECONDS      = Number(process.env.TORTURE_SECONDS || 5);
 const SEED         = (Number(process.env.TORTURE_SEED || 0x1234567) >>> 0) || 1;
-const N_WORK       = 160;   // shared work keyspace (both tabs mutate)
-const N_SYNC       = 24;    // sync keyspace (only tab A writes; used for convergence)
+const N_TABS       = Math.max(2, Number(process.env.QUERY_FUZZ_TABS || 2) | 0);   // tab set size (>= 2)
+const N_WORK       = 160;   // shared work keyspace (every tab mutates)
+const N_SYNC       = 24;    // sync keyspace (only tab 0 writes; used for convergence)
 const N_OBS_PER    = 48;    // observer slots per tab
 const N_STREAM_PER = 4;     // stream handles per tab
 const OPS_PER_TICK = 900;
@@ -175,15 +176,18 @@ function makeTab() {
         retry: 0,
     });
 }
-const tabA = makeTab();
-const tabB = makeTab();
-const tabs = [tabA, tabB];
+// N tabs (default 2 -- identical to the shipped two-tab fuzzer). tab 0 is the
+// single writer of the sync keyspace so convergence stays unambiguous; every
+// tab shares the work keyspace. The echo/ledger laws generalize over N (they
+// do not weaken): total broadcasts still equal the mutations issued, and a
+// locally-issued mutation reaches at most N-1 peers.
+const tabs = Array.from({ length: N_TABS }, makeTab);
+const tabA = tabs[0];
 
 // Install the feed observers BEFORE any entry is created, so no lifecycle event
-// escapes the running balances. Both tabs feed the same global counters.
+// escapes the running balances. Every tab feeds the same global counters.
 if (FEED_ASSERT) {
-    tabA.inspect(feedStep);
-    tabB.inspect(feedStep);
+    for (const t of tabs) t.inspect(feedStep);
 }
 
 // -- fetchers + stream source -------------------------------------------------
@@ -218,8 +222,8 @@ function tabState(qc) {
     const slots = new Array(N_OBS_PER).fill(null);
     return {qc, handles, streams, slots};
 }
-const A = tabState(tabA);
-const B = tabState(tabB);
+const states = tabs.map(tabState);
+const A = states[0];
 
 function mountObs(st, i) {
     if (st.slots[i]) st.slots[i]();
@@ -231,18 +235,18 @@ function mountObs(st, i) {
     });
 }
 function unmountObs(st, i) { if (st.slots[i]) { st.slots[i](); st.slots[i] = null; } }
-for (const st of [A, B]) for (let i = 0; i < N_OBS_PER; i++) mountObs(st, i);
+for (const st of states) for (let i = 0; i < N_OBS_PER; i++) mountObs(st, i);
 
 // -- op mix -------------------------------------------------------------------
 let ops = 0;
 let localMutations = 0;   // setData + invalidate + remove + clear we ISSUE (each broadcasts once)
 let errors = 0;
 let lastError = null;
-const stOf = (qc) => (qc === tabA ? A : B);
-
 function step() {
-    const qc = tabs[randInt(2)];
-    const st = stOf(qc);
+    const ti = randInt(N_TABS);
+    const qc = tabs[ti];
+    const st = states[ti];
+    const isWriter = ti === 0;               // only tab 0 owns the sync keyspace
     const mode = randInt(9);
     try {
         if (mode === 0) {
@@ -264,10 +268,10 @@ function step() {
             st.streams[randInt(N_STREAM_PER)].restart();   // abort + re-establish a stream
             ops++;
         } else if (mode === 6) {
-            // Only tab A owns the sync keyspace (single writer keeps convergence
-            // unambiguous); tab B spends this op on the work space instead.
-            if (qc === tabA) { qc.setQueryData(["s", randInt(N_SYNC)], randInt(1e6)); localMutations++; }
-            else             { qc.invalidate(["w", randInt(N_WORK)]); localMutations++; }
+            // Only tab 0 owns the sync keyspace (single writer keeps convergence
+            // unambiguous); every other tab spends this op on the work space.
+            if (isWriter) { qc.setQueryData(["s", randInt(N_SYNC)], randInt(1e6)); localMutations++; }
+            else          { qc.invalidate(["w", randInt(N_WORK)]); localMutations++; }
             ops++;
         } else if (mode === 7) {
             const p = st.handles[randInt(N_WORK)].refetch();
@@ -307,25 +311,23 @@ async function convergeCheck() {
     await drain(64);                      // NB: no clock.advance -- sync entries must not GC before we read
     let mismatches = 0;
     for (let j = 0; j < N_SYNC; j++) {
-        if (tabA.getQueryData(["s", j]) !== SENTINEL) mismatches++;
-        if (tabB.getQueryData(["s", j]) !== SENTINEL) mismatches++;
+        for (const t of tabs) if (t.getQueryData(["s", j]) !== SENTINEL) mismatches++;
     }
     return mismatches;
 }
 
 async function teardown() {
-    for (const st of [A, B]) {
+    for (const st of states) {
         for (let i = 0; i < N_OBS_PER; i++) unmountObs(st, i);
     }
     await drain(64);                                  // deferred stopWatcher microtasks
-    for (const st of [A, B]) {
+    for (const st of states) {
         for (let i = 0; i < N_WORK; i++) st.handles[i].dispose();
         for (let i = 0; i < N_STREAM_PER; i++) st.streams[i].dispose();
     }
     clock.advance(CACHE_TIME + 10_000);               // fire all GC timers
     await drain(64);
-    tabA.dispose();
-    tabB.dispose();
+    for (const t of tabs) t.dispose();
     clock.advance(CACHE_TIME + 10_000);
     await drain(64);
     await nextTick();
@@ -339,10 +341,10 @@ const broadcastsDuringFuzz = broadcasts + (BREAK ? 1 : 0);
 await teardown();
 
 const after = reg.stats();
-const entriesA = tabA._internal.entries.size;
-const entriesB = tabB._internal.entries.size;
+const entryCounts = tabs.map((t) => t._internal.entries.size);
+const entriesLeaked = entryCounts.reduce((a, b) => a + b, 0);
 
-console.log("cache-fuzzer (two-tab cross-tab coherence)");
+console.log("cache-fuzzer (" + N_TABS + "-tab cross-tab coherence)");
 console.log("  duration:", elapsed.toFixed(3), "s");
 console.log("  ops:", ops.toLocaleString());
 console.log("  ops/sec:", (ops / elapsed).toLocaleString(undefined, {maximumFractionDigits: 0}));
@@ -351,7 +353,7 @@ console.log("  local mutations issued:", localMutations.toLocaleString());
 console.log("  broadcasts during fuzz:", broadcastsDuringFuzz.toLocaleString());
 console.log("  sync-key mismatches after converge:", mismatches);
 console.log("  errors:", errors);
-console.log("  entries.size after teardown  A/B:", entriesA, "/", entriesB);
+console.log("  entries.size after teardown per tab:", entryCounts.join(" / "));
 console.log("  clock timers pending after teardown:", clock.pendingCount);
 console.log("  baseline activeNodes/activeLinks:", baseline.activeNodes, "/", baseline.activeLinks);
 console.log("  post-teardown activeNodes/activeLinks:", after.activeNodes, "/", after.activeLinks);
@@ -371,8 +373,8 @@ if (mismatches !== 0) {
     console.error("  FAIL: cross-tab convergence -- ", mismatches, "sync reads didn't match the sentinel");
     exitCode = 1;
 }
-if (entriesA !== 0 || entriesB !== 0) {
-    console.error("  FAIL: entry maps didn't drain -- A:", entriesA, "B:", entriesB);
+if (entriesLeaked !== 0) {
+    console.error("  FAIL: entry maps didn't drain -- per tab:", entryCounts.join(" / "));
     exitCode = 1;
 }
 if (clock.pendingCount !== 0) {

@@ -46,6 +46,7 @@ import { createRoot, effect } from '@zakkster/lite-signal';
 // >>> WIRE 1: the package under test
 import { queryClient, query, infiniteQuery, persistQueryClient } from '../Query.js';
 import { streamQuery } from '../StreamQuery.js';
+import { createMockClock, createMockBroadcastChannel } from './harness.js';
 
 const CYCLES = 4096;
 const HOT = 200000;
@@ -456,6 +457,131 @@ async function runAttemptD() {
     findingsD.length + ' -> ' + (fired ? 'FIRED' : 'DID NOT FIRE (carried; recorded verbatim in INCONCLUSIVE.md)'));
 }
 
+// ---- C11 shared-stream soak (Q8): 5-tab N-tab soak + leader-failover -------
+// Runs AFTER the frozen gate evaluation and prints its OWN lines -- it never
+// touches the byte-frozen GATE line (ON-2 precedent). Five tabs share ONE
+// upstream connection through leader churn (killed every k ops); the mock
+// source counts live connections, and every follower records its projected
+// frames so any duplicate or reorder is a strictly-non-increasing step. Also
+// asserts G5: the leader keeps ZERO per-follower state, so its entries.size is
+// identical whether 1 or 4 followers are stalled (a prohibition, not a bound).
+function makeCountedStreamSource() {
+  let live = 0, opened = 0;
+  const conns = new Set();
+  const factory = (ctx) => {
+    opened++;
+    const conn = { buf: [], wake: null, aborted: false, closed: false };
+    conn.k = () => { if (conn.wake) { const r = conn.wake; conn.wake = null; r(); } };
+    const close = () => { if (!conn.closed) { conn.closed = true; live--; conns.delete(conn); } };
+    conns.add(conn); live++;
+    if (ctx && ctx.signal) ctx.signal.addEventListener('abort', () => { conn.aborted = true; conn.k(); close(); });
+    return { async *[Symbol.asyncIterator]() {
+      try {
+        while (true) {
+          if (conn.buf.length) { yield conn.buf.shift(); continue; }
+          if (conn.aborted) return;
+          await new Promise((r) => { conn.wake = r; });
+        }
+      } finally { close(); }
+    } };
+  };
+  return { factory, pushAll(v) { for (const c of conns) { c.buf.push(v); c.k(); } },
+    get live() { return live; }, get opened() { return opened; } };
+}
+
+async function soakDrain(n) { for (let i = 0; i < n; i++) await Promise.resolve(); }
+
+async function runStreamSoak() {
+  const N = 5, KILL_EVERY = 500, FRAMES = 50000;
+  const clock = createMockClock();
+  const bc = createMockBroadcastChannel();
+  const src = makeCountedStreamSource();
+  let leaderTrue = 0;                                   // rotating "leader" hint (oracle only hints)
+  const mkTab = (idx) => queryClient({
+    crossTab: true, broadcastChannel: bc.BroadcastChannel, crossTabChannel: 'soak',
+    sharedStream: true, isLeader: () => idx === leaderTrue,
+    now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
+    streamIdleTimeout: 1000,
+  });
+  const tabs = Array.from({ length: N }, (_, i) => mkTab(i));
+  const recs = tabs.map(() => []);
+  const stops = tabs.map((t, i) => {
+    const h = streamQuery(t, { key: ['soak'], stream: src.factory });
+    const d = createRoot(() => effect(() => { const v = h.data(); if (typeof v === 'number') recs[i].push(v); }));
+    return { h, d };
+  });
+  await soakDrain(20);
+
+  let dupReorder = 0, maxLive = 0, drainMax = 0, killCount = 0;
+  const seen = tabs.map(() => -Infinity);
+  for (let f = 1; f <= FRAMES; f++) {
+    src.pushAll(f);
+    if ((f & 63) === 0) await soakDrain(2);
+    if (src.live > maxLive) maxLive = src.live;
+    if (f % KILL_EVERY === 0) {
+      // kill the current leader owner: abort its connection + rotate the hint;
+      // the surviving tabs' watchdogs/race converge to one connection.
+      const owner = tabs.findIndex((t) => { const e = t._internal.entries.get(JSON.stringify(['soak'])); return e && e.streamOwner; });
+      leaderTrue = (leaderTrue + 1) % N;
+      if (owner >= 0) {
+        const e = tabs[owner]._internal.entries.get(JSON.stringify(['soak']));
+        if (e && e.streamStop) { try { e.streamStop(); } catch {} e.streamStop = null; e.streamOwner = false; }
+      }
+      killCount++;
+      clock.advance(1000);                            // let the watchdog self-connect
+      await soakDrain(20);
+      if (src.live > drainMax) drainMax = src.live;
+    }
+  }
+  await soakDrain(40);
+  // dup/reorder detector: each tab's recorded stream must be strictly increasing.
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < recs[i].length; j++) {
+      if (recs[i][j] <= seen[i]) dupReorder++;
+      seen[i] = recs[i][j];
+    }
+  }
+  const drainLive = src.live;                          // connections after messages drain
+
+  // G5: leader keeps zero per-follower state -- entries.size identical for 1 vs 4 followers.
+  const g5 = (stalled) => {
+    const c2 = createMockClock(); const b2 = createMockBroadcastChannel(); const s2 = makeCountedStreamSource();
+    const L = queryClient({ crossTab: true, broadcastChannel: b2.BroadcastChannel, crossTabChannel: 'g5', sharedStream: true, isLeader: () => true, now: c2.now, setTimeout: c2.setTimeout, clearTimeout: c2.clearTimeout });
+    const F = Array.from({ length: stalled }, () => queryClient({ crossTab: true, broadcastChannel: b2.BroadcastChannel, crossTabChannel: 'g5', sharedStream: true, isLeader: () => false, now: c2.now, setTimeout: c2.setTimeout, clearTimeout: c2.clearTimeout, streamIdleTimeout: 1e9 }));
+    const lh = streamQuery(L, { key: ['g'], stream: s2.factory });
+    const ld = createRoot(() => effect(() => lh.data()));
+    const fds = F.map((t) => { const h = streamQuery(t, { key: ['g'], stream: s2.factory }); return createRoot(() => effect(() => h.data())); });
+    return { L, F, lh, ld, fds, c2, s2 };
+  };
+  const g1 = g5(1); const g4 = g5(4);
+  await soakDrain(20);
+  for (let f = 1; f <= 50000; f++) { g1.s2.pushAll(f); g4.s2.pushAll(f); if ((f & 255) === 0) await soakDrain(1); }
+  await soakDrain(20);
+  const size1 = g1.L._internal.entries.size;
+  const size4 = g4.L._internal.entries.size;
+  g1.ld(); g4.ld(); g1.fds.forEach((d) => d()); g4.fds.forEach((d) => d());
+  g1.lh.dispose(); g4.lh.dispose(); g1.L.dispose(); g4.L.dispose(); g1.F.forEach((t) => t.dispose()); g4.F.forEach((t) => t.dispose());
+
+  // teardown the main soak; entries must drain, pool to baseline.
+  stops.forEach((s) => { s.d(); s.h.dispose(); });
+  await soakDrain(20);
+  clock.advance(2000); await soakDrain(20);
+  tabs.forEach((t) => t.dispose());
+  await soakDrain(20);
+  const entriesLeft = tabs.reduce((a, t) => a + t._internal.entries.size, 0);
+
+  const ok = dupReorder === 0 && drainLive <= 1 && maxLive <= N && size1 === size4 && entriesLeft === 0;
+  console.log('phase H shared-stream soak (Q8 G4/A1/A2/A4/G5; outside the frozen GATE window):');
+  console.log('  tabs=' + N + ' frames=' + FRAMES + ' leader-kills=' + killCount +
+    ' | dup/reorder=' + dupReorder + ' conn@drain=' + drainLive + ' maxLiveTransient=' + maxLive);
+  console.log('  G5 leader entries.size 1-follower=' + size1 + ' 4-followers=' + size4 +
+    ' (identical=' + (size1 === size4) + ', zero per-follower state) | entries-after-teardown=' + entriesLeft);
+  console.log(ok
+    ? '  PASS: one connection converged under churn, zero dup/reorder in 5 tabs, G5 prohibition holds (A1/A2/A4/G5)'
+    : '  FAIL: shared-stream soak invariant broken');
+  if (!ok) process.exitCode = 1;
+}
+
 // ---- orchestration --------------------------------------------------------
 // Fail closed on a missing --expose-gc BEFORE any phase runs: without it the
 // census settle cycles cannot collect and phase H reports a leak-shaped
@@ -509,4 +635,7 @@ if (BREAK) {
   // is recorded only (never a gate clause).
   await runProvenance();
   await runAttemptD();
+  // C11 (Q8): the 5-tab shared-stream soak + leader-failover churn + G5, all
+  // AFTER the frozen gate evaluation, printing their own lines (never the GATE).
+  await runStreamSoak();
 }
