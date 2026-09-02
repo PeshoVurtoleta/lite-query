@@ -182,6 +182,22 @@ function commitPage(entry, pageData, startGen, startCursor) {
     entry.data.set(entry.pages);
 }
 
+// Recompute an infinite entry's cursor + hasNext from its current pages, by
+// calling the installed getNextCursor on the last page. The SINGLE cursor-
+// recompute site in the file: both rebuildInfinite (whole-list writes) and the
+// configure() adoption branch (hydrate restore, first attach) route through
+// here (ON-1). A no-op when getNextCursor is null or there are no pages -- so a
+// seeded entry whose cursor function is not yet installed leaves hasNext alone.
+// May THROW if the user getNextCursor throws; callers contain it as they must.
+function recomputeCursor(entry) {
+    const pages = entry.pages;
+    if (entry.getNextCursor && pages.length > 0) {
+        const c = entry.getNextCursor(pages[pages.length - 1], pages);
+        entry.nextCursor = c === undefined ? null : c;
+        entry.hasNext = entry.nextCursor !== null;
+    }
+}
+
 // Rebuild an infinite entry from an externally-supplied pages array (a manual
 // qc.setQueryData or a cross-tab / shared-fetch broadcast of the whole list).
 // Recomputes the flat view + cursor so a follower can request the next page.
@@ -194,11 +210,7 @@ function rebuildInfinite(entry, pages) {
     }
     entry.pages = pages;
     entry.flat = flat;
-    if (entry.getNextCursor && pages.length > 0) {
-        const c = entry.getNextCursor(pages[pages.length - 1], pages);
-        entry.nextCursor = c === undefined ? null : c;
-        entry.hasNext = entry.nextCursor !== null;
-    }
+    recomputeCursor(entry);
     entry.data.set(pages);
 }
 
@@ -882,6 +894,29 @@ export function queryClient(options = {}) {
         e.invalidatedSinceCompletion = false;
     }
 
+    // Seed an infinite entry from a validated record. Restores the shape itself
+    // (V2): mark isInfinite, recreate the data node with NEVER_EQUAL so a later
+    // in-place page push still notifies, rebuild pages + flat through the same
+    // rebuildInfinite loop. getNextCursor is NULL (functions never serialize) --
+    // it is installed and the cursor recomputed at the first infiniteQuery
+    // attach (configure() adoption). hasNext is FALSE (fail closed: an
+    // unattached restored list can never auto-fetch at a wrong cursor -- runFetch
+    // bails on !hasNext).
+    function seedInfinite(e, rec) {
+        e.isInfinite = true;
+        e.getNextCursor = null;
+        e.pageGen = 0;
+        try { disposeNode(e.data); } catch {}
+        e.data = signal(undefined, { equals: NEVER_EQUAL });
+        rebuildInfinite(e, rec.data);      // pages + flat (recompute is a no-op: getNextCursor null)
+        e.nextCursor = null;
+        e.hasNext = false;
+        e.error.set(undefined);
+        e.status.set("success");
+        e.lastCompletedAt = Math.min(rec.dataUpdatedAt, opts.now());
+        e.invalidatedSinceCompletion = false;
+    }
+
     // Boot-only cache restore (OR-2). Fail-closed:
     //   1. THROWS if the cache is non-empty (a late hydrate over live data is
     //      the ABA bug of this domain) -- reserved for that programming error.
@@ -900,7 +935,8 @@ export function queryClient(options = {}) {
         if (reason !== null) return { ok: false, count: 0, reason };
         for (const rec of state.entries) {
             const e = ensureEntry(rec.key);
-            seedEntry(e, rec);
+            if (rec.infinite) seedInfinite(e, rec);
+            else seedEntry(e, rec);
         }
         return { ok: true, count: state.entries.length, reason: null };
     }
@@ -1186,7 +1222,30 @@ export function infiniteQuery(qc, infOpts) {
     // still notifies pages()/data(); plain entries keep Object.is. A shared or
     // GC-recreated entry re-configures only when isInfinite is still false.
     function configure(entry) {
-        if (entry.isInfinite) return;
+        if (entry.isInfinite) {
+            // Adoption (OR-4): a hydrate-seeded infinite entry has its pages
+            // restored but getNextCursor === null (functions never serialize).
+            // This first attach installs the cursor function and recomputes the
+            // cursor + hasNext from the restored pages -- the only state that
+            // reaches here with isInfinite true and getNextCursor null (a live
+            // configure sets it; disposeEntry nulls it only after removing the
+            // entry from the map, ON-1). A getNextCursor that THROWS during
+            // adoption is contained fail-closed: reset to a clean page-one fetch
+            // (the maybeFetch two lines downstream then loads page one), never a
+            // wedge.
+            if (entry.getNextCursor === null) {
+                entry.getNextCursor = infOpts.getNextCursor;
+                try {
+                    recomputeCursor(entry);
+                } catch {
+                    resetPages(entry);
+                    entry.data.set(undefined);
+                    entry.status.set("idle");
+                    entry.lastCompletedAt = -Infinity;
+                }
+            }
+            return;
+        }
         entry.isInfinite = true;
         entry.getNextCursor = infOpts.getNextCursor;
         entry.pageGen = 0;

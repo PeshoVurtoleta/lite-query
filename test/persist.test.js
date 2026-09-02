@@ -251,3 +251,117 @@ test("hydrate: seeded entries GC at cacheTime like any unobserved entry", () => 
     assert.equal(qc.getQueryData(["k"]), undefined, "unobserved seeded entry GCs at cacheTime");
     qc.dispose();
 });
+
+// -----------------------------------------------------------------------------
+// C2 -- infinite round-trip
+// -----------------------------------------------------------------------------
+
+const cursorUpTo4 = (lastPage, allPages) => (allPages.length < 4 ? allPages.length : null);
+
+// Build a source client, accumulate `pages` pages on an infinite entry, and
+// return a JSON-round-tripped dehydrated wire snapshot.
+async function dehydratedFeed(pages) {
+    const src = queryClient({ defaultStaleTime: 0 });
+    const q = infiniteQuery(src, {
+        key: ["feed"],
+        fetcher: ({ cursor }) => Promise.resolve([cursor == null ? 0 : cursor]),
+        getNextCursor: cursorUpTo4,
+    });
+    const stop = effect(() => q.data());
+    await tick();
+    for (let i = 1; i < pages; i++) { await q.fetchNextPage(); await tick(); }
+    const wire = JSON.parse(JSON.stringify(src.dehydrate()));
+    stop(); q.dispose(); src.dispose();
+    return wire;
+}
+
+test("infinite: a restored list continues paginating -- fetchNextPage appends page N+1 exactly once (G6)", async () => {
+    const wire = await dehydratedFeed(3);           // [[0],[1],[2]], next cursor 3
+
+    const qc = queryClient({ defaultStaleTime: 30_000 });
+    assert.equal(qc.hydrate(wire).ok, true);
+    const calls = [];
+    const q = infiniteQuery(qc, {
+        key: ["feed"],
+        fetcher: ({ cursor }) => { calls.push(cursor); return Promise.resolve([cursor]); },
+        getNextCursor: cursorUpTo4,
+        staleTime: 30_000,
+    });
+    const stop = effect(() => q.data());
+    await tick();
+    assert.deepEqual(q.pages(), [[0], [1], [2]], "3 dehydrated pages restored");
+    assert.deepEqual(q.data(), [0, 1, 2], "flat view restored");
+    assert.equal(q.hasNextPage(), true, "cursor recomputed at first attach");
+    assert.equal(calls.length, 0, "a fresh restored list does not refetch on attach");
+
+    await q.fetchNextPage();
+    await tick();
+    assert.equal(calls.length, 1, "exactly one page fetch");
+    assert.equal(calls[0], 3, "fetch used the recomputed cursor 3, not null");
+    assert.equal(q.pages().length, 4);
+    assert.deepEqual(q.pages()[0], [0], "page one unchanged at index 0");
+    assert.deepEqual(q.pages()[3], [3], "appended page four");
+    stop(); q.dispose(); qc.dispose();
+});
+
+test("infinite: hasNextPage is false before attach and correct after the first attach (fail closed)", async () => {
+    const wire = await dehydratedFeed(2);           // [[0],[1]], next cursor 2
+
+    const qc = queryClient({ defaultStaleTime: 30_000 });
+    qc.hydrate(wire);
+    const e = [...qc._internal.entries.values()][0];
+    assert.equal(e.isInfinite, true, "seeded as infinite");
+    assert.equal(e.hasNext, false, "fail closed: no cursor known before attach");
+    assert.equal(e.getNextCursor, null, "cursor function not installed until attach");
+
+    const q = infiniteQuery(qc, {
+        key: ["feed"],
+        fetcher: ({ cursor }) => Promise.resolve([cursor]),
+        getNextCursor: cursorUpTo4,
+        staleTime: 30_000,
+    });
+    const stop = effect(() => q.data());
+    await tick();
+    assert.equal(q.hasNextPage(), true, "cursor recomputed at first attach -> hasNext correct");
+    stop(); q.dispose(); qc.dispose();
+
+    // Exhausted list: after attach hasNextPage must read false, not re-open.
+    const wire4 = await dehydratedFeed(4);          // [[0]..[3]], cursor exhausted
+    const qc2 = queryClient({ defaultStaleTime: 30_000 });
+    qc2.hydrate(wire4);
+    const q2 = infiniteQuery(qc2, {
+        key: ["feed"],
+        fetcher: ({ cursor }) => Promise.resolve([cursor]),
+        getNextCursor: cursorUpTo4,
+        staleTime: 30_000,
+    });
+    const stop2 = effect(() => q2.data());
+    await tick();
+    assert.equal(q2.hasNextPage(), false, "restored exhausted list stays exhausted after attach");
+    stop2(); q2.dispose(); qc2.dispose();
+});
+
+test("infinite: a getNextCursor that throws at adoption resets to a clean page-one fetch, never wedges", async () => {
+    const wire = await dehydratedFeed(2);           // [[0],[1]]
+
+    const qc = queryClient({ defaultStaleTime: 30_000 });
+    qc.hydrate(wire);
+    let firstCall = true;
+    const calls = [];
+    const q = infiniteQuery(qc, {
+        key: ["feed"],
+        fetcher: ({ cursor }) => { calls.push(cursor); return Promise.resolve([cursor == null ? 100 : cursor]); },
+        getNextCursor: (lastPage, allPages) => {
+            if (firstCall) { firstCall = false; throw new Error("adoption boom"); }
+            return allPages.length < 4 ? allPages.length : null;
+        },
+        staleTime: 30_000,
+    });
+    const stop = effect(() => q.data());
+    await tick(); await tick(); await tick();
+    assert.equal(calls.length, 1, "exactly one page-one fetch after the reset");
+    assert.equal(calls[0], null, "clean page-one restart, cursor null (not wedged)");
+    assert.equal(q.status(), "success");
+    assert.deepEqual(q.pages(), [[100]], "list rebuilt from page one");
+    stop(); q.dispose(); qc.dispose();
+});
