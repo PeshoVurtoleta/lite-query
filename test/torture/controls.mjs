@@ -164,14 +164,35 @@ function ctlPages() {
   return { id: 'pages', tripped, clause: 'pages-oracle', stderrText: tripped ? '' : ('  pages child status=' + res.status + '\n' + out) };
 }
 
+// C-feed (Q7, the honest OR-10 addition that gates): spawn cache-fuzzer.mjs WITH
+// the break var, which drops exactly one entry:attach bookkeeping update in the
+// feed state machine -- a guaranteed detach-without-attach. The global
+// attach/detach balance catches the underflow: child exit 1 with the feed
+// state-machine failure text. (Attempt D -- the retention-clause attempt through
+// the inspect install/uninstall lifecycle -- is recorded pass-or-fail in
+// INCONCLUSIVE.md and is explicitly NOT a gate clause: a control that cannot trip
+// is decorative.)
+function ctlFeed() {
+  const res = spawnSync(process.execPath, [FUZZER], {
+    stdio: 'pipe',
+    env: { ...process.env, QUERY_TORTURE_BREAK: 'feed', TORTURE_SECONDS: '2' },
+  });
+  const out = (res.stdout ? res.stdout.toString() : '') + (res.stderr ? res.stderr.toString() : '');
+  const tripped = res.status === 1 &&
+    out.includes('FAIL: feed state machine') &&
+    out.includes('detach-without-attach');
+  return { id: 'feed', tripped, clause: 'feed-state-machine', stderrText: tripped ? '' : ('  feed child status=' + res.status + '\n' + out) };
+}
+
 export async function runControls(mode, ctx) {
-  const ids = mode === '1' ? ['alloc', 'detach', 'fuzz', 'pages'] : [mode];
+  const ids = mode === '1' ? ['alloc', 'detach', 'fuzz', 'pages', 'feed'] : [mode];
   const results = [];
   for (const id of ids) {
     if (id === 'alloc') results.push(await ctlAlloc(ctx));
     else if (id === 'detach') results.push(await ctlDetach(ctx));
     else if (id === 'fuzz') results.push(ctlFuzz());
     else if (id === 'pages') results.push(ctlPages());
+    else if (id === 'feed') results.push(ctlFeed());
     // Unknown value: fail loudly (ambiguous state is not "off"; note "0" is
     // truthy in JS, so it reaches here rather than running the plain gate).
     else results.push({ id, unknown: true, tripped: false, stderrText: '  unknown QUERY_TORTURE_BREAK=' + id + '\n' });
@@ -179,7 +200,7 @@ export async function runControls(mode, ctx) {
   let tripped = 0;
   for (const r of results) {
     if (r.unknown) {
-      console.log('CONTROL unknown QUERY_TORTURE_BREAK value "' + r.id + '" -- valid: 1|alloc|detach|fuzz|pages');
+      console.log('CONTROL unknown QUERY_TORTURE_BREAK value "' + r.id + '" -- valid: 1|alloc|detach|fuzz|pages|feed');
     } else if (r.tripped) {
       tripped++;
       console.log('CONTROL ' + r.id + ' tripped: ' + r.clause);

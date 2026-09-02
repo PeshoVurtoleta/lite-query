@@ -52,6 +52,62 @@ const CACHE_TIME   = 600;
 // regression the invariant exists to catch. Unset on every plain run.
 const BREAK = process.env.QUERY_TORTURE_BREAK === "1" || process.env.QUERY_TORTURE_BREAK === "fuzz";
 
+// -- feed assertion mode (A-5) ------------------------------------------------
+// The observed qc.inspect() stream must form a CONSISTENT lifecycle balance and
+// cover every class the fuzzer provokes (G4). ON by default; TORTURE_FEED=0
+// disables. The C-feed control (QUERY_TORTURE_BREAK=feed) skips exactly ONE
+// entry:attach bookkeeping update -> a guaranteed detach-without-attach.
+//
+// The gated invariant is a GLOBAL running balance, not a per-keyHash epoch. A
+// keyHash is NOT a stable identity under this fuzzer: it deliberately
+// removeQueries()es OBSERVED entries and then restart()/refetch()es the now-
+// stranded handles, so a removed-and-disposed entry OBJECT and a freshly-created
+// one legitimately emit on the SAME keyHash at the same time -- a per-keyHash
+// machine cannot separate those instances and would false-flag. The attach/detach
+// balance is the one lifecycle invariant that survives aliasing AND does not
+// double-fire: cumulative entry:attach - entry:detach == the sum of live
+// observerCounts, which is >= 0 at every instant (each event fires AFTER its
+// ++/-- commit, sites 2/3, exactly once per observer transition). A detach that
+// drives the running total below zero is detach-without-attach -- the C-feed
+// control's signature. (A fetch-balance was tried and dropped: an already-aborted
+// controller that a later site re-aborts emits a SECOND, honest fetch:abort for
+// one dispatch, so dispatch/resolve is not a clean balance -- a budget that moves
+// under legal chaos is not a gate.) tab:send/receive are counted and bounded
+// (receives <= sends * (tabs-1), else an echo loop shows as receive-overflow).
+// shared:*/mutation:*/persist:* are not fuzz-reachable here (sharedFetch off, no
+// mutations/persisters) -- excluded from the coverage set (G4).
+const FEED_ASSERT = process.env.TORTURE_FEED !== "0";
+const FEED_BREAK = process.env.QUERY_TORTURE_BREAK === "feed";
+const feedViolations = [];
+const feedCoverage = new Set();
+let tabSends = 0, tabReceives = 0;
+let feedBreakArmed = FEED_BREAK;
+let atCount = 0, dtCount = 0;          // cumulative attach / detach (global, >= 0)
+const EXPECTED_TYPES = [
+    "entry:create", "entry:attach", "entry:detach", "entry:gc", "entry:remove",
+    "entry:status", "entry:stale", "fetch:dispatch", "fetch:settle", "fetch:abort",
+    "tab:send", "tab:receive", "stream:start", "stream:value",
+];
+function feedViolate(rule, keyHash, detail) {
+    if (feedViolations.length < 10000) feedViolations.push({ rule, keyHash, detail: detail || null });
+}
+function feedStep(e) {
+    const t = e.type;
+    feedCoverage.add(t);
+    switch (t) {
+        case "tab:send": tabSends++; break;
+        case "tab:receive": tabReceives++; break;
+        case "entry:attach":
+            if (feedBreakArmed) { feedBreakArmed = false; break; }   // C-feed: drop one attach
+            atCount++;
+            break;
+        case "entry:detach":
+            dtCount++;
+            if (dtCount > atCount) feedViolate("detach-without-attach", e.keyHash);
+            break;
+    }
+}
+
 // -- deterministic PRNG -------------------------------------------------------
 let _s = SEED;
 function rnd() {
@@ -96,6 +152,13 @@ function makeTab() {
 const tabA = makeTab();
 const tabB = makeTab();
 const tabs = [tabA, tabB];
+
+// Install the feed observers BEFORE any entry is created, so no lifecycle event
+// escapes the running balances. Both tabs feed the same global counters.
+if (FEED_ASSERT) {
+    tabA.inspect(feedStep);
+    tabB.inspect(feedStep);
+}
 
 // -- fetchers + stream source -------------------------------------------------
 // Each tab fetches independently (results do NOT cross tabs -- by design).
@@ -299,4 +362,28 @@ if (after.activeLinks !== 0) {
     exitCode = 1;
 }
 if (exitCode === 0) console.log("  PASS: no echo storm, tabs converged, caches drained, pool at baseline");
+
+// -- feed state-machine + coverage gate (A-5 / G4) ---------------------------
+if (FEED_ASSERT) {
+    for (const type of EXPECTED_TYPES) {
+        if (!feedCoverage.has(type)) feedViolate("uncovered-event-class", null, type);
+    }
+    // Echo bound: with N tabs a locally-issued mutation reaches at most N-1 peers.
+    if (tabReceives > tabSends * (tabs.length - 1)) {
+        feedViolate("receive-overflow", null, "recv " + tabReceives + " sends " + tabSends);
+    }
+    console.log("  feed classes covered:", feedCoverage.size, " tab send/recv:", tabSends, "/", tabReceives);
+    if (feedViolations.length > 0) {
+        const shown = Math.min(10, feedViolations.length);
+        for (let i = 0; i < shown; i++) {
+            const v = feedViolations[i];
+            console.error("  feed violation " + v.rule + " keyHash=" + v.keyHash + (v.detail ? " " + v.detail : ""));
+        }
+        console.error("FAIL: feed state machine -- " + feedViolations.length + " violations");
+        exitCode = 1;
+    } else {
+        console.log("  PASS: feed state machine consistent across " + feedCoverage.size + " event classes");
+    }
+}
+
 process.exit(exitCode);
