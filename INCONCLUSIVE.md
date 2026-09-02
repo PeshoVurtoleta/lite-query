@@ -154,6 +154,23 @@ resolve the cause, do not widen the budget.
   (`tripped=5/5` under `QUERY_TORTURE_BREAK=1`). No `ctlFindings` control was
   added (a control that cannot trip is decorative).
 
+  POSTSCRIPT (reviewer, QD-4). Attempt D found no retention through the inspect
+  install/uninstall lifecycle -- but review then found a real one it was blind to:
+  the `setStatus` funnel parked each status-written entry in the module-global
+  `_se` for the untracked prior-status read and never cleared it, so the LAST
+  entry written while a hook was installed (with its data payload) stayed pinned
+  for the process lifetime, surviving uninstall and `removeQueries`. Attempt D
+  churned fresh clients per cycle and never re-read the specific window where the
+  parked entry stays live, so its `tracker.size()`/`audit()` probe stepped right
+  past the pin. It was caught by measurement in review (WeakRef the payload,
+  write, uninstall, removeQueries, force GC -> not collected; overwriting `_se`
+  released it, proving `_se` the sole retainer) and fixed (`_se = null` right
+  after the read). The lesson is the same one A/B/C/D keep teaching: this
+  findings/retention clause is honestly UNCONTROLLED -- a hand-run attempt that
+  does not fire is not proof of absence, and a keyed retention like this is found
+  by an adversarial probe or a reviewer, not by the churn loop. Recorded, not
+  spun; the clause stays carried.
+
 The census clause (`censusOk`) WAS uncontrolled between commit e56af54 and its
 fix: C-detach hardcoded `censusOk: true` (an undeclared drift from PLAN
 Assertion 3). It is now controlled -- C-detach builds a WeakRef census over its

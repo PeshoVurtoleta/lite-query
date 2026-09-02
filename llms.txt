@@ -1,6 +1,6 @@
 # @zakkster/lite-query
 
-Reactive async cache with cross-tab coherence. Built on @zakkster/lite-signal (>=1.5.0). ~6KB min+gzip core. Framework-agnostic. 313 deterministic tests (252 core incl. zero-GC hot-path contract + infiniteQuery + prefetch + persistence/dehydrated-cache conformance + the devtools feed qc.inspect + 31 await + 24 stream + 6 repo drift guards). TypeScript types shipped for every entry point (Query.d.ts, StreamQuery.d.ts, Awaitable.d.ts). Three entry points: `.` (core), `./stream` (streamQuery, optional peer lite-stream), `./await` (async coordination, optional peer lite-await). Every entry exports `VERSION` -- lite-query's own version string, the single runtime version source (defined in Query.js, re-exported by /stream and /await, asserted equal to package.json).
+Reactive async cache with cross-tab coherence. Built on @zakkster/lite-signal (>=1.5.0). ~6KB min+gzip core. Framework-agnostic. 314 deterministic tests (253 core incl. zero-GC hot-path contract + infiniteQuery + prefetch + persistence/dehydrated-cache conformance + the devtools feed qc.inspect + 31 await + 24 stream + 6 repo drift guards). TypeScript types shipped for every entry point (Query.d.ts, StreamQuery.d.ts, Awaitable.d.ts). Three entry points: `.` (core), `./stream` (streamQuery, optional peer lite-stream), `./await` (async coordination, optional peer lite-await). Every entry exports `VERSION` -- lite-query's own version string, the single runtime version source (defined in Query.js, re-exported by /stream and /await, asserted equal to package.json).
 
 ## Performance vs @tanstack/query-core (5.101)
 
@@ -63,7 +63,7 @@ Vocabulary -- 23 frozen types (domain:verb, lower-case; our domain words win ove
 | stream:done | yes | - | - | streamCount final | true | - |
 | stream:error | yes | - | open \| iterator | streamCount | false | error |
 | mutation:start | - | - | - | mutationGen | false | vars |
-| mutation:settle | - | - | null \| superseded | the settling mutation's own generation (pairs with mutation:start by value) | !error | data \| error |
+| mutation:settle | - | - | null \| superseded | the settling mutation's own generation (pairs with mutation:start by value) | !error (mirrors the mutation state machine's truthiness -- a FALSY rejection reason reports ok=true; inherited 1.4.0 quirk, documented not changed) | data \| error |
 | persist:hydrate | - | - | null \| a hydrate reason code | records seeded | ok | - |
 | persist:save | - | - | null \| dehydrate-threw | entries in envelope | ok | - |
 

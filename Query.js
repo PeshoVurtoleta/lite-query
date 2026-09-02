@@ -167,10 +167,13 @@ function buildEventPool() {
     return pool;
 }
 
-// The status-funnel reader. Hoisted module-level (the same trick as
-// cleanupObserver) so setStatus reads an entry's prior status with ZERO per-call
-// allocation; the entry is parked in _se immediately before the untracked read,
-// and dispatch is synchronous so no interleave can occur before READ_STATUS runs.
+// The status-funnel reader. Hoisted module-level so setStatus reads an entry's
+// prior status with ZERO per-call allocation; the entry is parked in _se
+// immediately before the untracked read and NULLED immediately after (QD-4 --
+// otherwise the last status-written entry, with its data payload, stays pinned
+// module-globally for the process lifetime, surviving uninstall/removeQueries).
+// Dispatch is synchronous, so no interleave can occur between the park and the
+// release, and the read stays correct.
 let _se = null;
 const READ_STATUS = () => _se.status();
 
@@ -415,8 +418,9 @@ export function queryClient(options = {}) {
         if (feed.hook !== null) {
             _se = entry;
             const from = untrack(READ_STATUS);
-            entry.status.set(to);
-            emitStatus(entry, from, to);
+            _se = null;                      // QD-4: release the pin immediately -- synchronous
+            entry.status.set(to);            // dispatch guarantees no interleave before this line,
+            emitStatus(entry, from, to);     // so a live entry (+ its data payload) is never retained
             return;
         }
         entry.status.set(to);

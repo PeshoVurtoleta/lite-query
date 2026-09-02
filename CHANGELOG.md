@@ -117,6 +117,15 @@ allocation the hook-must-copy contract lets callers opt into only when they keep
 
 ### Fixed
 
+- **QD-4 (reviewer)** -- the `setStatus` funnel parked each status-written entry
+  in a module-global `_se` for the untracked prior-status read and never released
+  it, pinning the LAST entry written while a feed hook was installed (with its
+  data payload) for the process lifetime, across all clients, surviving uninstall
+  and `removeQueries`. Fixed by nulling `_se` immediately after the (synchronous)
+  read; the read stays correct and the pin is released before `status.set`.
+  Counted regression test (WeakRef the payload -> write -> uninstall ->
+  removeQueries -> forced GC -> asserts collected).
+
 Four bake-facing Cookbook sample defects (commit 033e670, folded here per OR-2 --
 no 1.4.1 docs patch; the verbatim bake-floors quote in recipe 18 is untouched):
 

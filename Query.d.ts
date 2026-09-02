@@ -156,7 +156,12 @@ export interface QueryFeedEvent {
      * `superseded` settle still carries the id of the mutation that finished.
      */
     count: number;
-    /** Outcome flag; false if N/A. */
+    /**
+     * Outcome flag; false if N/A. For `mutation:settle` this mirrors the mutation
+     * state machine's truthiness (`!error`) -- a FALSY thrown rejection reason
+     * reports `ok: true`. This is an inherited 1.4.0 quirk, documented rather than
+     * changed.
+     */
     ok: boolean;
     /** By-reference payload (data / error / frame / cursor / vars); null if N/A. */
     value: unknown;

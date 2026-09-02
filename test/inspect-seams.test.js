@@ -106,6 +106,38 @@ test("persist:hydrate (dropped) reports the validation reason with ok=false", ()
     stop();
 });
 
+const hasGc = typeof global !== "undefined" && typeof global.gc === "function";
+
+test("QD-4: the status funnel does not pin the last status-written entry after uninstall + removeQueries",
+    { skip: !hasGc && "run with --expose-gc to enable" }, async () => {
+    // setStatus parks the entry in the module-global _se for the untracked prior-
+    // status read. If it is not released, the LAST entry written while a hook was
+    // installed -- and its data payload -- stays pinned for the process lifetime,
+    // surviving uninstall AND removeQueries. Falsifying probe (reviewer's): WeakRef
+    // the payload, write it, uninstall, removeQueries, force GC; a pinned entry
+    // fails to collect.
+    const qc = queryClient();
+    let ref;
+    (() => {
+        const payload = { big: new Array(64).fill(7), tag: "qd4" };
+        ref = new WeakRef(payload);
+        const stop = qc.inspect(() => {});
+        qc.setQueryData(["big"], payload);   // setStatus success -> parks the entry in _se
+        stop();                              // uninstall the feed
+        qc.removeQueries(["big"]);           // drop the entry from the cache map
+    })();
+    for (let i = 0; i < 20; i++) { global.gc(); await new Promise((r) => setTimeout(r, 0)); }
+    assert.equal(ref.deref(), undefined, "the payload was collected -- _se released its pin");
+    // Sole-retainer control: a LATER install+write on a different key also leaves
+    // it collected (the pin is released per-write, not merely overwritten later).
+    const stop2 = qc.inspect(() => {});
+    qc.setQueryData(["other"], { n: 1 });
+    stop2();
+    for (let i = 0; i < 5; i++) { global.gc(); await new Promise((r) => setTimeout(r, 0)); }
+    assert.equal(ref.deref(), undefined, "still collected after an unrelated later write");
+    qc.dispose();
+});
+
 test("persist:save is emitted BY the adapter, reporting the envelope entry count", async () => {
     const qc = queryClient({ defaultStaleTime: 0 });
     qc.setQueryData(["s1"], 1);
