@@ -93,8 +93,9 @@ function streamQuery(qc, streamOpts) {
     // and dropped as non-reactive entry counters.
     function startStream(entry) {
         // Abort an existing pump first (restart / invalidate). The old pump's
-        // abort fires its onError with signal.aborted === true, which the
-        // handler below ignores -- so it won't stomp the new pump's slots.
+        // abort routes to its onAbort (never onError, per lite-stream's abort
+        // vocabulary), which snapshots its own counters and nulls its own
+        // slots -- so it won't stomp the new pump's.
         if (entry.streamStop) {
             try { entry.streamStop(); } catch {}
             entry.streamStop = null;
