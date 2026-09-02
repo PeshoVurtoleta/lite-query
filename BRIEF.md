@@ -1,10 +1,10 @@
 # BRIEF -- Q4 -- lite-query v1.2.1 -- the suite-law torture harness (extend the seed)
 
 Session Q4 of ROADMAP.md (section 5, incl. the 2026-09-02 preamble
-amendment). Q3 is drill-complete at 1.2.0 (drill output: sites=3/15,
-tests=181/0, GATE ok, pack 13 files); the version-bump diff awaits the
-operator's publish commit. Q4 starts AFTER 1.2.0 is published and
-artifact-verified.
+amendment). Q3 is SHIPPED: 1.2.0 published 2026-09-02 (operator commit
+c339c12) and artifact-verified from the registry tarball (13 files,
+`[1.2.0] -- 2026-09-02` head, `VERSION = "1.2.0"` string-equal to the
+manifest). The start condition is satisfied; Q4 is live.
 
 ---
 package: "@zakkster/lite-query"
@@ -69,6 +69,13 @@ T5. Phase H numbers recorded in bench/torture/README.md with provenance
     numbers.
 T6. CHANGELOG [1.2.1]: harness only, no runtime change. Facts + measured
     numbers.
+T7. llms.txt true-up (docs only, found at Q3 artifact verification):
+    line 3 still says "177 deterministic tests" but the shipped suite is
+    181 -- the four QA boundary tests (764c8eb) landed after that line
+    was written (stream split 20 -> 24). Recount every number in that
+    line from a fresh `npm test` run, never from memory; the drift
+    guards do not currently lock the test count, so this line lies
+    silently.
 
 ## OPERATOR RULINGS
 

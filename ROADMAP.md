@@ -36,7 +36,7 @@ Registry state, checked with `npm view <pkg> version`:
 
 | Package | Latest | Relevant fact |
 | --- | --- | --- |
-| `@zakkster/lite-query` | 1.1.2 | Q2 shipped (operator publish; registry `latest` = 1.1.2). Artifact verified 2026-09-02 from the registry tarball: 13 files, `[1.1.2] -- 2026-08-31` CHANGELOG head, manifest version sync |
+| `@zakkster/lite-query` | 1.2.0 | Q3 shipped (operator publish `c339c12`, 2026-09-02; registry `latest` = 1.2.0). Artifact verified same day from the registry tarball: 13 files, `[1.2.0] -- 2026-09-02` CHANGELOG head, `Query.js` `VERSION = "1.2.0"` string-equal to the manifest, llms.txt + CHANGELOG present, test/demo absent |
 | `@zakkster/lite-await` | 1.3.0 | fully upgraded (V1 -> 1.2.1, C1 -> 1.3.0): **18 named exports** + VERSION. `createAwaitScope` shipped -- triggering consumer was lite-room 1.1.0 (`decisions/0007`), NOT our Q5; that gate resolved externally. `decisions/0009` verdict: **REJECT** (locked decision #4 closes). Q3's re-export target is now EIGHT (Q-07) |
 | `@zakkster/lite-stream` | 1.1.0 | published 2026-07-10; additive `toAsyncIterable` enrichments; `^1.0.0` peer admits it; suite green against it. Roadmap enriched 2026-09-01 (`../LiteStream/ROADMAP.md`, LS1..LS4): its LS-01 (dispose-mid-pump pulls forever; llms claim false since 1.0.0) verified NOT to bite us -- `streamStop` aborts before any teardown (`StreamQuery.js:156`); its LS3 v1.3.0 targets our hand-rolled ring (see parking ledger). UPDATE 2026-09-02: lite-stream is now **1.3.0** -- LS1..LS3 all shipped (their harness caught and fixed a real pump bug, LS-13, on the way); `pipeToSignal` gained `mode`/`maxBuffer`, `droppedCount`/`overflowCount` getters on the stop fn, an `onValue` tap, and `onAbort` (abort vocabulary pinned in their `decisions/0001`); their s7 conformance tier freezes OUR exact 1.1.x call shape and proves a rewrite-parity case. The collapse rider is folded into Q3. LS4 (1.4.0) stays GATED on Q8's spike; SPIKE INPUTS recorded in the Q8 brief |
 | `@zakkster/lite-signal` | 1.5.0 | stable; the `>=1.5.0-alpha` peer floor is now pointing below a released stable (Q-06) |
@@ -45,9 +45,11 @@ Registry state, checked with `npm view <pkg> version`:
 | `@zakkster/lite-leak` | 1.10.0 | required by suite law for the torture gate; not a devDep here (Q-09) |
 | `@zakkster/lite-gc-profiler` | 1.16.0 | same (Q-09) |
 
-Full suite verified green against the **newest** published peers (await 1.2.0,
-stream 1.1.0, signal 1.5.0): 153 pass / 0 fail with `--expose-gc`. No
-compatibility break from any peer bump since 1.1.0 shipped.
+Full suite verified green against the **newest** published peers (await 1.3.0,
+stream 1.3.0, signal 1.5.0): 181 pass / 0 fail with `--expose-gc` (Q3 closeout
++ the 1.2.0 drill, 2026-09-02). No compatibility break from any peer bump
+since 1.1.0 shipped. (The 2026-08-31 baseline was 153 pass against await
+1.2.0 / stream 1.1.0.)
 
 **The dev-env corruption, so it never recurs.** There is no `.gitignore`. The
 initial commit included `node_modules/` and `package-lock.json`; commits
@@ -421,7 +423,7 @@ else.
 ---
 package: "@zakkster/lite-query"
 version_target: 1.2.0
-status: planned
+status: shipped (2026-09-02; pipeline commits 080c7db..764c8eb + nit 4aaea53, operator publish c339c12; registry artifact verified: 13 files, [1.2.0] head, VERSION sync; drill: sites=3/15, tests=181/0, GATE ok, pack 52.9 kB)
 tests_min: 170
 skip_max: 0
 torture: "3x PASS + controls fail"
@@ -777,7 +779,8 @@ TASKS
     2026-09-02 -- bake-stream's shipped versions DRIFTED above its
     chartered targets, so never cite its session numbers as semvers):
     the recipe requires the validated-preserve-reads floor and, if it
-    touches RangeReader, the abort floor (MQ1, shipped content = 1.7.0).
+    touches RangeReader, the abort floor (MQ1, published as 1.7.0 on
+    2026-09-02).
     Both floors are published as ONE consumer-floor line in bake-stream's
     llms.txt by its MQ2 session -- cite THAT line verbatim at Q6 coding
     time; do not restate numbers from this file. Rationale unchanged:
@@ -1109,7 +1112,13 @@ scripts; Q4 onward: the law harness). No gate output is a FAIL.
   and MQ2 in ../LiteBakeStream/ROADMAP.md. VERSION DRIFT NOTE 2026-09-02:
   bake-stream shipped past its chartered numbers (M5 -> 1.5.0,
   M6 -> 1.6.0, registry latest 1.6.1); MQ1 is content-complete as a
-  frozen 1.7.0 diff awaiting operator publish, MQ2 targets 1.7.1. Recipe
+  frozen 1.7.0 diff awaiting operator publish, MQ2 targets 1.7.1.
+  UNLOCKED 2026-09-02: 1.7.0 IS published (registry verified; `R_ABORTED`
+  + the additive `fetch(byteOffset, byteLength, signal?)` adapter contract
+  are in its shipped llms.txt). Recipe (1) is now runnable and rides Q5 or
+  Q6's docs pass. MQ2 (1.7.1: conformance corpus, crossover number,
+  consumer-floor llms.txt line) is still pending -- the floor-citation
+  rule below stands until it ships. Recipe
   (1) requires MQ1 (abortable range reads: reader-level `{ signal }`,
   adapter `fetch(byteOffset, byteLength, signal?)`, `R_ABORTED`,
   no-partial-cache -- originally probed here: streamQuery's
