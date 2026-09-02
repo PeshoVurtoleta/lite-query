@@ -582,6 +582,17 @@ export function queryClient(options = {}) {
     // no-op until then; declared for the watchdog/race call sites.
     function openStream(entry, reason) { /* C7 */ }
 
+    // Allocate the next ownership epoch for a tab that is opening a shared
+    // stream: max(seen) + 1, carried on the entry. Globally monotone across the
+    // tab set without a shared counter -- every tab tracks the max epoch it has
+    // observed and claims strictly above it. NEVER derived from opts.now.
+    function claimStreamEpoch(entry) {
+        maxEpochSeen = maxEpochSeen + 1;
+        entry.streamEpoch = maxEpochSeen;
+        entry.streamSeq = 0;
+        return maxEpochSeen;
+    }
+
     // stream-open: an ownership claim. Track the epoch (so max(seen)+1 stays
     // globally monotone) and abdicate if we own this key at a lower rank.
     function onStreamOpen(m) {
@@ -686,6 +697,7 @@ export function queryClient(options = {}) {
             projSeq: -1,                 // highest seq projected within projEpoch
             lastFrameAt: 0,              // watchdog stamp: opts.now() of the last frame
             streamWatchdog: null,        // periodic check-and-rearm liveness timer
+            streamPromote: null,         // (reason) => open THIS tab's iterator (adopt path, V1)
             // Infinite-query slots -- uniform on every entry (same monomorphism
             // rule as the stream slots above). A plain query() entry leaves all
             // seven at their null/false/0 defaults and allocates no extra node;
@@ -1464,7 +1476,7 @@ export function queryClient(options = {}) {
         // Not part of the public surface; documented as such in llms.txt. `feed`
         // is the live per-client cell (V2: a `let` cannot cross the subpath
         // boundary, so the subpath reads the same object through _internal).
-        _internal: { entries, ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, sharedStreamActive, broadcast, opts, installPersistHook, feed, setStatus, emitStream, emitClient },
+        _internal: { entries, ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, sharedStreamActive, broadcast, clientId, claimStreamEpoch, armWatchdog, disarmWatchdog, closeStream, opts, installPersistHook, feed, setStatus, emitStream, emitClient },
     };
 }
 

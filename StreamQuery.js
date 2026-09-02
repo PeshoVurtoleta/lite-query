@@ -87,14 +87,25 @@ function streamQuery(qc, streamOpts) {
     // feed is the live per-client devtools cell (V2: a `let` in Query.js cannot
     // cross this subpath boundary, so we read it -- and setStatus -- off the same
     // _internal object). All stream emit sites are one `feed.hook !== null` test.
-    const { ensureEntry, attach, detach, opts, feed, setStatus, emitStream } = qc._internal;
+    const {
+        ensureEntry, attach, detach, opts, feed, setStatus, emitStream,
+        sharedStreamActive, broadcast, clientId, claimStreamEpoch,
+        armWatchdog, disarmWatchdog,
+    } = qc._internal;
 
     // -- stream pump ---------------------------------------------------------
     // Pumps the iterator into entry.data via pipeToSignal. Aborts and restarts
     // any existing pump first (used by restart() / invalidate). Writes status
     // transitions into the entry's existing status/error signals; tracks count
     // and dropped as non-reactive entry counters.
-    function startStream(entry) {
+    //
+    // Under sharedStream (Q8) a call to startStream means THIS tab is opening
+    // (or has been promoted to) the one iterator: it claims an ownership epoch,
+    // announces it, and broadcasts every frame (and the terminal end) so
+    // follower tabs can project them. Followers never call startStream -- they
+    // registerFollower and project incoming frames. `adopt` (V1, C7) preserves
+    // the already-projected window/counters across a mid-buffer promotion.
+    function startStream(entry, { adopt = false } = {}) {
         // Abort an existing pump first (restart / invalidate). The old pump's
         // abort routes to its onAbort (never onError, per lite-stream's abort
         // vocabulary), which snapshots its own counters and nulls its own
@@ -104,12 +115,29 @@ function streamQuery(qc, streamOpts) {
             entry.streamStop = null;
         }
 
-        entry.streamCount = 0;
-        entry.streamDropped = 0;
-        entry.invalidatedSinceCompletion = false;
-        entry.error.set(undefined);
-        setStatus(entry, "pending");
-        if (feed.hook !== null) emitStream("stream:start", entry, 0, false, null, null);   // site 16
+        const shared = sharedStreamActive;
+        if (!adopt) {
+            entry.streamCount = 0;
+            entry.streamDropped = 0;
+            entry.invalidatedSinceCompletion = false;
+            entry.error.set(undefined);
+            setStatus(entry, "pending");
+        } else {
+            // V1 adopt: a promoted follower keeps its projected window, counters,
+            // data, and error -- only the invalidation flag is cleared. No
+            // pending regression, no visible frame loss beyond OR-4's bound.
+            entry.invalidatedSinceCompletion = false;
+        }
+        if (feed.hook !== null) emitStream("stream:start", entry, entry.streamCount, false, null, null);   // site 16
+
+        if (shared) {
+            entry.streamShared = true;
+            entry.streamOwner = true;
+            disarmWatchdog(entry);                       // an owner needs no liveness timer
+            const epochSeq = claimStreamEpoch(entry);    // sets streamEpoch, streamSeq = 0
+            entry.lastFrameAt = opts.now();
+            broadcast({ type: "stream-open", key: entry.key, epochSeq, clientId });
+        }
 
         const ac = new AbortController();
         let source;
@@ -119,6 +147,10 @@ function streamQuery(qc, streamOpts) {
             entry.error.set(err);
             setStatus(entry, "error");
             if (feed.hook !== null) emitStream("stream:error", entry, entry.streamCount, false, err, "open");   // site 19 (factory throw)
+            if (shared && entry.streamOwner) {
+                entry.streamOwner = false;
+                broadcast({ type: "stream-end", key: entry.key, epochSeq: entry.streamEpoch, clientId, ok: false, error: err });
+            }
             return;
         }
 
@@ -137,6 +169,14 @@ function streamQuery(qc, streamOpts) {
             onValue: (v) => {
                 if (entry.streamCount === 0) setStatus(entry, "streaming");
                 entry.streamCount = (entry.streamCount + 1) | 0;
+                // Leader send path (cold relative to local reads): stamp a
+                // monotone seq and broadcast the frame. Built ONLY here and on
+                // the remote-receive path; a non-shared stream skips it entirely
+                // so the frozen GATE never sees a per-frame allocation.
+                if (shared && entry.streamOwner) {
+                    entry.streamSeq = (entry.streamSeq + 1) | 0;
+                    broadcast({ type: "stream-frame", key: entry.key, epochSeq: entry.streamEpoch, clientId, seq: entry.streamSeq, value: v });
+                }
                 if (feed.hook !== null) emitStream("stream:value", entry, entry.streamCount, false, v, null);   // site 17
             },
             onError: (err) => {
@@ -146,14 +186,20 @@ function streamQuery(qc, streamOpts) {
                 entry.error.set(err);
                 setStatus(entry, "error");
                 if (feed.hook !== null) emitStream("stream:error", entry, entry.streamCount, false, err, "iterator");   // site 19 (iterator)
+                if (shared && entry.streamOwner) {
+                    entry.streamOwner = false;
+                    broadcast({ type: "stream-end", key: entry.key, epochSeq: entry.streamEpoch, clientId, ok: false, error: err });
+                }
                 entry.streamStop = null;
                 entry.streamRestart = null;
             },
             onAbort: () => {
-                // Intentional abort (detach / restart / removeQueries) is not a
-                // failure: snapshot the final drop count so droppedCount() reads
-                // byte-identical after teardown, then release the handles. Status
-                // is reset by the caller (detach -> idle; restart -> pending).
+                // Intentional abort (detach / restart / removeQueries / abdicate)
+                // is not a failure: snapshot the final drop count so
+                // droppedCount() reads byte-identical after teardown, then
+                // release the handles. Status is reset by the caller (detach ->
+                // idle; restart -> pending). No stream-end is broadcast -- an
+                // abort is a local relinquish, not a terminal outcome for the key.
                 entry.streamDropped = stop.droppedCount;
                 entry.streamStop = null;
                 entry.streamRestart = null;
@@ -163,6 +209,10 @@ function streamQuery(qc, streamOpts) {
                 setStatus(entry, "success");
                 entry.lastCompletedAt = opts.now();
                 if (feed.hook !== null) emitStream("stream:done", entry, entry.streamCount, true, null, null);   // site 18
+                if (shared && entry.streamOwner) {
+                    entry.streamOwner = false;
+                    broadcast({ type: "stream-end", key: entry.key, epochSeq: entry.streamEpoch, clientId, ok: true, error: undefined });
+                }
                 entry.streamStop = null;
                 entry.streamRestart = null;
             },
@@ -175,13 +225,44 @@ function streamQuery(qc, streamOpts) {
         streamStop.raw = stop;
         entry.streamStop = streamStop;
         entry.streamRestart = () => startStream(entry);
+        // A promoted follower re-enters here with adopt:true (V1) -- the entry
+        // carries the thunk so Query.js's watchdog/race can start THIS tab's
+        // iterator without importing the /stream body.
+        entry.streamPromote = (reason) => startStream(entry, { adopt: true });
+    }
+
+    // Register this tab as a FOLLOWER of a shared stream: no iterator, project
+    // the leader's frames. Marks the entry shared, records the projection
+    // discipline (mode/maxBuffer) so Query.js's projectFrame can window without
+    // seeing streamOpts, resets the epoch/seq cursors, shows loading, asks the
+    // channel for an owner, and arms the liveness watchdog (OR-3: if no frame
+    // arrives within streamIdleTimeout this tab self-connects). Also installs
+    // streamPromote so the watchdog/race can promote it in place.
+    function registerFollower(entry) {
+        entry.streamShared = true;
+        entry.streamOwner = false;
+        entry.streamMode = mode;
+        entry.streamMaxBuffer = maxBuffer;
+        entry.projEpoch = -1;
+        entry.projSeq = -1;
+        entry.streamCount = 0;
+        entry.streamDropped = 0;
+        entry.invalidatedSinceCompletion = false;
+        entry.error.set(undefined);
+        setStatus(entry, "pending");
+        if (feed.hook !== null) emitStream("stream:start", entry, 0, false, null, null);   // site 16
+        entry.streamPromote = (reason) => startStream(entry, { adopt: true });
+        entry.lastFrameAt = opts.now();
+        broadcast({ type: "stream-req", key: entry.key });
+        armWatchdog(entry);
     }
 
     // Should the watcher start a stream on this (fresh) attach? Mirrors
     // shouldFetch: don't double-pump a shared entry, don't restart a terminal
     // stream unless it was invalidated.
     function shouldStartStream(entry) {
-        if (entry.streamStop !== null) return false;     // already streaming (shared observer)
+        if (entry.streamStop !== null) return false;     // owner already streaming (shared observer)
+        if (entry.streamShared && !entry.streamOwner) return false;  // already following in this tab
         const s = entry.status();
         if (s === "idle") return true;                    // never started / reset on detach
         if (s === "success" || s === "error") return entry.invalidatedSinceCompletion;
@@ -228,7 +309,20 @@ function streamQuery(qc, streamOpts) {
                 untrack(() => attach(entry, streamOpts));
                 attachedEntry = entry;
                 currentEntry.set(entry);
-                untrack(() => { if (shouldStartStream(entry)) startStream(entry); });
+                untrack(() => {
+                    if (!shouldStartStream(entry)) return;
+                    if (sharedStreamActive) {
+                        // The oracle only HINTS the initial role (OR-3); the
+                        // epoch race + watchdog converge to one connection even
+                        // if it lies. A hinted leader owns the iterator and
+                        // broadcasts; a hinted follower projects and self-connects
+                        // on silence.
+                        if (opts.isLeader()) startStream(entry);
+                        else registerFollower(entry);
+                    } else {
+                        startStream(entry);
+                    }
+                });
             }
         }));
     }

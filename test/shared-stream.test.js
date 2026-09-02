@@ -66,6 +66,96 @@ test("shared-stream: stream-* to an unknown key is a safe no-op when active", as
     peer.close();
 });
 
+// -- C3: leader broadcast path ----------------------------------------------
+
+// Drive an async iterable from an array of values with an explicit end.
+async function* fromValues(values) {
+    for (const v of values) { yield v; }
+}
+
+// Capture every message a leader tab emits onto the channel (a raw peer that
+// never replies). Returns the captured list + a close thunk.
+function sniff(bc, name) {
+    const captured = [];
+    const peer = new bc.BroadcastChannel(name);
+    peer.addEventListener("message", (evt) => captured.push(evt.data));
+    return { captured, close: () => peer.close() };
+}
+
+test("shared-stream: leader broadcasts stream-open, per-frame stream-frame (monotone seq), stream-end", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const leader = makeTab(bc, clock, "L", () => true);
+    const spy = sniff(bc, "L");
+
+    const s = streamQuery(leader, { key: ["feed"], stream: () => fromValues([10, 20, 30]) });
+    const dispose = createRoot(() => effect(() => { s.data(); }));
+    // let the async iterator drain
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    await clock.flush();
+
+    const opens = spy.captured.filter((m) => m.type === "stream-open");
+    const frames = spy.captured.filter((m) => m.type === "stream-frame");
+    const ends = spy.captured.filter((m) => m.type === "stream-end");
+
+    assert.equal(opens.length, 1, "one ownership claim");
+    assert.equal(frames.length, 3, "one frame per value");
+    assert.deepEqual(frames.map((f) => f.seq), [1, 2, 3], "monotone 1-based seq");
+    assert.deepEqual(frames.map((f) => f.value), [10, 20, 30], "values in order");
+    assert.equal(frames[0].epochSeq, opens[0].epochSeq, "frames carry the open epoch");
+    assert.equal(frames[0].clientId, opens[0].clientId, "frames carry the client id");
+    assert.equal(ends.length, 1, "one terminal end");
+    assert.equal(ends[0].ok, true, "natural completion is ok:true");
+    assert.equal(ends[0].epochSeq, opens[0].epochSeq, "end carries the open epoch");
+
+    dispose();
+    s.dispose();
+    leader.dispose();
+    spy.close();
+});
+
+test("shared-stream: a non-shared stream never broadcasts (A7 zero-cost off)", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    // crossTab on but sharedStream OFF -> a stream owns its iterator locally and
+    // emits no stream-* wire traffic.
+    const solo = queryClient({
+        crossTab: true, broadcastChannel: bc.BroadcastChannel, crossTabChannel: "N",
+        now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
+    });
+    const spy = sniff(bc, "N");
+    const s = streamQuery(solo, { key: ["x"], stream: () => fromValues([1, 2]) });
+    const dispose = createRoot(() => effect(() => { s.data(); }));
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    await clock.flush();
+    assert.equal(spy.captured.filter((m) => String(m.type).startsWith("stream-")).length, 0);
+    dispose();
+    s.dispose();
+    solo.dispose();
+    spy.close();
+});
+
+test("shared-stream: leader broadcasts stream-end ok:false on iterator error", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const leader = makeTab(bc, clock, "E", () => true);
+    const spy = sniff(bc, "E");
+    const boom = new Error("upstream gone");
+    async function* failing() { yield 1; throw boom; }
+    const s = streamQuery(leader, { key: ["f"], stream: () => failing() });
+    const dispose = createRoot(() => effect(() => { s.data(); s.status(); }));
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    await clock.flush();
+    const ends = spy.captured.filter((m) => m.type === "stream-end");
+    assert.equal(ends.length, 1);
+    assert.equal(ends[0].ok, false);
+    assert.equal(ends[0].error, boom);
+    dispose();
+    s.dispose();
+    leader.dispose();
+    spy.close();
+});
+
 test("shared-stream: sharedStreamActive requires opt-in + a leader oracle + a channel", async () => {
     const clock = createMockClock();
     const bc = createMockBroadcastChannel();
