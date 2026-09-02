@@ -105,6 +105,15 @@ function resolveOptions(o) {
         sharedFetch: o.sharedFetch ?? false,
         isLeader: o.isLeader ?? null,
         sharedFetchTimeout: o.sharedFetchTimeout ?? 3000,
+        // Cross-tab stream sharing (Q8). When on AND a leader oracle is
+        // supplied, the leader tab owns the one iterator and broadcasts frames;
+        // followers project them into their local entry (no follower holds an
+        // iterator). Same isLeader oracle as sharedFetch. streamIdleTimeout is
+        // the watchdog bound: if no frame arrives within it a follower
+        // self-connects (OR-3 liveness, extended to streams). Defaults to the
+        // shared-fetch timeout so a single knob tunes both liveness windows.
+        sharedStream: o.sharedStream ?? false,
+        streamIdleTimeout: o.streamIdleTimeout ?? o.sharedFetchTimeout ?? 3000,
         now: o.now ?? (() => Date.now()),
         setTimeout: o.setTimeout ?? ((fn, ms) => globalThis.setTimeout(fn, ms)),
         clearTimeout: o.clearTimeout ?? ((id) => globalThis.clearTimeout(id)),
@@ -454,6 +463,25 @@ export function queryClient(options = {}) {
     const sharedFetchActive =
         opts.sharedFetch && typeof opts.isLeader === "function" && !!channel;
 
+    // Shared-stream (Q8) uses the same gate: opt-in + a leader oracle + a
+    // channel. Inert otherwise -- every tab owns its connection, which is
+    // exactly 1.1.0's shipped behaviour, so an app that never opts in pays
+    // nothing on any warm path.
+    const sharedStreamActive =
+        opts.sharedStream && typeof opts.isLeader === "function" && !!channel;
+
+    // One ASCII client identity, built ONCE at construction (cold). Used as the
+    // lexicographic tiebreak in the promotion race; NEVER derived from opts.now
+    // (a mock clock must not decide ownership). Randomness only breaks ties, so
+    // Math.random is acceptable here -- it never touches a warm path.
+    const clientId = "c" + Math.random().toString(36).slice(2, 10) +
+        Math.random().toString(36).slice(2, 6);
+
+    // Highest epochSeq this client has ever seen on any shared-stream key.
+    // Whoever opens a stream stamps it with max(seen) + 1, so epochs are
+    // globally monotone across the tab set without a shared counter.
+    let maxEpochSeen = 0;
+
     // -- cross-tab --
 
     function broadcast(msg) {
@@ -520,6 +548,21 @@ export function queryClient(options = {}) {
             streamRestart: null,         // () => void  -- abort + re-establish (invalidate)
             streamCount: 0,              // non-reactive: values seen this session
             streamDropped: 0,            // non-reactive: values dropped (buffer mode)
+            // Shared-stream projection slots (Q8, V6). Uniform on every entry at
+            // null/false/0 defaults so a plain query keeps ONE hidden class; only
+            // a shared streamQuery entry populates them. A follower carries the
+            // projection window here (no iterator); the leader carries the seq
+            // counter it stamps outgoing frames with.
+            streamShared: false,         // participates in cross-tab stream sharing
+            streamMode: null,            // "latest" | "buffer" -- projection discipline
+            streamMaxBuffer: 0,          // buffer window size (buffer mode only)
+            streamOwner: false,          // this tab currently owns the iterator (leader)
+            streamEpoch: 0,              // the epoch this tab stamps when it owns
+            streamSeq: 0,                // per-frame seq counter on the owned iterator
+            projEpoch: -1,               // highest epoch projected (dedup cursor, -1 = none)
+            projSeq: -1,                 // highest seq projected within projEpoch
+            lastFrameAt: 0,              // watchdog stamp: opts.now() of the last frame
+            streamWatchdog: null,        // periodic check-and-rearm liveness timer
             // Infinite-query slots -- uniform on every entry (same monomorphism
             // rule as the stream slots above). A plain query() entry leaves all
             // seven at their null/false/0 defaults and allocates no extra node;
@@ -1298,7 +1341,7 @@ export function queryClient(options = {}) {
         // Not part of the public surface; documented as such in llms.txt. `feed`
         // is the live per-client cell (V2: a `let` cannot cross the subpath
         // boundary, so the subpath reads the same object through _internal).
-        _internal: { entries, ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, opts, installPersistHook, feed, setStatus, emitStream, emitClient },
+        _internal: { entries, ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, sharedStreamActive, broadcast, opts, installPersistHook, feed, setStatus, emitStream, emitClient },
     };
 }
 
