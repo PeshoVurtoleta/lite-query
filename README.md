@@ -184,6 +184,8 @@ queryClient({
   sharedFetch?: boolean,           // default false; dedup fetches across tabs (needs isLeader)
   isLeader?: () => boolean,        // leader oracle, e.g. lite-channel's sync.isLeader
   sharedFetchTimeout?: number,     // ms; default 3000; follower fallback self-fetch delay
+  sharedStream?: boolean,          // default false; share ONE stream connection across tabs (needs isLeader)
+  streamIdleTimeout?: number,      // ms; default = sharedFetchTimeout; follower self-connect delay
   now?: () => number,              // injectable for tests
   setTimeout?: typeof setTimeout,
   clearTimeout?: typeof clearTimeout,
@@ -222,6 +224,8 @@ mutation(qc, {
   onSettled?: async (data, err, vars, ctx) => void,      // ALWAYS fires
 })
 ```
+
+> **2.0 BREAKING (ON-3):** a mutation that rejects with a **falsy** value (`null`, `0`, `""`, `undefined`) now settles `status() === "error"` with the value held verbatim in `error()` -- previously a falsy rejection was mis-read as success. **Branch on `status()`, never on `error()` truthiness.** A mutation that *resolves* with a falsy value is unaffected.
 
 ### `streamQuery(qc, opts)` -- subpath `@zakkster/lite-query/stream`
 
@@ -282,7 +286,7 @@ const stop = qc.inspect((e) => {
 stop();   // idempotent
 ```
 
-Every event is one **monomorphic record -- exactly 10 own keys, always present**: `{ type, ts, key, keyHash, from, to, reason, count, ok, value }` (a field that does not apply is `null`; `count` is `0`, `ok` is `false`). The 23 `domain:verb` types cover the whole lifecycle: `entry:create|attach|detach|gc|remove|status|stale`, `fetch:dispatch|settle|abort`, `tab:send|receive`, `shared:request|fallback|serve`, `stream:start|value|done|error`, `mutation:start|settle`, `persist:hydrate|save`. Full field table in `llms.txt`.
+Every event is one **monomorphic record -- exactly 10 own keys, always present**: `{ type, ts, key, keyHash, from, to, reason, count, ok, value }` (a field that does not apply is `null`; `count` is `0`, `ok` is `false`). The 26 `domain:verb` types cover the whole lifecycle: `entry:create|attach|detach|gc|remove|status|stale`, `fetch:dispatch|settle|abort`, `tab:send|receive`, `shared:request|fallback|serve`, `stream:start|value|done|error`, `mutation:start|settle`, `persist:hydrate|save`, and the shared-stream trio `stream:project|promote|gap`. Full field table in `llms.txt`.
 
 Three contracts to keep straight:
 
@@ -335,6 +339,39 @@ Honest constraints:
 - The leader can only fulfill a request for a query it currently has alive (observed, or within `cacheTime`). If the leader navigated away and its entry was GC'd, the follower falls back to self-fetch. **Correctness is always preserved; the dedup *benefit* is best-effort during those transitions.**
 - `sharedFetch` requires both `crossTab: true` and a valid `isLeader` function. Without `isLeader`, it's inert and every tab fetches independently -- a safe default with no breakage.
 - This composes directly with `@zakkster/lite-channel`, but lite-query has no hard dependency on it. You supply `isLeader` from any source; lite-channel just happens to expose it as a ready-made signal.
+
+## Cross-tab shared streams
+
+The sequel to shared fetch. Shared fetch collapses N tabs to one *request*; shared streams collapse N tabs to one *connection*. Five tabs subscribed to the same SSE/websocket feed normally open five sockets -- with `sharedStream: true` the **leader tab owns the one iterator and broadcasts each frame**; every other tab projects the frames into its local cache and holds no iterator at all.
+
+```js
+const qc = queryClient({
+  crossTab: true,
+  broadcastChannel: BroadcastChannel,
+  sharedStream: true,
+  isLeader: () => channel.sync.isLeader(),   // same oracle as sharedFetch
+  streamIdleTimeout: 3000,                    // self-connect if no frame arrives in time
+});
+
+// Identical call in every tab -- the sharing is transparent.
+const ticks = streamQuery(qc, {
+  key: () => ["prices", symbol()],
+  stream: ({ key, signal }) => sseSource(`/stream/${key[1]}`, signal),
+  mode: "buffer",
+  maxBuffer: 100,
+});
+effect(() => render(ticks.data()));           // followers see the same window, live
+```
+
+How it holds together:
+
+1. **One connection, transparently.** The leader opens the iterator; followers receive frames as `BroadcastChannel` messages. `data()`, `count()`, and `droppedCount()` read the projected window exactly as a local stream reads its own -- a slow follower bounds itself through its own `maxBuffer` and counts its own drops.
+2. **At-most-once (OR-4).** The epoch/seq gate runs *before* any signal write, so duplicated and reordered frames are structurally impossible; frame *loss* on failover is permitted and **counted** (surfaced as `stream:gap` in the feed).
+3. **Failover you don't wire.** If the leader closes, is killed, or hangs, a follower promotes and starts a **fresh** iterator (nothing adopts a dead leader's iterator). The `(epochSeq, clientId)` tiebreak leaves exactly one owner; losers abdicate and revert to projecting.
+4. **Liveness (OR-3):** *if no frame arrives within `streamIdleTimeout`, the follower self-connects. Correctness never depends on election state* -- proven under both an all-true and an all-false `isLeader` oracle.
+5. **Zero per-follower leader state (G5):** no replay buffer, no acks, no cursors. The leader's memory is identical whether 1 or 4 followers are stalled.
+
+`sharedStream` requires `crossTab: true`, a channel, and `isLeader`; inert otherwise (each tab owns its own connection -- exactly the pre-2.0 behaviour). No transport ownership and no lite-channel dependency: frames ride the existing crossTab channel, and lite-channel supplies only the `isLeader` oracle.
 
 ## Why an ecosystem, not just a library
 

@@ -508,7 +508,49 @@ qc.invalidate(['room', roomId]);
 
 ---
 
-## 17. Persist the cache for instant cold-starts -- localStorage and IndexedDB thunks
+## 17. Cross-tab shared streams -- five tabs, one socket
+
+Shared fetch (recipe 12) collapses N tabs to one *request*; `sharedStream: true` collapses N tabs to one *connection*. The leader tab owns the single iterator and broadcasts each frame; every other tab projects the frames and holds no iterator. The `streamQuery` call is identical in every tab -- the sharing is transparent, and failover is handled for you.
+
+```js
+import { queryClient } from '@zakkster/lite-query';
+import { streamQuery } from '@zakkster/lite-query/stream';
+import { createChannel } from '@zakkster/lite-channel';
+
+const channel = createChannel('prices');
+
+const qc = queryClient({
+  crossTab: true,
+  broadcastChannel: BroadcastChannel,
+  sharedStream: true,
+  isLeader: () => channel.sync.isLeader(),   // the same oracle sharedFetch uses
+  streamIdleTimeout: 3000,                    // self-connect if no frame arrives in time
+});
+
+// Same call in every tab. One tab opens the SSE connection; the rest project.
+const prices = streamQuery(qc, {
+  key: () => ['prices', symbol()],
+  stream: ({ key, signal }) => sseSource(`/stream/${key[1]}`, signal),
+  mode: 'buffer',
+  maxBuffer: 200,
+});
+
+effect(() => renderChart(prices.data()));      // followers see the same window, live
+effect(() => showDropped(prices.droppedCount()));
+```
+
+What you get without wiring it:
+
+- **One connection.** Open the app in five tabs -- your server sees one SSE stream, not five. `data()`, `count()`, and `droppedCount()` read the projected window exactly as a local stream reads its own.
+- **At-most-once frames (OR-4).** No duplicated or reordered frames, ever. Frame *loss* on failover is permitted and counted (`droppedCount()` is your own window's drops; `stream:gap` in the feed reports frames missed in transit).
+- **Failover you don't write.** Close the leader tab, kill it, or let it hang -- a follower promotes and opens a **fresh** connection within `streamIdleTimeout`. Nothing adopts a dead leader's iterator, and the `(epochSeq, clientId)` tiebreak guarantees exactly one owner survives.
+- **Watch the handover in the feed:** install `qc.inspect(hook)` and observe `stream:promote` (with `from`/`to` epochs and a reason like `leader-killed`), `stream:project` per applied frame, and `stream:gap` when a boundary loses frames.
+
+`sharedStream` needs `crossTab: true`, a channel, and `isLeader`; without them it's inert and every tab owns its own connection -- a safe default. Frames ride the existing crossTab `BroadcastChannel`; there is no transport ownership and no hard `lite-channel` dependency (it only supplies `isLeader`).
+
+---
+
+## 18. Persist the cache for instant cold-starts -- localStorage and IndexedDB thunks
 
 `persistQueryClient(qc, { save, load, version, throttle? })` is storage-agnostic: you supply `save` and `load` thunks. It restores once on install (before any observer attaches), then throttles a dehydrated snapshot to `save`. `version` is REQUIRED -- bump it whenever your cached shapes change and the old cache is dropped instead of resurrected. `handle.restored` is a promise that always resolves (never rejects) with `{ status, count, reason }`.
 
@@ -573,7 +615,7 @@ await persister2.restored;
 
 An async `load()` that resolves AFTER a cross-tab `setData` already populated this client hits the empty-cache precondition; the adapter catches it and resolves `{ status: 'dropped', reason: 'cache-not-empty' }` -- never a merge, never an unhandled rejection.
 
-## 18. Back the cache with a baked container -- `@zakkster/lite-bake-stream`
+## 19. Back the cache with a baked container -- `@zakkster/lite-bake-stream`
 
 For a large cache, bake each dehydrated entry as one JSON record in a preserve-mode container and read it back lazily. The bake wiring lives entirely in your thunks -- lite-query ships no bake subpath, peer, or import. Pick your floor from bake-stream's own `llms.txt` "Consumer floors:" line, quoted verbatim (never restate version numbers from another package's roadmap):
 
@@ -616,7 +658,7 @@ const persister = persistQueryClient(qc, {
 
 Corrupted storage is refused at open or first read with a named `R_` code, never hydrated wrong -- bake-stream's consumer-shaped corruption matrix is its `test/DehydratedCache.test.js`.
 
-## 19. A reactive window over a remote multi-GB container -- `streamQuery` + `RangeReader`
+## 20. A reactive window over a remote multi-GB container -- `streamQuery` + `RangeReader`
 
 Bake-stream's `RangeReader` reads a remote LBK1 container over HTTP Range with zone-map pruning -- no full download -- and (from `>= 1.7.0`) is abortable: reader-level `{ signal }`, an adapter contract `fetch(byteOffset, byteLength, signal?)`, an `R_ABORTED` refusal, and no partial cache on abort. That abortability is exactly what lets it compose with `streamQuery`, whose abort-on-detach law needs a cancellable source: when the last observer leaves, `streamQuery` aborts the iterator, which aborts the in-flight range read.
 
@@ -648,7 +690,7 @@ Cite only what bake-stream's `llms.txt` states about `RangeReader` and its adapt
 
 ---
 
-## 20. A console logger for the devtools feed -- ten lines
+## 21. A console logger for the devtools feed -- ten lines
 
 `qc.inspect(hook)` installs one observe-only hook and returns an idempotent
 uninstall. The record is **pooled per type and overwritten in place**, so copy

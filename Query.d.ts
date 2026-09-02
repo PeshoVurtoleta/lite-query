@@ -93,6 +93,21 @@ export interface QueryClientOptions {
     isLeader?: () => boolean;
     /** Ms a follower waits before falling back to self-fetch. Default 3000. */
     sharedFetchTimeout?: number;
+    /**
+     * Enable cross-tab SHARED STREAMS (2.0). Requires `crossTab: true`, a
+     * channel, and `isLeader` (the same oracle as `sharedFetch`); inert
+     * otherwise -- each tab owns its own connection. When active, the leader tab
+     * owns the one iterator and broadcasts frames while followers project them
+     * (no follower holds an iterator). Failover, at-most-once ordering/dedup,
+     * and the self-connect watchdog are handled inside the client. Default false.
+     */
+    sharedStream?: boolean;
+    /**
+     * Ms a shared-stream follower waits without a frame before self-connecting
+     * (the stream-liveness bound; OR-3, "correctness never depends on election
+     * state"). Default: `sharedFetchTimeout` (3000).
+     */
+    streamIdleTimeout?: number;
 
     // -- Injectables for tests --
     /** Inject a deterministic clock. Default `Date.now`. */
@@ -157,10 +172,11 @@ export interface QueryFeedEvent {
      */
     count: number;
     /**
-     * Outcome flag; false if N/A. For `mutation:settle` this mirrors the mutation
-     * state machine's truthiness (`!error`) -- a FALSY thrown rejection reason
-     * reports `ok: true`. This is an inherited 1.4.0 quirk, documented rather than
-     * changed.
+     * Outcome flag; false if N/A. For `mutation:settle` this is `not-rejected`:
+     * rejection is tracked by CONTROL FLOW, so a mutation that rejects with a
+     * FALSY value (null / 0 / "" / undefined) reports `ok: false` -- "null is not
+     * zero" (2.0 BREAKING, ON-3; the 1.4.0 truthiness quirk is retired). Branch
+     * on `status()`, never on `error()` truthiness.
      */
     ok: boolean;
     /** By-reference payload (data / error / frame / cursor / vars); null if N/A. */
@@ -538,9 +554,14 @@ export interface MutationOptions<TData = unknown, TVars = unknown, TCtx = unknow
 export interface Mutation<TData = unknown, TVars = unknown> {
     /** Last success data. */
     data: ReadAccessor<TData | undefined>;
-    /** Last error. */
+    /**
+     * Last error -- the rejection value VERBATIM, falsy included (2.0, ON-3). A
+     * rejection with null / 0 / "" / undefined settles `status === "error"` and
+     * `error()` returns that value. Do NOT branch on `error()` truthiness to
+     * decide success/failure -- branch on `status()`.
+     */
     error: ReadAccessor<unknown>;
-    /** Coarse status. */
+    /** Coarse status. Authoritative success/error signal (see `error`). */
     status: ReadAccessor<MutationStatus>;
     /** True when `status === "pending"`. */
     loading: ReadAccessor<boolean>;

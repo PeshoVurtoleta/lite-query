@@ -4,6 +4,15 @@
  * One export: `streamQuery` (the read-side primitive for an iterator-backed,
  * multi-shot query). Values are pumped through @zakkster/lite-stream into the
  * same queryClient cache a `query()` uses. Requires @zakkster/lite-stream.
+ *
+ * Cross-tab shared streams (2.0): when the queryClient was created with
+ * `sharedStream: true` + an `isLeader` oracle + `crossTab`, a streamQuery on a
+ * key becomes cross-tab-aware transparently -- one tab (the leader) owns the
+ * single iterator and broadcasts frames, the others project them and hold NO
+ * iterator. The streamQuery surface below is unchanged: `data()`, `count()`,
+ * `droppedCount()` read the projected window the same way a local stream reads
+ * its own; failover, dedup/ordering (OR-4), and the self-connect watchdog are
+ * handled inside the client. See llms.txt "Cross-tab shared streams".
  */
 
 import type { QueryClient, ReadAccessor } from "./Query.js";

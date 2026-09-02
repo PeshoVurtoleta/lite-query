@@ -1,6 +1,6 @@
 # @zakkster/lite-query
 
-Reactive async cache with cross-tab coherence. Built on @zakkster/lite-signal (>=1.5.0). ~6KB min+gzip core. Framework-agnostic. 314 deterministic tests (253 core incl. zero-GC hot-path contract + infiniteQuery + prefetch + persistence/dehydrated-cache conformance + the devtools feed qc.inspect + 31 await + 24 stream + 6 repo drift guards). TypeScript types shipped for every entry point (Query.d.ts, StreamQuery.d.ts, Awaitable.d.ts). Three entry points: `.` (core), `./stream` (streamQuery, optional peer lite-stream), `./await` (async coordination, optional peer lite-await). Every entry exports `VERSION` -- lite-query's own version string, the single runtime version source (defined in Query.js, re-exported by /stream and /await, asserted equal to package.json).
+Reactive async cache with cross-tab coherence. Built on @zakkster/lite-signal (>=1.5.0). ~6KB min+gzip core. Framework-agnostic. 360 deterministic tests (253 core incl. zero-GC hot-path contract + infiniteQuery + prefetch + persistence/dehydrated-cache conformance + the devtools feed qc.inspect + 31 await + 24 stream + 40 cross-tab shared-stream (7 failover cells + wire/projection/watchdog/promotion/feed) + 6 falsy-rejection (ON-3) + 6 repo drift guards). TypeScript types shipped for every entry point (Query.d.ts, StreamQuery.d.ts, Awaitable.d.ts). Three entry points: `.` (core), `./stream` (streamQuery, optional peer lite-stream), `./await` (async coordination, optional peer lite-await). Every entry exports `VERSION` -- lite-query's own version string, the single runtime version source (defined in Query.js, re-exported by /stream and /await, asserted equal to package.json).
 
 ## Performance vs @tanstack/query-core (5.101)
 
@@ -39,7 +39,7 @@ Zero-cost off switch (OR-5/G3): with no hook installed the warm read path alloca
 
 Event shape -- one MONOMORPHIC record, exactly 10 own keys, always present, in this order: { type, ts, key, keyHash, from, to, reason, count, ok, value }. A field that does not apply is null (count is 0, ok is false). One hidden class per type keeps a panel's property reads monomorphic. ts is performance.now() (else Date.now()) resolved once at module load -- NOT opts.now (a mock staleness clock must not stamp the feed); monotonic non-decreasing. key/keyHash/value are BY REFERENCE, never copied, never serialized (the panel's job). HOOK-MUST-COPY CONTRACT: records are POOLED per type and OVERWRITTEN in place, so the same object is handed to the hook for every event of a given type -- copy what you keep (`{ ...event }` or the fields you need), or a retained reference reads stale fields after the next event of that type. This is what buys zero allocation per event when installed.
 
-Vocabulary -- 23 frozen types (domain:verb, lower-case; our domain words win over lite-devtools' connect/disconnect, OR-8):
+Vocabulary -- 26 frozen types (domain:verb, lower-case; our domain words win over lite-devtools' connect/disconnect, OR-8):
 
 | type | key/keyHash | from/to | reason | count | ok | value |
 |---|---|---|---|---|---|---|
@@ -63,9 +63,12 @@ Vocabulary -- 23 frozen types (domain:verb, lower-case; our domain words win ove
 | stream:done | yes | - | - | streamCount final | true | - |
 | stream:error | yes | - | open \| iterator | streamCount | false | error |
 | mutation:start | - | - | - | mutationGen | false | vars |
-| mutation:settle | - | - | null \| superseded | the settling mutation's own generation (pairs with mutation:start by value) | !error (mirrors the mutation state machine's truthiness -- a FALSY rejection reason reports ok=true; inherited 1.4.0 quirk, documented not changed) | data \| error |
+| mutation:settle | - | - | null \| superseded | the settling mutation's own generation (pairs with mutation:start by value) | not-rejected (2.0 BREAKING, ON-3: rejection is tracked by control flow, so a FALSY rejection reason reports ok=false -- "null is not zero"; the 1.4.0 truthiness quirk is retired) | data \| error |
 | persist:hydrate | - | - | null \| a hydrate reason code | records seeded | ok | - |
 | persist:save | - | - | null \| dehydrate-threw | entries in envelope | ok | - |
+| stream:project | yes | - | - | seq applied | false | frame value |
+| stream:promote | yes | prior epoch / new epoch | leader-closed \| leader-hung \| leader-killed \| race-won \| race-lost \| abdicate | epochSeq | won | - |
+| stream:gap | yes | - | gap \| epoch-change | frames missed | false | - |
 
 Options:
 - defaultStaleTime: number (default 0) -- ms before cache entries are considered stale
@@ -75,6 +78,10 @@ Options:
 - retryDelay: (attempt) => number (default exponential backoff capped at 30s)
 - crossTab: boolean (default false) -- opt-in BroadcastChannel propagation
 - crossTabChannel: string (default 'lite-query')
+- sharedFetch: boolean (default false) + isLeader: () => boolean -- cross-tab fetch dedup
+- sharedFetchTimeout: number (default 3000) -- follower self-fetch liveness bound
+- sharedStream: boolean (default false) -- cross-tab shared streams (Q8): the leader owns the one iterator, followers project frames (needs isLeader + crossTab + a channel; inert otherwise)
+- streamIdleTimeout: number (default sharedFetchTimeout, i.e. 3000) -- if no frame arrives within it, a follower self-connects (stream liveness bound)
 - now / setTimeout / clearTimeout / broadcastChannel -- injectable for tests
 
 ### query(qc, opts)
@@ -183,6 +190,18 @@ Constraint (honest): the leader only fulfils requests for queries it currently h
 
 No other query library (TanStack, SWR) ships cross-tab fetch dedup.
 
+## Cross-tab shared streams (Q8, 2.0)
+
+Opt-in via sharedStream: true + isLeader: () => boolean (same oracle as sharedFetch; wire from lite-channel). Requires crossTab: true and a channel; inert otherwise (each tab owns its own connection -- exactly 1.1.0's behaviour). Collapses N tabs to ONE upstream SSE/websocket connection: the leader tab owns the single iterator and broadcasts each frame; followers project frames into their local entry and hold NO iterator.
+
+Wire shape (BroadcastChannel messages over the existing crossTab channel; lite-channel supplies only the isLeader oracle -- no lite-channel dependency): stream-open{key,epochSeq,clientId} (ownership claim), stream-frame{key,epochSeq,clientId,seq,value} (one per frame), stream-end{key,epochSeq,clientId,ok,error,reason} (terminal, or reason "closing" for a graceful handover), stream-req{key} (follower asks for an owner, mirrors fetch-req). One key per stream-frame message -- no cross-key multiplexing (OR-11).
+
+Ordering + dedup (OR-4, enforced BEFORE any signal write, so duplication and reordering are structurally impossible, loss is permitted + counted): epochSeq < projEpoch drops (dead leader's late frame); epochSeq == projEpoch && seq <= projSeq drops (duplicate); a seq jump is accepted and the missed count reported (at-most-once loss); a higher epochSeq adopts the new epoch. epochSeq is a monotone integer (max seen + 1 by whoever opens); clientId is one ASCII string built once per client -- neither is derived from opts.now (a mock clock must not decide ownership).
+
+Failover: a promoted follower starts a FRESH iterator (nothing adopts a dead leader's iterator); the (epochSeq, clientId) lexicographic tiebreak leaves exactly one owner; a loser abdicates and reverts to projecting. The leader keeps ZERO per-follower state -- no replay buffer, no acks, no cursors (G5 prohibition); a slow follower bounds itself through its own maxBuffer window and counts its own drops (parity-identical to a local stream).
+
+- Liveness: if no frame arrives within streamIdleTimeout, the follower self-connects. Correctness never depends on election state.
+
 ## Peer dependencies
 
 @zakkster/lite-signal ^1.5.0 (required -- the reactive primitive; the query/stream watchers use createRoot)
@@ -204,7 +223,7 @@ Optional companion:
 
 ## Test approach
 
-142 core deterministic tests using:
+360 deterministic tests across the suite (STOP-3 reconciled: the header total governs; the per-file lines below are the current true counts) using:
 - Controlled fetcher (test resolves/rejects manually)
 - Mock clock (now/setTimeout injectable)
 - Mock BroadcastChannel (cross-tab simulated without spawning workers)
@@ -218,6 +237,8 @@ See test/harness.js + test/query.test.js + test/edge-cases.test.js + test/zero-g
 - Query.d.ts -- TypeScript declarations (full surface: QueryClient, Query, Mutation, AbortReason, all option/return interfaces)
 - test/query.test.js -- 106 deterministic tests
 - test/infinite-query.test.js -- infiniteQuery + qc.prefetch tests (accumulation, dedup, invalidate/refetch generation guard, cross-tab page sync, prefetch adoption)
+- test/shared-stream.test.js -- 40 cross-tab shared-stream tests (7 named failover cells F1-F7, wire/epoch/seq gate, latest+buffer projection, differential parity vs pipeToSignal, watchdog + lying-oracle invariance, promotion/adopt/abdication, 3 new feed types)
+- test/mutation-falsy-rejection.test.js -- 6 ON-3 tests (null/0/""/undefined rejections settle "error", superseded-falsy interplay)
 - test/harness.js -- Mock fetcher, clock, BroadcastChannel
 - bench/bench.mjs -- comparative bench vs @tanstack/query-core (run `npm run bench`)
 - README.md -- public docs + facts comparison + bench headline

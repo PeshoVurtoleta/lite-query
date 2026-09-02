@@ -5,6 +5,102 @@ All notable changes to `@zakkster/lite-query` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] -- unreleased
+
+Cross-tab SHARED STREAMS -- the strategic sequel the 1.1.0 streaming work was
+built to enable, and the eighth and final rung of the ladder. Shared fetch
+collapsed N tabs to one request; a shared stream collapses N tabs to ONE upstream
+SSE/websocket connection: the leader tab owns the single iterator and broadcasts
+frames, followers project them into their local caches and hold no iterator. The
+offline mutation queue was SPLIT out to 2.1 (see Deferred) so it never rides an
+unfinished failover story. Per OR-1 the version stamp lands only with the
+`/release 2.0.0` drill AFTER the pipeline closes -- this pipeline ran with
+`package.json` and the `VERSION` const at `1.5.0`; no in-session stamp.
+
+### BREAKING
+
+- **`mutation()` rejection is tracked by CONTROL FLOW, not truthiness (ON-3).**
+  A mutation that rejects with a FALSY value (`null`, `0`, `""`, `undefined`)
+  now settles `status === "error"` with the rejection value held VERBATIM in
+  `error()`, and `mutation:settle` reports `ok: false`. Previously (the 1.4.0
+  quirk) a falsy rejection was read as success and the feed reported `ok: true`
+  -- a fail-open of "null is not zero". This is the one true break of the major;
+  no break was invented (OR-7).
+  - **Migration:** branch on `status()` (`"error"` vs `"success"`), never on
+    `error()` truthiness. Code that did `if (m.error())` to detect failure must
+    become `if (m.status() === "error")`. A mutation that legitimately resolves
+    with a falsy value is unaffected (it settles `"success"`); only a mutation
+    that *rejects* with a falsy value changes outcome -- from a wrong `"success"`
+    to the correct `"error"`.
+  - No existing test pinned the quirk, so none was retired under OR-9.
+
+### Added
+
+- **`sharedStream: true` + `isLeader: () => boolean`** -- opt-in cross-tab shared
+  streams (needs `crossTab: true` and a channel; inert otherwise, so an app that
+  never opts in keeps exactly 1.1.0's per-tab behaviour). Same oracle as
+  `sharedFetch`. The leader owns the one iterator and broadcasts each frame;
+  followers project them. A promoted follower starts a FRESH iterator -- nothing
+  adopts a dead leader's iterator (V1's adopt path preserves only the already-
+  projected window/counters across the promotion instant).
+- **`streamIdleTimeout`** (default = `sharedFetchTimeout`, 3000ms) -- the stream
+  liveness bound. If no frame arrives within it a follower self-connects. OR-3
+  extended verbatim to streams: *"Liveness: if no frame arrives within
+  streamIdleTimeout, the follower self-connects. Correctness never depends on
+  election state."* Both liveness sentences ship (the fetch one byte-unchanged).
+- **Four wire messages** over the existing crossTab BroadcastChannel (lite-channel
+  supplies only the `isLeader` oracle -- NO lite-channel dependency, zero runtime
+  deps hold): `stream-open`, `stream-frame` (one key per message, OR-11),
+  `stream-end` (terminal, or `reason: "closing"` for a graceful handover), and
+  `stream-req` (follower asks for an owner, mirrors `fetch-req`).
+- **At-most-once projection (OR-4)**, enforced in `projectFrame` BEFORE any signal
+  write, so duplication and reordering are structurally impossible; frame loss on
+  failover is permitted and COUNTED. Epoch/seq gate: a lower epoch drops (dead
+  leader's late frame), a duplicate seq drops, a seq jump is accepted with the
+  missed count reported, a higher epoch adopts. `epochSeq` is a monotone integer
+  (max seen + 1 by whoever opens); `clientId` is one ASCII string per client --
+  neither derived from `opts.now` (a mock clock must not decide ownership).
+- **The seven named failover cells (F1-F7)** as tests: leader closes gracefully /
+  killed / hung, follower promoted mid-buffer, two tabs racing promotion (the
+  `(epochSeq, clientId)` tiebreak leaves exactly one owner), completion during
+  failover, error-then-recovery with no inherited wedge. F3 passes under an
+  all-true AND an all-false lying oracle (A8, proving OR-3).
+- **Three new feed event types (23 -> 26** on the frozen 10-key record):
+  `stream:project` (per applied frame), `stream:promote` (epoch transition in
+  from/to, `ok` = won, reason `leader-closed|leader-hung|leader-killed|race-won|
+  race-lost|abdicate`), `stream:gap` (frames missed, reason `gap|epoch-change`).
+  There is deliberately NO `stream:frame-send` type -- the leader's broadcast is
+  already told by `tab:send` + `stream:value`; a fourth per-frame emit would
+  double 60Hz work for zero new truth (recorded trim).
+- **G5 slow-follower bound as a PROHIBITION:** the leader keeps ZERO per-follower
+  state -- no replay buffer, no acks, no cursors. A slow follower bounds itself
+  through its own `maxBuffer` window and counts its own drops, parity-identical
+  to a local stream (the differential test's oracle is lite-stream's live
+  `pipeToSignal`, so when LS4 ships `createSignalWriter` the seam swaps and the
+  test does not change).
+
+### Deferred (to 2.1)
+
+- **Offline mutation queue** -- explicit opt-in PER mutation (a silent default is
+  fail-open and forbidden, OR-6), durable over the Q6 persist seam with the same
+  version-stamp discipline, replay order-per-key + per-item observable + DROPS
+  items whose entries no longer exist (a drop is a surfaced result, never a silent
+  retry), replay observable via the feed. Split from 2.0 (ON-1) so the queue never
+  rides an unfinished failover story; its torture gate G6 (airplane-mode script)
+  moves with it. Recorded as a named brief in ROADMAP section 5.
+
+### Torture
+
+- N-tab fuzzer generalization (`cache-fuzzer.mjs`, `QUERY_FUZZ_TABS`, default 2 --
+  the echo/ledger laws generalize over N, they do not weaken; green at N=2 and
+  N=5, C-fuzz/C-feed controls still trip). A 5-tab shared-stream soak prints
+  strictly AFTER the frozen GATE (ON-2 precedent): one connection through 100
+  leader kills over 50,000 frames, dup/reorder=0 in every follower, G5 identical
+  leader `entries.size` for 1 vs 4 followers (A1/A2/A4/G5). OR-10 attempt E
+  (leader teardown with live follower projection) recorded verbatim in
+  INCONCLUSIVE.md -- DID NOT FIRE (V5's `releaseProjection` nulls every slot at
+  detach and disposeEntry). The frozen GATE line stays byte-identical to 1.5.0's.
+
 ## [1.5.0] -- 2026-09-02
 
 The devtools FEED (`qc.inspect`) -- observability with a zero-cost off switch.
