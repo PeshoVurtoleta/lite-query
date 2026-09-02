@@ -1,181 +1,178 @@
-# BRIEF -- Q8 -- lite-query v2.0.0 -- shared streams + offline mutations (the major)
+# BRIEF -- Q9 -- lite-query v2.1.0 -- offline mutation queue + LS4 seam swap
 
-Operator contract for the Q8 pipeline (planner -> coder -> reviewer -> qa).
-Source charter: ROADMAP.md section 5, Q8 (lines ~940-1085, incl. the SPIKE
-INPUTS recorded 2026-09-02). This file wins over memory; the ROADMAP wins over
-this file only where this file is silent.
+Operator contract for the Q9 pipeline (planner -> coder -> reviewer -> qa).
+Source charter: ROADMAP.md Q9 stub (lines ~1131-1155) + the Q8 charter's
+offline-queue bullet (lines ~1013-1018), both carried forward INTACT by
+STOP-DECISION-1. This file wins over memory; the ROADMAP wins over this
+file only where this file is silent.
 
 ---
 package: "@zakkster/lite-query"
-session: Q8
-status: shipped (2026-09-02; SPLIT ratified -- streams ship, queue -> Q9/2.1; C1-C13 + C10b BREAKING fix + QD-1..QD-4; reviewer DELTA APPROVED after one REJECTED (epoch-collision window), QA PASS after one docs FAIL(3); suite 362/0/0, GATE byte-identical, controls 5/5; drill sites=3/47 tests=362/0 GATE ok pack 13 files 108.0 kB; operator publish da8b377; registry artifact verified: 13 files, [2.0.0] head, VERSION sync, latest=2.0.0)
-version_target: 2.0.0       # stamped by the /release drill, NOT in-session (OR-1)
-tests_min: 354              # floor; suite is 314 at session start
+session: Q9
+status: in-pipeline (2026-09-03)
+version_target: 2.1.0       # stamped by the /release drill, NOT in-session (OR-1)
+tests_min: 380              # floor; suite is 362 (shipped 2.0.0) at session start
 skip_max: 0
-torture: "law harness ok + leader-failover stream soak + 5-tab N-tab soak"
-depends_on: [Q7 (shipped 1.5.0, operator publish 8b6743c)]
-downstream: "lite-stream LS4 (v1.4.0, status: gated) -- THEIR gate IS our
-  session-start spike ruling; recorded on both sides (their ROADMAP ~120-126:
-  'Their spike is our tripwire'). The verdict lands in BOTH roadmaps before
-  any follower-window code is written."
-carry_from_q7: "findings-clause torture control STILL uncontrolled after four
-  attempts (Q5 A/B, Q6 C, Q7 D; INCONCLUSIVE.md holds all four verbatim + the
-  QD-4 postscript); attempt E rides the offline-queue teardown or the
-  leader-failover surface (OR-10)"
+torture: "law harness ok + airplane-mode replay soak + attempt F on queue teardown"
+depends_on: [Q8 (shipped 2.0.0, operator publish da8b377),
+  lite-stream 1.4.0 (registry-verified 2026-09-03: latest=1.4.0, 7-file
+  tarball, createSignalWriter at Stream.js:717, CHANGELOG head
+  "1.4.0 -- 2026-09-03")]
+downstream: none gated (the ladder's final rung)
+carry_from_q8: "findings-clause torture control STILL uncontrolled after
+  FIVE attempts (Q5 A/B, Q6 C, Q7 D, Q8 E; INCONCLUSIVE.md holds all five
+  verbatim); attempt F rides the queue's replay teardown with in-flight
+  handles (OR-9)"
 ---
 
 ## PURPOSE
 
-The strategic sequel the 1.1.0 streaming work was built to enable, and the
-LAST session of the eight. Shared fetch collapsed N tabs to one request; a
-shared stream collapses N tabs to one SSE/websocket connection: the leader
-owns the iterator and broadcasts frames, followers project them into their
-local caches. Plus the offline mutation queue with replay-on-reconnect. Both
-are semantics-heavy -- which is exactly why they ride a major, alone, AFTER
-the Q7 feed exists to make their failure modes observable.
+The deferred half of the 2.0 major, riding on a FINISHED failover story --
+exactly as the split's own rationale demanded. Two bodies of work, one
+minor: (1) the offline mutation queue with durable replay-on-reconnect,
+carried intact from the Q8 charter; (2) the projectFrame seam swap to
+lite-stream 1.4.0's createSignalWriter, deleting the hand-rolled third
+copy of the windowed-view discipline -- the swap the parity test was built
+to make mechanical.
 
 ## TASKS
 
-- T0 -- THE SPIKE, before any spec (OR-2). Paper-spike the failover matrix
-  against the REAL sharedFetch/crossTab machinery in Query.js; confirm SPIKE
-  INPUT facts 1-3 (charter lines ~1015-1023) against the actual design
-  sketch; rule each LS4 candidate (push-writer / idleTimeout / share) as
-  lite-stream vs lite-query vs nowhere, overturning a provisional verdict
-  only with a named matrix cell; rule the SEQUENCING (OR-5); then
-  STOP-DECISION-1: ship as one 2.0, or split (2.0 shared streams, 2.1
-  offline mutations). The charter's lean is on the record: "Do not let the
-  queue ride an unfinished failover story."
-- T1 -- Shared streams. Leader owns the one iterator and broadcasts frames;
-  followers project frames into their local entry (no follower ever holds an
-  iterator). Reuse the sharedFetch machinery: same isLeader oracle, same
-  fallback-timer liveness discipline (OR-3).
-- T2 -- Failover matrix, each cell a NAMED test: leader closes gracefully /
-  leader tab killed / leader hung (frames stop, channel alive) / follower
-  promoted mid-buffer / two tabs racing promotion / stream completes during
-  failover / stream errors during failover. A promoted follower starts a
-  FRESH iterator; nothing adopts a dead leader's iterator mid-flight.
-- T3 -- Buffer-mode semantics across tabs: followers receive the same
-  windowed view discipline (maxBuffer, droppedCount) as a local stream; a
-  slow follower cannot grow the leader's memory -- bound it, count drops,
-  assert the bound in torture (G5).
-- T4 -- Offline mutation queue, IF in the ratified scope (OR-6): explicit
-  opt-in per mutation; durable via the Q6 persistence seam, version-stamped;
-  replay preserves order per key, surfaces per-item results, and DROPS
-  (never silently retries) items whose entries no longer exist; replay is
-  observable via the Q7 feed.
-- T5 -- Torture. Leader-failover stream soak + the N-tab soak: 5 simulated
-  tabs, ONE upstream connection at all times (assert the connection count at
-  the mock source), kill the leader every k ops, frames neither duplicated
-  nor reordered in any follower, pool baseline in every tab. The frozen GATE
-  window stays byte-identical (Q7 ON-2 precedent: new soaks print after the
-  frozen gate evaluation). OR-10 attempt E.
-- T6 -- Docs pass. README (shared streams + queue sections), llms.txt (the
-  liveness sentence extended to streams and still TRUE, full new surface),
-  d.ts, Cookbook recipes, CHANGELOG `[2.0.0]` head with the BREAKING section
-  + migration notes per suite drill (OR-7). The LS4 verdict recorded in both
-  roadmaps; if the push-writer survives, the parity assertion + frame-shape
-  corpus are handed to lite-stream BEFORE LS4 codes (OR-5).
+- T1 -- Queue surface. Explicit opt-in PER MUTATION (a default that queues
+  silently is fail-open and forbidden -- OR-3); the planner names the flag
+  and the dispatch semantics. When the fetcher cannot run (caller says
+  offline / queue-on-failure per spec), the mutation lands in the durable
+  queue with a surfaced "queued" outcome -- never a silent limbo. The ON-3
+  status law governs replay results too: control-flow tracking, falsy
+  rejections settle "error".
+- T2 -- Durability. The queue rides the Q6 persistence seam
+  (persistQueryClient's save/load thunks) with the SAME version-stamp
+  discipline: the adapter stamps, mismatch or corruption drops the WHOLE
+  queue fail-closed -- and the drop is surfaced/observable, never silent
+  (OR-5). Monomorphic queue records; the planner specs the shape.
+- T3 -- Replay. Explicitly triggered by the caller (OR-4 -- no
+  connectivity ownership). Order preserved per key; per-item results
+  surfaced; items whose entries no longer exist are DROPPED with a
+  surfaced result (never silently retried); everything observable via the
+  Q7 feed (vocabulary grows additively, 10-key record frozen -- OR-7).
+  The crash-boundary semantics are RULED, not implied (OR-6).
+- T4 -- LS4 seam swap. projectFrame/projectBuffer's hand-rolled follower
+  window is replaced by lite-stream 1.4.0's createSignalWriter UNDER the
+  core-import constraint (OR-8): Query.js imports lite-signal ONLY. Their
+  llms.txt consumer paragraph is the fit contract: "The follower frames
+  arrive by callback and feed writer.push(frame) -- the writer needs ZERO
+  channel / epoch awareness." The differential parity test
+  (shared-stream.test.js C5 block, A6) is the CONTRACT and does not
+  change: it must pass against the live 1.4.0 oracle BEFORE the swap
+  (oracle upgrade first, as its own rung) and AFTER (the swap body).
+  STOP-DECISION-2 rules the mechanism (see OR-8).
+- T5 -- Torture. Airplane-mode replay soak (queue churn + reload cycles,
+  pool baseline); attempt F per OR-9; the frozen GATE window stays
+  byte-identical -- new prints strictly AFTER the frozen gate evaluation
+  (ON-2 precedent).
+- T6 -- Docs. README queue section; llms.txt full new surface (any new
+  liveness-adjacent sentence must be TRUE the way OR-3/Q8 made the stream
+  sentence true); d.ts; Cookbook airplane-mode recipe; CHANGELOG [2.1.0]
+  head in-session (Added/Changed only -- zero breaking budget, OR-2);
+  every feed-count site (README/Cookbook/llms.txt) reconciled in the SAME
+  commit that grows the vocabulary (OR-7, the QD-4 lesson).
 
 ## OPERATOR RULINGS
 
 - OR-1 (standing PR-1). No in-session version stamp. package.json and the
-  Query.js VERSION const stay 1.5.0; the CHANGELOG `[2.0.0]` head lands
-  in-session; the /release 2.0.0 drill performs the stamp after the pipeline
-  closes.
-- OR-2 spike-first process. The planner runs T0 and returns, in ONE
-  message: (a) the spike verdict (facts confirmed/falsified, LS4 candidate
-  rulings, sequencing ruling), (b) STOP-DECISION-1 -- its scope
-  recommendation with rationale, and (c) the FULL spec for the RECOMMENDED
-  scope (the deferred half's deferral recorded explicitly, never implied).
-  The operator ratifies scope in the PLAN header before any code.
-- OR-3 the liveness law, cited verbatim from llms.txt:180 (verified
-  2026-09-02): "Liveness: if no leader serves within sharedFetchTimeout,
-  the follower self-fetches. Correctness never depends on election state."
-  That sentence is load-bearing for fetch and MUST stay true for streams: a
-  follower that stops receiving frames within a bound self-connects. Any
-  design whose correctness depends on election state is rejected by
-  definition, not by review.
-- OR-4 at-most-once projection. Frame LOSS on failover is permitted and
-  documented; frame DUPLICATION and frame REORDERING are not -- both
-  asserted in the matrix and the N-tab soak. No cell may weaken this to
-  at-least-once to make a test pass.
-- OR-5 the LS4 two-way gate. The spike's candidate verdicts land in BOTH
-  roadmaps (ours here; lite-stream's via the live litestream peer session --
-  the operator relays the verdict; direct edit of ../LiteStream/ROADMAP.md
-  only as fallback). The SEQUENCING ruling is spike output, one of: Q8
-  blocks on LS4 shipping / Q8 proceeds in parallel consuming LS4's pinned
-  parity tests / Q8 hand-rolls the follower window with the parity
-  assertion pinned on our side. The anti-third-copy lean is on record (the
-  charter: same-windowed-discipline is only GUARANTEED by same-code), but a
-  hand-roll with pinned parity is admissible if blocking would strand the
-  session. Version floors, when they exist, are cited from lite-stream's
-  own llms.txt consumer lines -- never session numbers (era-bound law).
-- OR-6 queue semantics (scope-dependent), fail-closed: queueing is explicit
-  opt-in PER MUTATION -- a default that queues silently is fail-open and
-  forbidden; durability rides the Q6 persistence seam with the same
-  version-stamp discipline; replay is order-per-key, per-item observable,
-  and DROPS items whose entries no longer exist (a drop is a surfaced
-  result, never a silent retry).
-- OR-7 breaking budget. The ledger holds NO accumulated deferred-breaking
-  nits (grep-verified 2026-09-02; the planner re-sweeps and confirms). If
-  that holds, the `[2.0.0]` BREAKING section states truthfully that the
-  major rides the new cross-tab semantics and any operator-ratified
-  contract retirements (OR-9), with migration notes regardless. Never
-  invent a break to justify the number.
-- OR-8 the charter's ASSERTIONS line "Suite >= 230" is stale (V10-class);
-  354 governs (this file's tests_min). Corrected in the closeout docs
-  commit, never mid-pipeline.
-- OR-9 the 314 existing tests are contracts. A 2.0 MAY retire one ONLY
-  under an explicit operator-ratified breaking change, each retirement
-  named in the CHANGELOG BREAKING section with its replacement contract;
-  silent edits to existing tests remain forbidden. Everything not
-  explicitly broken stays additive (the Q5-Q7 discipline).
-- OR-10 (carry_from_q7). One honest findings-clause attempt E through the
-  NEW surface (candidates: queue teardown with in-flight replay handles;
-  leader teardown with follower projection buffers). Outcome recorded in
-  INCONCLUSIVE.md in the verbatim-attempt style; a control that cannot trip
-  is decorative -- never fake one.
-- OR-11 transport non-goal (1.1.0 discipline, charter): lite-query
-  coordinates iterators and frames; sockets belong to the caller. No
-  transport ownership, no N-keys-over-one-socket multiplexing (struck by
-  the SPIKE INPUTS unless a named cell resurrects it).
+  Query.js VERSION const stay 2.0.0; the CHANGELOG `[2.1.0]` head lands
+  in-session; the /release 2.1.0 drill performs the stamp after the
+  pipeline closes.
+- OR-2 minor discipline. Everything additive; zero breaking budget; the
+  shipped 362 tests are contracts -- none edited, none retired. The
+  no-opt-in path is byte-identical in behavior to 2.0.0 (the existing
+  suite proves it by passing unedited); OFF-path allocation stays zero.
+- OR-3 fail-closed queueing. Queueing is explicit opt-in per mutation;
+  queue-full and storage-failure are surfaced rejections, never silent
+  drops or silent retries; a restored queue that fails validation drops
+  whole and surfaces the drop. null is not zero: an absent queue section
+  in persisted state is "no queue", never an error.
+- OR-4 transport non-goal (1.1.0/OR-11 carry). No navigator.onLine, no
+  reconnect listeners, no connectivity polling, no timers watching the
+  network. Replay fires when the CALLER calls the replay surface. The
+  library coordinates mutations and frames; sockets and connectivity
+  belong to the caller.
+- OR-5 durability discipline. Version REQUIRED on the seam (Q6 law);
+  the adapter stamps, the primitive validates; a version mismatch, a
+  corrupt record, or a record for an unknown shape drops the whole queue
+  fail-closed with a surfaced/observable reason. Queue persistence never
+  captures non-queued in-flight mutations.
+- OR-6 crash-boundary ruling. In-run replay is exactly-once per item
+  (G6). Across a crash mid-replay the planner RULES one of: at-most-once
+  (item removed from the durable queue before dispatch; a crash may lose
+  it) or at-least-once (removed after its terminal per-item result; a
+  crash may double-fire, caller idempotency documented). Either is
+  admissible ONLY with the choice stated in llms.txt and pinned by a
+  named test simulating the crash window. The undocumented middle is
+  forbidden.
+- OR-7 feed growth. New queue events are additive `domain:verb` types on
+  the frozen 10-key record; the planner names them and the final count;
+  README/Cookbook/llms.txt count sites move in the same commit. No second
+  hook, no record-shape change.
+- OR-8 the seam swap, STOP-DECISION-2. Constraint (grep-gated, G8): core
+  Query.js imports lite-signal ONLY -- no lite-stream import, static or
+  dynamic, ever. Admissible outcomes, ruled by the planner against the
+  real code: (a) the windowed projection body moves behind an
+  entry-carried writer slot installed from StreamQuery.js (which MAY
+  import createSignalWriter unconditionally -- the /stream optional peer
+  floor then bumps ^1.3.0 -> ^1.4.0, cited era-bound from lite-stream's
+  own llms.txt "(since 1.4.0)" line, never from session numbers), with
+  core's latest-mode projection remaining stream-import-free so a
+  plain-query follower tab is unaffected; or (b) the swap is REJECTED by
+  a named ruling (e.g. the window provably serves followers with no
+  /stream module loaded in buffer mode) -- the hand-roll stays, the
+  parity oracle still upgrades to live 1.4.0, and the deletion is parked
+  with the reason recorded in the ROADMAP. TWO live window bodies
+  selected by load-state luck is fail-open and forbidden -- whichever
+  body ships, it is the ONLY body on that path.
+- OR-9 (carry_from_q8). One honest findings-clause attempt F through the
+  queue's replay teardown with in-flight replay handles. Outcome recorded
+  in INCONCLUSIVE.md in the verbatim-attempt style; a control that cannot
+  trip is decorative -- never fake one.
+- OR-10 devDependency bump. @zakkster/lite-stream devDep moves to ^1.4.0
+  (the parity oracle needs the live writer); the lite-signal override pin
+  stays. This is a lockfile rung, not a version site.
 
 ## GATES
 
-- G1 suite >= 354 pass, 0 fail, 0 skip, under the default `npm test`.
+- G1 suite >= 380 pass, 0 fail, 0 skip, under the default `npm test`.
 - G2 law harness: the byte-frozen GATE line then `ok`; every live control
-  still trips (5 + any honest Q8 addition per OR-10).
-- G3 failover matrix green, all seven cells named tests.
-- G4 N-tab soak: 5 tabs, connection count === 1 at the mock source through
-  leader churn (kill every k ops), zero duplicated and zero reordered
-  frames in every follower, pool baseline in every tab.
-- G5 the slow-follower bound: leader memory bounded under a stalled
-  follower, drops counted, asserted in torture.
-- G6 (scope-dependent) airplane-mode script: dispatch offline -> reload ->
-  reconnect replays in order, exactly once each, observable via the feed.
-- G7 drift guards green (ascii, surface guard over llms.txt + d.ts).
-- G8 `npm pack --dry-run`: file list per the ratified spec (13 today; any
-  change is a named spec decision, not drift), test/ bench/ INCONCLUSIVE.md
-  BRIEF.md PLAN.md absent, llms.txt + CHANGELOG.md + Cookbook.md present.
-- G9 the LS4 verdict is recorded in both roadmaps BEFORE the coder writes
-  follower-window code.
+  still trips (5 + any honest attempt-F addition per OR-9).
+- G3 airplane-mode script (the stub's G6, verbatim): dispatch offline ->
+  reload -> reconnect -> replays in order, exactly once each,
+  feed-observable, per-item results surfaced.
+- G4 parity across the swap: the A6 differential test green against live
+  lite-stream 1.4.0 BEFORE the swap rung and AFTER it, unchanged; the
+  N-tab soak's zero-dup/zero-reorder unchanged.
+- G5 OFF-path: no queue opt-in anywhere -> behavior byte-identical to
+  2.0.0; the 362 shipped tests pass unedited (OR-2).
+- G6 drift guards green (ascii, surface guard over llms.txt + d.ts).
+- G7 `npm pack --dry-run`: 13 files (any change is a named spec decision,
+  not drift); test/ bench/ INCONCLUSIVE.md BRIEF.md PLAN.md absent.
+- G8 core import discipline: `grep -n "from ['\"]" Query.js` shows
+  lite-signal only (OR-8's constraint, held as a gate).
+- G9 crash-boundary test named and green, matching the OR-6 ruling as
+  documented in llms.txt.
 
 ## NON-GOALS
 
-- Whatever STOP-DECISION-1 defers -- recorded in the ROADMAP explicitly,
-  never implied.
-- No transport ownership; no socket multiplexing (OR-11).
-- No silent queueing default (OR-6).
-- No second feed hook, no feed changes beyond new event coverage for the
-  new semantics (vocabulary grows additively if the spec needs it; the
-  10-key record shape is frozen).
+- No silent queueing default (OR-3). No connectivity ownership (OR-4).
+- No breaking changes, no test retirements (OR-2).
+- No feed record-shape change, no second hook (OR-7).
 - No version stamp in-session (OR-1).
+- No new subpath, no new entry point -- the queue rides the existing
+  mutation + persist surfaces.
 
 ## DONE WHEN
 
-Five open tabs hold one upstream connection through leader churn without
-frame duplication or reordering; queued mutations (if in scope) survive a
-reload and replay exactly once, observably; suite >= 354 with the GATE
-byte-identical; `[2.0.0]` head + migration notes landed; the LS4 gate is
-flipped on both sides. Then: awaiting /release 2.0.0 + operator publish per
-OR-1 -- the eighth and final rung of the ladder.
+The airplane-mode script replays in order exactly once, observably; a
+version-mismatched queue drops whole and says so; the A6 parity test is
+green against live 1.4.0 on both sides of the swap (or the swap is
+rejected by named ruling with the oracle still upgraded); suite >= 380
+with the GATE byte-identical; `[2.1.0]` head landed. Then: awaiting
+/release 2.1.0 + operator publish per OR-1 -- the queue ships on a
+finished failover story, and the ladder is done.
