@@ -1099,7 +1099,7 @@ ASSERTIONS (floor)
     reconnect) replays in order, exactly once each, observable in feed.
   - Suite >= 354, 0 skip; law torture ok; controls fail; guards green.
     (STOP-5 / OR-8: the stale "Suite >= 230" was corrected at Q8 closeout;
-    354 is the floor, and the pipeline shipped 360 -- QA freezes the final.)
+    354 is the floor, and the pipeline shipped 362 -- QA freezes the final.)
 
 NON-GOALS
   Whatever the scope decision defers (recorded, not implied). No transport

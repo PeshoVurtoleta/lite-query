@@ -711,7 +711,7 @@ const stop = qc.inspect((e) => {
 stop();
 ```
 
-The full 23-type vocabulary and the 10-key record shape are in `llms.txt`. The
+The full 26-type vocabulary and the 10-key record shape are in `llms.txt`. The
 rendering **panel** is lite-studio's job -- this feed is what it renders; nothing
 is imported in either direction.
 
