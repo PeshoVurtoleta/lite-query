@@ -7,6 +7,8 @@
  */
 
 // Re-exported lite-await primitives (types come from lite-await's own .d.ts).
+// 18-name parity with lite-await 1.3.0 (Q-07); VERSION is deliberately not
+// re-exported (lite-query owns its own VERSION const in Query.js).
 export {
     whenSignal,
     whenTruthy,
@@ -18,6 +20,14 @@ export {
     withAbort,
     fromPromise,
     TimeoutError,
+    allSettledOf,
+    withResolvers,
+    tryFn,
+    delay,
+    withRetry,
+    mapLimit,
+    whenStatechart,
+    createAwaitScope,
 } from "@zakkster/lite-await";
 
 /** Options accepted by the query bridges. */

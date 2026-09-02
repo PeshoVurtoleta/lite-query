@@ -242,7 +242,7 @@ Same lifecycle guarantees as `query()`: lazy (no connection until observed), abo
 
 ### Async coordination -- subpath `@zakkster/lite-query/await`
 
-Bridges a reactive query to a one-shot promise -- for imperative flows, route loaders, or tests. Re-exports the [`@zakkster/lite-await`](https://www.npmjs.com/package/@zakkster/lite-await) primitives verbatim and adds two query-native helpers. Requires `@zakkster/lite-await`.
+Bridges a reactive query to a one-shot promise -- for imperative flows, route loaders, or tests. Re-exports all 18 [`@zakkster/lite-await`](https://www.npmjs.com/package/@zakkster/lite-await) 1.3.0 primitives verbatim -- single source of truth, zero wrapping -- and adds two query-native helpers. Requires `@zakkster/lite-await`.
 
 ```ts
 import { whenQuery, whenAllQueries } from "@zakkster/lite-query/await";
@@ -253,6 +253,15 @@ const [a, b] = await whenAllQueries([aQ, bQ]);            // fail-fast, data in 
 // any predicate over status -- e.g. wait for a streamQuery's first frame:
 await whenQuery(ticks, (status) => status === "streaming");
 ```
+
+The full re-exported surface: `whenSignal`, `whenTruthy`, `whenEquals`, `allOf`, `anyOf`, `raceOf`, `withTimeout`, `withAbort`, `fromPromise`, `TimeoutError`, plus the eight added for 1.3.0 parity -- `allSettledOf`, `withResolvers`, `tryFn`, `delay`, `withRetry`, `mapLimit`, `whenStatechart`, `createAwaitScope`. `VERSION` is deliberately **not** re-exported: lite-query owns its own `VERSION` const (see the `.` entry) so this subpath never misreports the package version.
+
+Boundaries worth keeping straight -- the re-exports and `query()` are complementary, not overlapping:
+
+- **`withRetry(fn, opts)` is not the cache's refetch.** It retries an arbitrary async factory with exponential backoff for one-shot imperative work (a route loader, a mutation side effect). Cached, observed, deduplicated reads are `query()`'s job. Wrapping a `query()` fetcher in `withRetry` double-owns the retry policy -- don't.
+- **`delay(ms, opts)` advances wall clock**, not a mock clock. It is a real, abort-aware `setTimeout` promise; in tests prefer driving state directly (`setQueryData` / a manual iterator) over sleeping real time.
+- **`createAwaitScope(ctrl?)`** binds N signal-aware awaiters to one `AbortController` (owns a fresh one when omitted; borrows when passed, and `scope.abort()` then throws). Upstream `decisions/0007` owns the documented contract; we only re-export it.
+- **`fromPromise` vocabulary is final** -- lite-await `decisions/0009` verdict = REJECT (accepted 2026-09-01). The name and its signal-state projection are locked; the mapping table is permanent.
 
 ## Honest behaviour notes
 

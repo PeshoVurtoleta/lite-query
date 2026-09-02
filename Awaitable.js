@@ -29,7 +29,22 @@ import {
     withTimeout,
     withAbort,
     fromPromise,
-    TimeoutError
+    TimeoutError,
+    // 18-name parity with lite-await 1.3.0 (Q-07): the eight that were
+    // undefined from this subpath while sitting in the installed dependency.
+    // Re-exported verbatim -- single source of truth, zero wrapping (OR-4).
+    allSettledOf,
+    withResolvers,
+    tryFn,
+    delay,
+    withRetry,
+    mapLimit,
+    whenStatechart,
+    createAwaitScope
+    // VERSION is deliberately NOT imported: lite-query owns its own VERSION
+    // const (see Query.js), and re-exporting the sibling's would collide with
+    // ours and misreport this package's version. The surface guard excludes it
+    // BY NAME for the same reason.
 } from "@zakkster/lite-await";
 
 // ---------------------------------------------------------------------------
@@ -189,6 +204,15 @@ export {
     withAbort,
     fromPromise,
     TimeoutError,
+    // The eight that complete 18-name parity with lite-await 1.3.0 (Q-07).
+    allSettledOf,
+    withResolvers,
+    tryFn,
+    delay,
+    withRetry,
+    mapLimit,
+    whenStatechart,
+    createAwaitScope,
     // lite-query-native bridges.
     whenQuery,
     whenAllQueries

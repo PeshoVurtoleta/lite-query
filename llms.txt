@@ -72,9 +72,15 @@ Semantics:
 - Lazy + abort-on-detach + reactive-key restart + enabled gate, same as query(). invalidate() aborts and re-establishes the stream. Streaming data does NOT cross tabs in 1.1.0 (each tab owns its connection); only invalidate propagates (all tabs reconnect). One-connection-shared is 2.0 (see ROADMAP.md).
 
 ### @zakkster/lite-query/await (optional peer @zakkster/lite-await)
-Bridges a reactive query to a one-shot promise (imperative flows, route loaders, tests). Re-exports lite-await primitives verbatim (whenSignal, whenTruthy, whenEquals, allOf, anyOf, raceOf, withTimeout, withAbort, fromPromise, TimeoutError) plus two query-native bridges:
+Bridges a reactive query to a one-shot promise (imperative flows, route loaders, tests). Re-exports all 18 lite-await 1.3.0 primitives verbatim -- single source of truth, zero wrapping (whenSignal, whenTruthy, whenEquals, allOf, anyOf, raceOf, withTimeout, withAbort, fromPromise, TimeoutError, allSettledOf, withResolvers, tryFn, delay, withRetry, mapLimit, whenStatechart, createAwaitScope) plus two query-native bridges. VERSION is deliberately NOT re-exported: lite-query owns its own VERSION const (see `.` entry) so this subpath never misreports the version.
 - whenQuery(q, predicate?, opts?) -> Promise -- resolves with q.data() when predicate(status) is truthy (default status==='success'); rejects with q.error() on error status, or TimeoutError/AbortError per opts {timeout?, signal?}. Overload: whenQuery(q, opts). Works with a streamQuery handle too (e.g. await status==='streaming').
 - whenAllQueries(queries, opts?) -> Promise<any[]> -- resolves when every query reaches success, data in input order; fail-fast (rejects on first error / timeout / abort).
+
+Boundaries (the re-exports and query() are complementary, not overlapping):
+- withRetry(fn, opts) retries an ARBITRARY async factory with exponential backoff; it is NOT the query cache's own refetch/staleness machinery. Use withRetry for one-shot imperative work (a route loader, a mutation side effect); use query()/invalidate for cached, observed, deduplicated reads. Wrapping a query() fetcher in withRetry double-owns the retry policy -- don't.
+- delay(ms, opts) is a real, abort-aware setTimeout promise -- it advances WALL CLOCK, so it is not a mock clock or a test scheduler. In tests prefer driving state directly (setQueryData / a manual iterator) over delay()-ing real time.
+- createAwaitScope(ctrl?) binds N signal-aware awaiters to one AbortController (owns a fresh one when ctrl is omitted; borrows when passed, and scope.abort() then throws) -- upstream decisions/0007 owns the documented contract; we only re-export it.
+- fromPromise vocabulary is final: lite-await decisions/0009 verdict = REJECT (accepted 2026-09-01). The name and its signal-state projection ({status, data, error}) are locked; the mapping table is permanent.
 
 ## Key semantics
 
@@ -110,8 +116,8 @@ No other query library (TanStack, SWR) ships cross-tab fetch dedup.
 @zakkster/lite-signal ^1.5.0 (required -- the reactive primitive; the query/stream watchers use createRoot)
 
 Optional, pulled only by their subpath:
-@zakkster/lite-stream ^1.0.0 (./stream -> streamQuery)
-@zakkster/lite-await ^1.0.0 (./await -> coordination primitives + query bridges)
+@zakkster/lite-stream ^1.3.0 (./stream -> streamQuery)
+@zakkster/lite-await ^1.3.0 (./await -> coordination primitives + query bridges)
 
 Optional companion:
 @zakkster/lite-watch-ex (watchOnce / watchUntil / watchEffect) -- for composing query state with imperative flows

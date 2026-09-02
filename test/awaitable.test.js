@@ -25,6 +25,21 @@ import {
     TimeoutError
 } from "../Awaitable.js";
 
+// Whole-namespace imports for the 18-name parity / identity block. The subpath
+// re-exports must be the SAME bindings as upstream, not copies.
+import * as subpath from "../Awaitable.js";
+import * as upstream from "@zakkster/lite-await";
+import {
+    allSettledOf,
+    withResolvers,
+    tryFn,
+    delay,
+    withRetry,
+    mapLimit,
+    whenStatechart,
+    createAwaitScope
+} from "../Awaitable.js";
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -216,4 +231,104 @@ test("re-exports: fromPromise projects a promise into signal state", async () =>
     await tick();
     assert.equal(sig.peek().status, "resolved");
     assert.equal(sig.peek().data, "done");
+});
+
+// ---------------------------------------------------------------------------
+// 18-name parity with lite-await 1.3.0 (Q-07). The eight new re-exports must
+// be the IDENTICAL bindings upstream ships -- single source of truth, zero
+// wrapping (OR-4). Each identity test asserts reference equality to upstream.
+// ---------------------------------------------------------------------------
+
+test("identity: allSettledOf is upstream's binding", () => {
+    assert.equal(allSettledOf, upstream.allSettledOf);
+});
+test("identity: withResolvers is upstream's binding", () => {
+    assert.equal(withResolvers, upstream.withResolvers);
+});
+test("identity: tryFn is upstream's binding", () => {
+    assert.equal(tryFn, upstream.tryFn);
+});
+test("identity: delay is upstream's binding", () => {
+    assert.equal(delay, upstream.delay);
+});
+test("identity: withRetry is upstream's binding", () => {
+    assert.equal(withRetry, upstream.withRetry);
+});
+test("identity: mapLimit is upstream's binding", () => {
+    assert.equal(mapLimit, upstream.mapLimit);
+});
+test("identity: whenStatechart is upstream's binding", () => {
+    assert.equal(whenStatechart, upstream.whenStatechart);
+});
+test("identity: createAwaitScope is upstream's binding", () => {
+    assert.equal(createAwaitScope, upstream.createAwaitScope);
+});
+
+test("VERSION is not exported from /await", () => {
+    // lite-query owns its own VERSION const (Query.js); the sibling's VERSION
+    // is deliberately excluded so this subpath never misreports the version.
+    assert.equal(subpath.VERSION, undefined);
+    assert.equal("VERSION" in subpath, false);
+});
+
+test("subpath named surface == upstream minus VERSION plus the two bridges", () => {
+    // The /await surface is EXACTLY: every upstream name except VERSION, plus
+    // lite-query's two native bridges. A set compare catches any drift in
+    // either direction (a missed re-export or an accidental extra).
+    const expected = new Set(Object.keys(upstream).filter((n) => n !== "VERSION"));
+    expected.add("whenQuery");
+    expected.add("whenAllQueries");
+    const actual = new Set(Object.keys(subpath));
+    assert.deepEqual([...actual].sort(), [...expected].sort());
+});
+
+test("withRetry: succeeds on the 3rd attempt after two transient failures", async () => {
+    let attempt = 0;
+    const result = await withRetry(
+        function () {
+            attempt = (attempt + 1) | 0;
+            if (attempt < 3) return Promise.reject(new Error("transient " + attempt));
+            return Promise.resolve("ok@" + attempt);
+        },
+        { attempts: 5, baseMs: 0 }
+    );
+    assert.equal(attempt, 3, "the factory ran exactly three times");
+    assert.equal(result, "ok@3");
+});
+
+test("mapLimit: never exceeds the concurrency ceiling", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const items = [0, 1, 2, 3, 4, 5, 6, 7];
+    const out = await mapLimit(
+        items,
+        function (item) {
+            inFlight = (inFlight + 1) | 0;
+            if (inFlight > peak) peak = inFlight;
+            return new Promise(function (resolve) {
+                setTimeout(function () {
+                    inFlight = (inFlight - 1) | 0;
+                    resolve(item * 2);
+                }, 5);
+            });
+        },
+        3
+    );
+    assert.ok(peak <= 3, "in-flight count never exceeded the limit of 3 (peak " + peak + ")");
+    assert.ok(peak >= 2, "the cap was actually exercised (peak " + peak + ")");
+    assert.deepEqual(out, [0, 2, 4, 6, 8, 10, 12, 14], "results in input order");
+});
+
+test("createAwaitScope: scope.abort settles a pre-bound whenSignal and tears down", async () => {
+    const scope = createAwaitScope();                 // owns a fresh controller
+    const src = signal("waiting");
+    // A predicate that never becomes true -- the only way this settles is abort.
+    const p = scope.whenSignal(function () { return src(); }, function () { return false; });
+    assert.equal(scope.aborted, false);
+    const reason = new Error("scope closed");
+    scope.abort(reason);
+    // Reason-preserving: the pre-bound awaiter rejects with the scope's own
+    // abort reason (upstream decisions/0007), and the scope signal reflects it.
+    await assert.rejects(p, function (e) { return e === reason; });
+    assert.equal(scope.aborted, true, "the scope signal reflects the abort (teardown observed)");
 });
