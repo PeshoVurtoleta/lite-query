@@ -7,9 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.2.0] -- 2026-09-02
 
-The sibling refresh: catch up to both peers in one minor. `npm test` -> 177
-pass, 0 fail, 0 skipped; `npm run torture` -> 3x PASS, exit 0. Version stays
-1.1.2 in `package.json` -- the /release drill owns the bump.
+The sibling refresh: catch up to both peers in one minor. `npm test` -> 181
+pass, 0 fail, 0 skipped; `npm run torture` -> 4/4 PASS, exit 0, ending
+`GATE leak=size 0/0 findings=0 warnings=0 | gc major=0 minor=0`.
 
 ### Added
 
@@ -26,11 +26,20 @@ pass, 0 fail, 0 skipped; `npm run torture` -> 3x PASS, exit 0. Version stays
   and `/await`, so every entry reports one version string -- the single
   runtime version source. `test/version-sync.test.js` asserts
   `VERSION === package.json` (string compare).
-- **Tests 158 -> 177.** Five streamQuery parity tests recording the observable
+- **Suite-law torture gate seed.** `test/torture.mjs` wired to the real
+  entry points: 4096 query + streamQuery lifecycle cycles with the
+  lite-leak tracker returning to 0 (0 findings), then 200000 warm accessor
+  reads under lite-gc-profiler at `major=0 minor=0 maxMs=0.00`. Appended to
+  the `npm run torture` chain (now 4 phases). `@zakkster/lite-leak` and
+  `@zakkster/lite-gc-profiler` join as devDependencies; nothing ships
+  (`test/` is never in `files[]`).
+- **Tests 158 -> 181.** Five streamQuery parity tests recording the observable
   semantics across the pipeToSignal collapse (status ladder, droppedCount
   ladder, restart reset, throwing iterator, abort-is-not-an-error); eight
   re-export identity tests plus `withRetry` / `mapLimit` / `createAwaitScope`
-  integrations and the subpath surface set-compare; the version-sync guard.
+  integrations and the subpath surface set-compare; the version-sync guard;
+  four QA boundary tests (`droppedCount()` after dispose, `maxBuffer: 1`
+  window, restart before the first frame, latest-mode droppedCount stays 0).
 
 ### Changed
 
