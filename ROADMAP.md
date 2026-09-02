@@ -46,10 +46,10 @@ Registry state, checked with `npm view <pkg> version`:
 | `@zakkster/lite-gc-profiler` | 1.16.0 | same (Q-09) |
 
 Full suite verified green against the **newest** published peers (await 1.3.0,
-stream 1.3.0, signal 1.5.0): 181 pass / 0 fail with `--expose-gc` (Q3 closeout
-+ the 1.2.0 drill, 2026-09-02). No compatibility break from any peer bump
-since 1.1.0 shipped. (The 2026-08-31 baseline was 153 pass against await
-1.2.0 / stream 1.1.0.)
+stream 1.3.0, signal 1.5.0): 203 pass / 0 fail with `--expose-gc` (Q5
+closeout, 2026-09-02). No compatibility break from any peer bump since 1.1.0
+shipped. (Baselines: 153 on 2026-08-31 against await 1.2.0 / stream 1.1.0;
+181 at the Q3/Q4 closeouts.)
 
 **The dev-env corruption, so it never recurs.** There is no `.gitignore`. The
 initial commit included `node_modules/` and `package-lock.json`; commits
@@ -646,15 +646,16 @@ DONE WHEN
 ---
 package: "@zakkster/lite-query"
 version_target: 1.3.0
-status: planned
-tests_min: 195   # rebased 2026-09-02: written against a 158 base, suite is 181 post-Q3
+status: pipeline-complete (2026-09-02; ladder 474c512..ab63ab7: C1-C6 + reviewer doc pass 574edb6 + QA-defect fix ab63ab7; reviewer APPROVED w/3 LOW all resolved-or-probed, QA FAIL(3: getNextCursor-throw wedge, setQueryData non-array divergence, prefetch-on-infinite page advance) -> fixed w/pinned contracts -> QA PASS; suite 203, GATE byte-identical, 4/4 controls; awaiting /release 1.3.0 drill + operator publish per standing PR-1)
+tests_min: 195   # rebased 2026-09-02: written against a 158 base, suite is 181 post-Q3; shipped at 203
 skip_max: 0
 torture: "law harness ok + pagination churn phase"
 findings: []   # anchored to the README facts table's own honesty row
-carry_from_q4: the findings-clause control (INCONCLUSIVE.md "Known
-  uncontrolled clauses" -- the kernel audit() path cannot fire through the
-  public surface under OR-1; if Q5's new pagination surface gives it a
-  legal trigger, control it here; otherwise re-record and carry)
+carry_from_q4: the findings-clause control -- OUTCOME 2026-09-02: two
+  attempts through the new surface (dispose-owner-mid-page-fetch;
+  tracked-fetchNextPage-promise + removeQueries-mid-flight), neither
+  fired, both independently re-run by QA (findings=0). Re-recorded in
+  INCONCLUSIVE.md, carried to Q6.
 depends_on: [Q3, Q4]
 blocks: [Q6]
 ---
@@ -737,7 +738,11 @@ DONE WHEN
 package: "@zakkster/lite-query"
 version_target: 1.4.0
 status: planned
-tests_min: 210   # rebased 2026-09-02 (181 post-Q3 base)
+tests_min: 218   # re-rebased 2026-09-02 post-Q5 (203 base; a floor below the shipped suite is decorative)
+carry_from_q5: the findings-clause control -- STILL uncontrolled after
+  Q5's two new-surface attempts (QA re-ran both, findings=0);
+  INCONCLUSIVE.md holds the attempt record; re-attempt via Q6's
+  persistence teardown paths or re-record and carry again
 skip_max: 0
 torture: "law harness ok + hydrate/dehydrate cycle phase"
 findings: []   # SPEC.md post-publish item, reconciled by Q2
@@ -848,7 +853,7 @@ DONE WHEN
 package: "@zakkster/lite-query"
 version_target: 1.5.0
 status: planned
-tests_min: 220   # rebased 2026-09-02 (181 post-Q3 base)
+tests_min: 228   # re-rebased 2026-09-02 post-Q5 (203 base)
 skip_max: 0
 torture: "law harness ok; hook-installed vs not, both gated"
 findings: []   # SPEC.md devtools item, feed half; panel is lite-studio's
@@ -918,7 +923,7 @@ DONE WHEN
 package: "@zakkster/lite-query"
 version_target: 2.0.0
 status: planned
-tests_min: 250   # rebased 2026-09-02 (181 post-Q3 base)
+tests_min: 258   # re-rebased 2026-09-02 post-Q5 (203 base)
 skip_max: 0
 torture: "law harness ok + leader-failover stream soak"
 findings: []   # the old roadmap's Future section, sequencing preserved
