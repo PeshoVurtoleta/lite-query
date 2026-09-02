@@ -74,6 +74,7 @@ Semantics:
 - invalidate()/refetch() refetch from page one and replace the array on success (stale-while-revalidate over the whole list). A generation guard (pageGen) swallows a late page from a superseded generation -- no partial two-generation mixing.
 - Cross-tab: the pages array syncs via the single entry's setData broadcast; under sharedFetch the leader dedups per page fetch and broadcasts the whole list, followers rebuild flat + cursor.
 - ZERO extra signals per entry: pages ride the entry's data signal (recreated once with a never-equal comparator so a same-ref set after an in-place push still notifies); flat is a non-reactive view. A plain query() entry pays nothing for the seven uniform infinite slots (all null/false/0).
+- One accessor kind per key: do not point a query() and an infiniteQuery() at the same cache key. There is one entry per key, and configuring it as infinite gives its data signal never-equal notification semantics a plain query() observer on that key would inherit -- outside the supported contract.
 
 ### streamQuery(qc, opts) -- subpath @zakkster/lite-query/stream (optional peer @zakkster/lite-stream)
 Multi-shot sibling of query(): subscribes a cache key to an async iterable (SSE/websocket/cursor/pubsub) instead of a one-shot fetch. Values are pumped via lite-stream pipeToSignal into the SAME cache entry query() uses -- getQueryData/invalidate/removeQueries work uniformly. Returns { data, error, status, loading, done, count, droppedCount, restart, dispose }.

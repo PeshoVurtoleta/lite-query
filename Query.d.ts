@@ -273,6 +273,12 @@ export interface InfiniteQueryOptions<
  * `data()` returns a LIVE array: it is appended to in place as pages arrive, so
  * a reference captured across a `fetchNextPage()` will be seen to grow. Copy it
  * (`[...q.data()]`) if you need to retain a point-in-time snapshot of the list.
+ *
+ * One accessor kind per key: do not point a `query()` and an `infiniteQuery()`
+ * at the same cache key. There is one entry per key, and configuring it as
+ * infinite gives its `data` signal never-equal notification semantics that a
+ * plain `query()` observer on that key would inherit -- outside the supported
+ * contract.
  */
 export interface InfiniteQuery<T = unknown> {
     /** The array of raw page results (one entry per fetched page). */
@@ -287,7 +293,7 @@ export interface InfiniteQuery<T = unknown> {
     status: ReadAccessor<QueryStatus>;
     /** Latest page-fetch error, or `undefined`. */
     error: ReadAccessor<unknown>;
-    /** True when any page fetch is in flight. */
+    /** True when any page fetch is in flight (including a background refetch). */
     fetching: ReadAccessor<boolean>;
     /** Refetch the whole list from page one, replacing on success. */
     refetch: () => Promise<unknown>;
