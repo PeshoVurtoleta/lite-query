@@ -90,7 +90,7 @@ function streamQuery(qc, streamOpts) {
     const {
         ensureEntry, attach, detach, opts, feed, setStatus, emitStream,
         sharedStreamActive, broadcast, clientId, claimStreamEpoch,
-        armWatchdog, disarmWatchdog,
+        armWatchdog, disarmWatchdog, emitStreamPromote,
     } = qc._internal;
 
     // -- stream pump ---------------------------------------------------------
@@ -105,7 +105,7 @@ function streamQuery(qc, streamOpts) {
     // follower tabs can project them. Followers never call startStream -- they
     // registerFollower and project incoming frames. `adopt` (V1, C7) preserves
     // the already-projected window/counters across a mid-buffer promotion.
-    function startStream(entry, { adopt = false } = {}) {
+    function startStream(entry, { adopt = false, reason = null } = {}) {
         // Abort an existing pump first (restart / invalidate). The old pump's
         // abort routes to its onAbort (never onError, per lite-stream's abort
         // vocabulary), which snapshots its own counters and nulls its own
@@ -131,11 +131,17 @@ function streamQuery(qc, streamOpts) {
         if (feed.hook !== null) emitStream("stream:start", entry, entry.streamCount, false, null, null);   // site 16
 
         if (shared) {
+            const priorEpoch = entry.projEpoch;          // what we were projecting (promotion telemetry)
             entry.streamShared = true;
             entry.streamOwner = true;
             disarmWatchdog(entry);                       // an owner needs no liveness timer
             const epochSeq = claimStreamEpoch(entry);    // sets streamEpoch, streamSeq = 0
             entry.lastFrameAt = opts.now();
+            // A promotion (reason set by openStream) is feed-visible; the very
+            // first open at construction has no reason and is not a promotion.
+            if (reason !== null && feed.hook !== null) {
+                emitStreamPromote(entry, priorEpoch, epochSeq, true, reason);
+            }
             broadcast({ type: "stream-open", key: entry.key, epochSeq, clientId });
         }
 
@@ -233,7 +239,7 @@ function streamQuery(qc, streamOpts) {
         // A promoted follower re-enters here with adopt:true (V1) -- the entry
         // carries the thunk so Query.js's watchdog/race can start THIS tab's
         // iterator without importing the /stream body.
-        entry.streamPromote = (reason) => startStream(entry, { adopt: true });
+        entry.streamPromote = (reason) => startStream(entry, { adopt: true, reason: reason || "promote" });
     }
 
     // Register this tab as a FOLLOWER of a shared stream: no iterator, project
@@ -257,7 +263,7 @@ function streamQuery(qc, streamOpts) {
         entry.error.set(undefined);
         setStatus(entry, "pending");
         if (feed.hook !== null) emitStream("stream:start", entry, 0, false, null, null);   // site 16
-        entry.streamPromote = (reason) => startStream(entry, { adopt: true });
+        entry.streamPromote = (reason) => startStream(entry, { adopt: true, reason: reason || "promote" });
         entry.lastFrameAt = opts.now();
         broadcast({ type: "stream-req", key: entry.key });
         armWatchdog(entry);

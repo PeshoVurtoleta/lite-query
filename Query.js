@@ -145,7 +145,7 @@ const FEED_NOW = (typeof performance === "object" && performance !== null &&
     ? () => performance.now()
     : () => Date.now();
 
-// The 23 frozen event types, in vocabulary order. One preallocated record per
+// The 26 frozen event types, in vocabulary order. One preallocated record per
 // type is built at inspect() install and dropped at uninstall (T3 ratified): an
 // installed panel under a 60Hz stream allocates zero bytes per frame, and an app
 // that never calls inspect() retains zero feed objects.
@@ -158,6 +158,11 @@ const FEED_TYPES = [
     "stream:start", "stream:value", "stream:done", "stream:error",
     "mutation:start", "mutation:settle",
     "persist:hydrate", "persist:save",
+    // Shared-stream vocabulary (Q8, 23 -> 26; the 10-key record is unchanged).
+    // There is deliberately NO stream:frame-send type -- the leader's broadcast
+    // is already told by tab:send + stream:value, so a fourth per-frame emit
+    // would double 60Hz work for zero new truth (recorded trim).
+    "stream:project", "stream:promote", "stream:gap",
 ];
 
 // Build the per-type pooled record table (cold, once per install). Every record
@@ -344,7 +349,7 @@ export function queryClient(options = {}) {
     // no panel is attached -- the uninstalled branch is the product (OR-5), so
     // every emit site is one `feed.hook !== null` test and nothing (no object, no
     // array, no string, no ts read) is constructed before it passes (A-2). `pool`
-    // holds the 23 per-type records only while installed.
+    // holds the 26 per-type records only while installed.
     const feed = { hook: null, pool: null };
 
     // Synchronous dispatch funnel (OR-7). A throwing hook is contained fail-closed
@@ -390,6 +395,17 @@ export function queryClient(options = {}) {
         ev.key = entry.key; ev.keyHash = entry.keyHash;
         ev.from = null; ev.to = null;
         ev.reason = reason; ev.count = count; ev.ok = ok; ev.value = value;
+        fire(ev);
+    }
+    // stream:promote carries the epoch transition in from/to (prior epoch ->
+    // new epoch); count is the new epochSeq, ok is "won" (true when THIS tab
+    // took ownership, false on abdication). Cold -- a promotion is rare.
+    function emitStreamPromote(entry, fromEpoch, toEpoch, won, reason) {
+        const ev = feed.pool["stream:promote"];
+        ev.type = "stream:promote"; ev.ts = FEED_NOW();
+        ev.key = entry.key; ev.keyHash = entry.keyHash;
+        ev.from = fromEpoch; ev.to = toEpoch;
+        ev.reason = reason; ev.count = toEpoch; ev.ok = won; ev.value = null;
         fire(ev);
     }
     function emitTab(type, reason, ok) {
@@ -446,7 +462,7 @@ export function queryClient(options = {}) {
         if (feed.hook !== null) {
             throw new Error("lite-query: an inspect hook is already installed on this client (single-slot seam)");
         }
-        feed.pool = buildEventPool();      // cold: 23 records, once per install
+        feed.pool = buildEventPool();      // cold: 26 records, once per install
         feed.hook = hook;
         return function uninstallInspect() {
             if (feed.hook === hook) { feed.hook = null; feed.pool = null; }
@@ -598,7 +614,9 @@ export function queryClient(options = {}) {
     function projectFrame(entry, epochSeq, seq, value) {
         if (epochSeq < entry.projEpoch) return;              // dead leader's late frame -> drop
         let gap = 0;
+        let epochChange = false;
         if (epochSeq > entry.projEpoch) {                    // new epoch: first frame or failover
+            epochChange = entry.projEpoch !== -1;            // a real boundary, not the first-ever frame
             entry.projEpoch = epochSeq;
             entry.projSeq = 0;                               // expect seq 1 next (fresh iterator)
         }
@@ -609,7 +627,11 @@ export function queryClient(options = {}) {
         entry.streamCount = (entry.streamCount + 1) | 0;
         if (entry.streamMode === "buffer") projectBuffer(entry, value);
         else entry.data.set(value);                          // latest: one signal write, zero alloc
-        if (gap > 0 && feed.hook !== null) emitStreamGap(entry, gap, "gap");   // C10 (feed no-op until then)
+        if (feed.hook !== null) {                            // cold: only with a panel installed
+            emitStream("stream:project", entry, seq, false, value, null);
+            if (epochChange) emitStreamGap(entry, gap, "epoch-change");
+            else if (gap > 0) emitStreamGap(entry, gap, "gap");
+        }
     }
 
     // Buffer-window projection: a bounded, drop-oldest, newest-last window that
@@ -638,9 +660,12 @@ export function queryClient(options = {}) {
         entry.data.set(next);
     }
 
-    // Gap telemetry emit (C10): stream:gap carries the count of frames missed.
-    // No-op until the feed vocabulary grows in C10.
-    function emitStreamGap(entry, count, reason) { /* C10 */ }
+    // stream:gap carries the count of frames missed (reason "gap" within an
+    // epoch, "epoch-change" at a failover boundary). Reached only behind a
+    // feed.hook null test, so an app with no panel pays nothing.
+    function emitStreamGap(entry, count, reason) {
+        emitStream("stream:gap", entry, count, false, null, reason);
+    }
 
     // Watchdog liveness (OR-3 extended to streams). lastFrameAt is a plain
     // number stamped per frame (zero alloc, no per-value timer churn); ONE
@@ -717,6 +742,7 @@ export function queryClient(options = {}) {
         e.lastFrameAt = opts.now();                  // a claim is liveness evidence
         if (e.streamOwner &&
             rankBelow(e.streamEpoch, clientId, m.epochSeq, m.clientId)) {
+            if (feed.hook !== null) emitStreamPromote(e, e.streamEpoch, m.epochSeq, false, "abdicate");
             closeStream(e);                          // F3/F5: loser reverts to projecting
             e.projEpoch = m.epochSeq;
             e.projSeq = -1;
@@ -737,6 +763,7 @@ export function queryClient(options = {}) {
         e.lastFrameAt = opts.now();
         if (e.streamOwner &&
             rankBelow(e.streamEpoch, clientId, m.epochSeq, m.clientId)) {
+            if (feed.hook !== null) emitStreamPromote(e, e.streamEpoch, m.epochSeq, false, "abdicate");
             closeStream(e);                          // a higher-ranked owner won
             armWatchdog(e);                          // stay live if it then hangs (F3/F7)
         }
@@ -766,6 +793,7 @@ export function queryClient(options = {}) {
         }
         if (e.streamOwner &&
             !rankBelow(m.epochSeq, m.clientId, e.streamEpoch, clientId)) {
+            if (feed.hook !== null) emitStreamPromote(e, e.streamEpoch, m.epochSeq, false, "abdicate");
             closeStream(e);
         }
         e.projEpoch = m.epochSeq;
@@ -1639,7 +1667,7 @@ export function queryClient(options = {}) {
         // Not part of the public surface; documented as such in llms.txt. `feed`
         // is the live per-client cell (V2: a `let` cannot cross the subpath
         // boundary, so the subpath reads the same object through _internal).
-        _internal: { entries, ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, sharedStreamActive, broadcast, clientId, claimStreamEpoch, armWatchdog, disarmWatchdog, closeStream, opts, installPersistHook, feed, setStatus, emitStream, emitClient },
+        _internal: { entries, ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, sharedStreamActive, broadcast, clientId, claimStreamEpoch, armWatchdog, disarmWatchdog, closeStream, opts, installPersistHook, feed, setStatus, emitStream, emitStreamPromote, emitClient },
     };
 }
 

@@ -919,6 +919,132 @@ function untrackErr(tab, key) {
     return e ? e.error() : undefined;
 }
 
+// -- C10: feed vocabulary (3 new types) -------------------------------------
+
+const FEED_KEYS = ["type", "ts", "key", "keyHash", "from", "to", "reason", "count", "ok", "value"];
+
+test("feed: stream:project fires per projected frame with the frozen 10-key shape", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const follower = makeTab(bc, clock, "FP", () => false, { streamIdleTimeout: 100000 });
+    const events = [];
+    const stop = follower.inspect((e) => { if (e.type === "stream:project") events.push({ ...e }); });
+    const fs = streamQuery(follower, { key: ["k"], stream: () => makeControllable().iterable });
+    observe(fs);
+    await drain();
+    const peer = new bc.BroadcastChannel("FP");
+    peer.postMessage({ type: "stream-frame", key: ["k"], epochSeq: 1, clientId: "L", seq: 1, value: "v1" });
+    peer.postMessage({ type: "stream-frame", key: ["k"], epochSeq: 1, clientId: "L", seq: 2, value: "v2" });
+    await drain();
+    assert.equal(events.length, 2, "one stream:project per applied frame");
+    assert.deepEqual(Object.keys(events[0]), FEED_KEYS, "frozen 10-key order");
+    assert.equal(events[0].count, 1, "count is the applied seq");
+    assert.equal(events[0].value, "v1");
+    assert.equal(events[1].count, 2);
+    stop(); fs.dispose(); follower.dispose(); peer.close();
+});
+
+test("feed: stream:gap counts missed frames (gap) and the epoch-change boundary", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const follower = makeTab(bc, clock, "FG", () => false, { streamIdleTimeout: 100000 });
+    const gaps = [];
+    const stop = follower.inspect((e) => { if (e.type === "stream:gap") gaps.push({ reason: e.reason, count: e.count }); });
+    const fs = streamQuery(follower, { key: ["k"], stream: () => makeControllable().iterable });
+    observe(fs);
+    await drain();
+    const peer = new bc.BroadcastChannel("FG");
+    peer.postMessage({ type: "stream-frame", key: ["k"], epochSeq: 1, clientId: "L", seq: 1, value: "a" });
+    peer.postMessage({ type: "stream-frame", key: ["k"], epochSeq: 1, clientId: "L", seq: 4, value: "d" });   // gap 2
+    await drain();
+    peer.postMessage({ type: "stream-frame", key: ["k"], epochSeq: 2, clientId: "M", seq: 1, value: "e" });   // epoch-change
+    await drain();
+    assert.deepEqual(gaps[0], { reason: "gap", count: 2 }, "within-epoch gap of 2 counted");
+    assert.equal(gaps[1].reason, "epoch-change", "failover boundary flagged");
+    stop(); fs.dispose(); follower.dispose(); peer.close();
+});
+
+test("feed: stream:promote carries the epoch transition + won on promotion, and abdicate on loss", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const src = makeControllable();
+    const tab = makeTab(bc, clock, "FPR", () => true, { streamIdleTimeout: 1000 });
+    const proms = [];
+    const stop = tab.inspect((e) => { if (e.type === "stream:promote") proms.push({ ...e }); });
+    const h = streamQuery(tab, { key: ["k"], stream: () => src.iterable });
+    observe(h);
+    await drain();
+    const e = ent(tab, ["k"]);
+    // a strictly higher-ranked open -> this owner abdicates (won:false, "abdicate")
+    const peer = new bc.BroadcastChannel("FPR");
+    peer.postMessage({ type: "stream-open", key: ["k"], epochSeq: e.streamEpoch + 3, clientId: "zzzz" });
+    await drain();
+    const ab = proms.find((p) => p.reason === "abdicate");
+    assert.ok(ab, "abdication emitted");
+    assert.equal(ab.ok, false, "won:false on abdication");
+    assert.deepEqual(Object.keys(ab), FEED_KEYS, "10-key shape");
+    stop(); h.dispose(); tab.dispose(); peer.close();
+});
+
+test("feed: all 26 pooled records carry exactly the 10 frozen keys (A10)", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const follower = makeTab(bc, clock, "A10", () => false, { streamIdleTimeout: 100000 });
+    const byType = new Map();
+    const stop = follower.inspect((e) => { if (!byType.has(e.type)) byType.set(e.type, Object.keys(e)); });
+    const fs = streamQuery(follower, { key: ["k"], stream: () => makeControllable().iterable });
+    observe(fs);
+    await drain();
+    const peer = new bc.BroadcastChannel("A10");
+    peer.postMessage({ type: "stream-frame", key: ["k"], epochSeq: 1, clientId: "L", seq: 3, value: "x" });   // project + gap
+    await drain();
+    for (const [type, keys] of byType) {
+        assert.equal(keys.length, 10, `${type} has 10 own keys`);
+        assert.deepEqual(keys, FEED_KEYS, `${type} keys in frozen order`);
+    }
+    assert.ok(byType.has("stream:project"));
+    assert.ok(byType.has("stream:gap"));
+    stop(); fs.dispose(); follower.dispose(); peer.close();
+});
+
+test("feed: no stream:frame-send type exists -- the leader's frame is told by tab:send only", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const leader = makeTab(bc, clock, "NF", () => true, { streamIdleTimeout: 100000 });
+    const types = new Set();
+    const stop = leader.inspect((e) => types.add(e.type));
+    const src = makeControllable();
+    const h = streamQuery(leader, { key: ["k"], stream: () => src.iterable });
+    observe(h);
+    await drain();
+    src.push(1); await drain();
+    assert.ok(types.has("tab:send"), "the broadcast is told by tab:send");
+    assert.ok(types.has("stream:value"), "and its local set by stream:value");
+    assert.ok(!types.has("stream:frame-send"), "no fourth per-frame type (deliberate trim)");
+    stop(); h.dispose(); leader.dispose();
+});
+
+test("feed: zero-cost off -- a non-shared stream never emits stream:project/promote/gap", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const solo = queryClient({
+        crossTab: true, broadcastChannel: bc.BroadcastChannel, crossTabChannel: "ZC",
+        now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
+    });
+    const types = new Set();
+    const stop = solo.inspect((e) => types.add(e.type));
+    const src = makeControllable();
+    const h = streamQuery(solo, { key: ["k"], stream: () => src.iterable });
+    observe(h);
+    await drain();
+    src.push(1); src.push(2); await drain();
+    assert.ok(types.has("stream:value"));
+    assert.ok(!types.has("stream:project"), "no projection off the shared path");
+    assert.ok(!types.has("stream:promote"));
+    assert.ok(!types.has("stream:gap"));
+    stop(); h.dispose(); solo.dispose();
+});
+
 test("shared-stream: sharedStreamActive requires opt-in + a leader oracle + a channel", async () => {
     const clock = createMockClock();
     const bc = createMockBroadcastChannel();
