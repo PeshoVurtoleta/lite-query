@@ -1126,3 +1126,42 @@ test("shared-stream: sharedStreamActive requires opt-in + a leader oracle + a ch
     noOracle.dispose();
     peer.close();
 });
+
+// -- Q9 (C7): the LS4 writer-slot swap -------------------------------------
+
+test("shared-stream: projWriter is installed in buffer mode only, null after release, absent in latest mode", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+
+    // Buffer-mode follower: the lite-stream writer slot is installed on register.
+    const bufFollower = makeTab(bc, clock, "W1", () => false, { streamIdleTimeout: 1000 });
+    const bfs = streamQuery(bufFollower, { key: ["k"], mode: "buffer", maxBuffer: 4, stream: () => makeControllable().iterable });
+    const dbf = observe(bfs);
+    await drain();
+    const be = ent(bufFollower, ["k"]);
+    assert.notEqual(be.projWriter, null, "buffer follower carries a lite-stream writer");
+    const peer = new bc.BroadcastChannel("W1");
+    peer.postMessage({ type: "stream-frame", key: ["k"], epochSeq: 1, clientId: "L", seq: 1, value: "x" });
+    await drain();
+    assert.notEqual(be.projWindow, null, "the writer shim mirrored the window while following");
+    // Detach -> releaseProjection ends the writer and nulls the slot.
+    dbf();
+    await drain();
+    assert.equal(be.projWriter, null, "the writer slot is released on detach");
+    assert.equal(be.projWindow, null, "the mirrored window is released too");
+    bfs.dispose(); bufFollower.dispose(); peer.close();
+
+    // Latest-mode follower: core-only projection, no writer ever installed.
+    const latestFollower = makeTab(bc, clock, "W2", () => false, { streamIdleTimeout: 1000 });
+    const lfs = streamQuery(latestFollower, { key: ["k"], stream: () => makeControllable().iterable });
+    const dlf = observe(lfs);
+    await drain();
+    const le = ent(latestFollower, ["k"]);
+    assert.equal(le.projWriter, null, "latest follower never installs a writer (byte-identical to 2.0.0)");
+    const peer2 = new bc.BroadcastChannel("W2");
+    peer2.postMessage({ type: "stream-frame", key: ["k"], epochSeq: 1, clientId: "L", seq: 1, value: "y" });
+    await drain();
+    assert.equal(latestFollower.getQueryData(["k"]), "y", "latest projection writes the value straight through");
+    assert.equal(le.projWriter, null, "still no writer after a frame in latest mode");
+    dlf(); lfs.dispose(); latestFollower.dispose(); peer2.close();
+});

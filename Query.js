@@ -840,6 +840,16 @@ export function queryClient(options = {}) {
         entry.projEpoch = -1;
         entry.projClientId = null;
         entry.projSeq = -1;
+        // LS4 seam teardown (Q9): end the buffer writer before dropping the window.
+        // end() is idempotent, never writes to the target, and nulls the writer's
+        // internal win/tgt -- which releases the shim closure's capture of this
+        // entry (the retention the release ladder exists to prevent). streamDropped
+        // was already mirrored each frame, so droppedCount() post-release is
+        // unaffected by the terminal freeze.
+        if (entry.projWriter !== null) {
+            try { entry.projWriter.end(); } catch { /* terminal freeze must never throw out of release */ }
+            entry.projWriter = null;
+        }
         entry.projWindow = null;
         entry.lastFrameAt = 0;
     }
@@ -861,8 +871,8 @@ export function queryClient(options = {}) {
     // signal write, so duplication and reordering are STRUCTURALLY impossible
     // (not merely untested); frame loss is permitted and counted. Latest mode is
     // a single signal write + field stores -- zero allocation per frame. Buffer
-    // mode routes through projectBuffer (C5), whose budget is one snapshot array
-    // per frame (the parity contract).
+    // mode routes through the entry's lite-stream writer (the LS4 seam, Q9): the
+    // hand-rolled drop-oldest ring is gone -- lite-stream 1.4.0 owns that discipline.
     function projectFrame(entry, epochSeq, frameClientId, seq, value) {
         // The projection cursor is the TRIPLE (projEpoch, projClientId, projSeq):
         // an epoch is not a unique owner. Two tabs promoting from the same
@@ -897,39 +907,18 @@ export function queryClient(options = {}) {
         entry.projSeq = seq;
         if (entry.streamCount === 0) setStatus(entry, "streaming");
         entry.streamCount = (entry.streamCount + 1) | 0;
-        if (entry.streamMode === "buffer") projectBuffer(entry, value);
+        // LS4 seam (Q9, OR-8): a buffer-mode follower carries a lite-stream writer
+        // installed from /stream; latest mode (and any plain entry) leaves it null
+        // and writes the value straight through. One null check replaces the prior
+        // streamMode string compare; droppedCount is a getter read (zero alloc).
+        const w = entry.projWriter;
+        if (w !== null) { w.push(value); entry.streamDropped = w.droppedCount; }
         else entry.data.set(value);                          // latest: one signal write, zero alloc
         if (feed.hook !== null) {                            // cold: only with a panel installed
             emitStream("stream:project", entry, seq, false, value, null);
             if (epochChange) emitStreamGap(entry, gap, "epoch-change");
             else if (gap > 0) emitStreamGap(entry, gap, "gap");
         }
-    }
-
-    // Buffer-window projection: a bounded, drop-oldest, newest-last window that
-    // publishes a FRESH snapshot array per frame -- parity-identical to
-    // lite-stream's pipeToSignal buffer mode (the differential test is the
-    // contract). Budget is exactly ONE array allocation per push: the window is
-    // held non-reactively in entry.projWindow so the previous snapshot is read
-    // without a signal round-trip or an untrack closure, and slice()+push builds
-    // the one new array. Values are never copied -- element identity is by
-    // reference (A6).
-    function projectBuffer(entry, value) {
-        const max = entry.streamMaxBuffer;
-        const base = entry.projWindow;
-        let next;
-        if (base === null) {
-            next = [value];
-        } else if (base.length < max) {
-            next = base.slice();
-            next.push(value);
-        } else {
-            next = base.slice(1);                        // drop oldest
-            next.push(value);                            // append newest
-            entry.streamDropped = (entry.streamDropped + 1) | 0;
-        }
-        entry.projWindow = next;
-        entry.data.set(next);
     }
 
     // stream:gap carries the count of frames missed (reason "gap" within an
@@ -1143,6 +1132,7 @@ export function queryClient(options = {}) {
             streamPromote: null,         // (reason) => open THIS tab's iterator (adopt path, V1)
             streamPromoting: false,      // a promotion microtask is in flight (double-promote guard)
             projWindow: null,            // buffer-mode follower window (last snapshot array)
+            projWriter: null,            // lite-stream 1.4.0 buffer writer (push/end/error/droppedCount), or null (LS4 seam, Q9)
             // Infinite-query slots -- uniform on every entry (same monomorphism
             // rule as the stream slots above). A plain query() entry leaves all
             // seven at their null/false/0 defaults and allocates no extra node;

@@ -33,7 +33,7 @@ import {
     signal, effect, onCleanup, untrack, isTracking, createRoot,
     dispose as disposeNode
 } from "@zakkster/lite-signal";
-import { pipeToSignal } from "@zakkster/lite-stream";
+import { pipeToSignal, createSignalWriter } from "@zakkster/lite-stream";
 
 /**
  * Define a streaming query. Lazy: no iterator is pulled until something reads
@@ -258,6 +258,19 @@ function streamQuery(qc, streamOpts) {
         entry.projClientId = null;
         entry.projSeq = -1;
         entry.projWindow = null;
+        // LS4 seam (Q9, OR-8): buffer-mode followers window through lite-stream
+        // 1.4.0's createSignalWriter rather than a hand-rolled ring. The writer
+        // owns its buffer privately, so the target is a per-registration SHIM that
+        // mirrors each snapshot into BOTH entry.projWindow (the non-reactive last
+        // window a frozen test asserts) and entry.data (the reactive accessor).
+        // The shim is a legal target: lite-stream requires only target.set to be a
+        // function. Latest mode stays core-only (entry.data.set per frame) -- no
+        // writer, so a plain-query or latest follower tab is byte-identical to
+        // 2.0.0. One cold allocation per follower registration; ZERO per frame.
+        if (mode === "buffer") {
+            const shim = { set(v) { entry.projWindow = v; entry.data.set(v); } };
+            entry.projWriter = createSignalWriter(shim, { mode: "buffer", maxBuffer });
+        }
         entry.streamCount = 0;
         entry.streamDropped = 0;
         entry.invalidatedSinceCompletion = false;
