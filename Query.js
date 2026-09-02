@@ -396,6 +396,31 @@ export function queryClient(options = {}) {
         ev.reason = reason; ev.count = count; ev.ok = ok; ev.value = value;
         fire(ev);
     }
+    function emitStatus(entry, from, to) {
+        const ev = feed.pool["entry:status"];
+        ev.type = "entry:status"; ev.ts = FEED_NOW();
+        ev.key = entry.key; ev.keyHash = entry.keyHash;
+        ev.from = from; ev.to = to;
+        ev.reason = null; ev.count = 0; ev.ok = false; ev.value = null;
+        fire(ev);
+    }
+
+    // The status write funnel (site 6). Emits entry:status AFTER the signal
+    // commit so a re-entering hook observes committed state; fires even when
+    // from === to (a setQueryData re-write is a real cache write). The prior
+    // status is read UNTRACKED (a tracked read would subscribe -- setQueryData /
+    // invalidate are legal inside a user effect, V3). Uninstalled cost: one call
+    // frame + one null test; no status write occurs on the warm read path (V7).
+    function setStatus(entry, to) {
+        if (feed.hook !== null) {
+            _se = entry;
+            const from = untrack(READ_STATUS);
+            entry.status.set(to);
+            emitStatus(entry, from, to);
+            return;
+        }
+        entry.status.set(to);
+    }
 
     // Install the single devtools feed hook (Q7). Mirrors installPersistHook's
     // two throw shapes exactly (TypeError on a non-function -- a hook array lands
@@ -527,6 +552,7 @@ export function queryClient(options = {}) {
             // Entry has no observers yet -- schedule GC immediately. attach()
             // will cancel this if an observer arrives before the timer fires.
             scheduleGc(e);
+            if (feed.hook !== null) emitEntry("entry:create", e, 0, null);   // site 1
         }
         return e;
     }
@@ -576,6 +602,7 @@ export function queryClient(options = {}) {
                 entries.delete(entry.keyHash);
                 disposeEntry(entry);
                 notifyWrite();                           // hook site 6: an expired entry leaves the snapshot
+                if (feed.hook !== null) emitEntry("entry:gc", entry, 0, null);   // site 4
             }
         }, entry.cacheTime);
         // In Node, unref'd timers don't prevent process exit. This means a
@@ -611,6 +638,7 @@ export function queryClient(options = {}) {
             if (queryOpts.equals     !== undefined)      entry.equals     = queryOpts.equals;
         }
         entry.observerCount++;
+        if (feed.hook !== null) emitEntry("entry:attach", entry, entry.observerCount, null);   // site 2
         cancelGc(entry);
     }
 
@@ -623,6 +651,7 @@ export function queryClient(options = {}) {
 
     function detach(entry) {
         entry.observerCount--;
+        if (feed.hook !== null) emitEntry("entry:detach", entry, entry.observerCount, null);   // site 3
         if (entry.observerCount === 0) {
             // Last observer gone -- abort in-flight if any. Resolution paths
             // gate on the generation guard, so a late resolution is harmless.
@@ -631,7 +660,7 @@ export function queryClient(options = {}) {
                 entry.abortController = null;
                 entry.promise = null;
                 entry.fetching.set(false);
-                if (entry.status() === "pending") entry.status.set("idle");
+                if (entry.status() === "pending") setStatus(entry, "idle");
             }
             // Last observer gone on a stream -- close the connection. The entry
             // stays cached (scheduleGc); a re-attach before GC re-establishes a
@@ -641,7 +670,7 @@ export function queryClient(options = {}) {
                 entry.streamStop = null;
                 entry.streamRestart = null;
                 const s = entry.status();
-                if (s === "pending" || s === "streaming") entry.status.set("idle");
+                if (s === "pending" || s === "streaming") setStatus(entry, "idle");
             }
             clearSharedTimer(entry);
             scheduleGc(entry);
@@ -684,7 +713,7 @@ export function queryClient(options = {}) {
     function requestSharedFetch(entry) {
         entry.fetching.set(true);
         if (entry.data() === undefined && entry.status() !== "error") {
-            entry.status.set("pending");
+            setStatus(entry, "pending");
         }
         broadcast({ type: "fetch-req", key: entry.key });
         clearSharedTimer(entry);
@@ -729,7 +758,7 @@ export function queryClient(options = {}) {
         entry.abortController = ac;
         entry.fetching.set(true);
         if (entry.data() === undefined && entry.status() !== "error") {
-            entry.status.set("pending");
+            setStatus(entry, "pending");
         }
 
         // Per-query timeout. If specified and finite, set up a timer that
@@ -798,7 +827,7 @@ export function queryClient(options = {}) {
                     commitPage(entry, outcome.data, startPageGen, startCursor);
                 } catch (commitErr) {
                     entry.error.set(commitErr);
-                    entry.status.set("error");
+                    setStatus(entry, "error");
                     entry.lastCompletedAt = opts.now();
                     entry.invalidatedSinceCompletion = false;
                     entry.fetching.set(false);
@@ -814,7 +843,7 @@ export function queryClient(options = {}) {
                     entry.data.set(outcome.data);
                 }
                 entry.error.set(undefined);
-                entry.status.set("success");
+                setStatus(entry, "success");
                 // Shared-fetch: the leader broadcasts its results so follower
                 // tabs receive them without issuing their own network calls. An
                 // infinite entry broadcasts the WHOLE pages array (one entry,
@@ -825,7 +854,7 @@ export function queryClient(options = {}) {
                 }
             } else {
                 entry.error.set(outcome.err);
-                entry.status.set("error");
+                setStatus(entry, "error");
             }
 
             entry.lastCompletedAt = opts.now();
@@ -885,7 +914,7 @@ export function queryClient(options = {}) {
             e.data.set(newVal);
         }
         e.error.set(undefined);
-        e.status.set("success");
+        setStatus(e, "success");
         e.lastCompletedAt = opts.now();
         // If a shared-fetch follower was awaiting the leader's result, this IS
         // that result -- stop the loading state and cancel the fallback timer.
@@ -901,6 +930,7 @@ export function queryClient(options = {}) {
         for (const e of entries.values()) {
             if (!keyMatches(e.key, key, exact)) continue;
             e.invalidatedSinceCompletion = true;
+            if (feed.hook !== null) emitEntry("entry:stale", e, 0, "invalidate");   // site 7
             if (e.isStream) {
                 // A stream is invalidated by aborting and re-establishing it.
                 // streamRestart is installed by streamQuery while observed; if
@@ -953,6 +983,7 @@ export function queryClient(options = {}) {
             clearSharedTimer(e);
             entries.delete(h);
             disposeEntry(e);
+            if (feed.hook !== null) emitEntry("entry:remove", e, 0, "remove");   // site 5a
             removed++;
         }
         if (removed > 0) notifyWrite();                  // hook site 4: only when >= 1 entry matched
@@ -966,6 +997,7 @@ export function queryClient(options = {}) {
             cancelGc(e);
             clearSharedTimer(e);
             disposeEntry(e);
+            if (feed.hook !== null) emitEntry("entry:remove", e, 0, "clear");   // site 5b
         }
         entries.clear();
         if (had) notifyWrite();                          // hook site 5: map was non-empty (persists emptiness)
@@ -1114,7 +1146,7 @@ export function queryClient(options = {}) {
     function seedEntry(e, rec) {
         e.data.set(rec.data);
         e.error.set(undefined);
-        e.status.set("success");
+        setStatus(e, "success");
         e.lastCompletedAt = Math.min(rec.dataUpdatedAt, opts.now());
         e.invalidatedSinceCompletion = false;
     }
@@ -1137,7 +1169,7 @@ export function queryClient(options = {}) {
         e.nextCursor = null;
         e.hasNext = false;
         e.error.set(undefined);
-        e.status.set("success");
+        setStatus(e, "success");
         e.lastCompletedAt = Math.min(rec.dataUpdatedAt, opts.now());
         e.invalidatedSinceCompletion = false;
     }
@@ -1184,6 +1216,7 @@ export function queryClient(options = {}) {
                 cancelGc(e);
                 entries.delete(e.keyHash);
                 disposeEntry(e);
+                if (feed.hook !== null) emitEntry("entry:remove", e, 0, "hydrate-rollback");   // site 5c
             }
             return { ok: false, count: 0, reason: "malformed-entry" };
         }
@@ -1225,7 +1258,7 @@ export function queryClient(options = {}) {
         // Not part of the public surface; documented as such in llms.txt. `feed`
         // is the live per-client cell (V2: a `let` cannot cross the subpath
         // boundary, so the subpath reads the same object through _internal).
-        _internal: { entries, ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, opts, installPersistHook, feed },
+        _internal: { entries, ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, opts, installPersistHook, feed, setStatus },
     };
 }
 
@@ -1471,7 +1504,7 @@ export function infiniteQuery(qc, infOpts) {
         throw new TypeError("infiniteQuery: `getNextCursor` must be a function (lastPage, allPages) => cursor | null");
     }
 
-    const { ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, opts } = qc._internal;
+    const { ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, opts, setStatus } = qc._internal;
 
     // Configure a fresh entry as infinite exactly once. The data signal is
     // recreated with NEVER_EQUAL so an in-place page push (same array ref)
@@ -1496,7 +1529,7 @@ export function infiniteQuery(qc, infOpts) {
                 } catch {
                     resetPages(entry);
                     entry.data.set(undefined);
-                    entry.status.set("idle");
+                    setStatus(entry, "idle");
                     entry.lastCompletedAt = -Infinity;
                 }
             }
