@@ -525,11 +525,30 @@ export function queryClient(options = {}) {
     }
     let queueStore = null;
     let queueSeq = 0;
+    // Single-flight guard for replayQueue (G6 in-run exactly-once BY
+    // CONSTRUCTION): a re-entrant call while one is running rejects LQ_REPLAY_BUSY
+    // rather than interleaving two dispatch loops over the same durable store.
+    let replaying = false;
 
     // Number of durably-enqueued mutations (0 when the queue was never touched).
     // Read-only introspection for retention assertions and caller UI.
     function queueSize() {
         return queueStore === null ? 0 : queueStore.length;
+    }
+
+    // Remove the record with this id from the durable store (cold). A linear scan
+    // -- the queue is small (bounded by maxQueue) and this is off the warm path.
+    function removeQueueRecord(id) {
+        if (queueStore === null) return;
+        for (let i = 0; i < queueStore.length; i++) {
+            if (queueStore[i].id === id) { queueStore.splice(i, 1); return; }
+        }
+    }
+
+    // Build the per-item replay result -- exactly 5 own keys in the frozen order,
+    // at THIS one site (monomorphic; a panel's reads stay one hidden class).
+    function queueItemResult(rec, itemStatus, value, reason) {
+        return { id: rec.id, key: rec.key, status: itemStatus, value, reason };
     }
 
     // Enqueue a mutation record (cold, one per offline dispatch). Builds the
@@ -553,6 +572,114 @@ export function queryClient(options = {}) {
         queueStore.push(rec);
         if (feed.hook !== null) emitQueue("queue:enqueue", key, keyHash, queueStore.length, true, vars, null);
         return rec;
+    }
+
+    // Replay the durable queue (T3, OR-4). The CALLER triggers it (the library
+    // never watches connectivity); `resolve(record) -> fn | null` maps a record
+    // back to the handler that re-runs it (keyed off record.name -- what a
+    // reloaded tab resolves the handler by). Strictly sequential FIFO (await each)
+    // so order is preserved globally and therefore per key. Single-flight (G6):
+    // a re-entrant call rejects LQ_REPLAY_BUSY. Per-item results are surfaced; a
+    // record whose entry no longer exists, or whose handler cannot be resolved, is
+    // DROPPED (never silently retried); a handler REJECTION keeps the item queued
+    // (tries++) for the next call; a handler RESOLUTION removes it (at-least-once
+    // ordering in doReplayItem). Rejection is tracked by CONTROL FLOW, never by
+    // truthiness -- a falsy rejection settles "error" (ON-3-of-Q8 governs replay).
+    function replayQueue(resolve) {
+        if (typeof resolve !== "function") {
+            throw new TypeError("lite-query: replayQueue(resolve) requires a resolver function (record) => fn | null");
+        }
+        if (replaying) {
+            const err = new Error("lite-query: replayQueue is already running (single-flight)");
+            err.code = "LQ_REPLAY_BUSY";
+            return Promise.reject(err);
+        }
+        if (queueStore === null || queueStore.length === 0) {
+            return Promise.resolve({ status: "empty", total: 0, replayed: 0, failed: 0, dropped: 0, items: [] });
+        }
+        replaying = true;
+        return doReplay(resolve).finally(() => { replaying = false; });
+    }
+
+    async function doReplay(resolve) {
+        // Snapshot the records present NOW (FIFO order): an enqueue that lands
+        // during replay rides the NEXT call, and removal walks the LIVE store by
+        // id so the snapshot index never goes stale under a splice.
+        const snapshot = queueStore.slice();
+        const items = [];
+        let replayed = 0, failed = 0, dropped = 0;
+        for (let i = 0; i < snapshot.length; i++) {
+            const rec = snapshot[i];
+            // An entry that no longer exists -> DROPPED, never dispatched, never
+            // silently retried (OR-3). Resolver failures drop identically.
+            if (entries.get(rec.keyHash) === undefined) {
+                items.push(queueItemResult(rec, "dropped", undefined, "entry-missing"));
+                removeQueueRecord(rec.id); dropped++;
+                if (feed.hook !== null) emitQueue("queue:settle", rec.key, rec.keyHash, queueStore.length, false, null, "entry-missing");
+                continue;
+            }
+            let handler;
+            let resolverThrew = false;
+            try { handler = resolve(rec); } catch { resolverThrew = true; }
+            if (resolverThrew) {
+                items.push(queueItemResult(rec, "dropped", undefined, "resolver-threw"));
+                removeQueueRecord(rec.id); dropped++;
+                if (feed.hook !== null) emitQueue("queue:settle", rec.key, rec.keyHash, queueStore.length, false, null, "resolver-threw");
+                continue;
+            }
+            if (typeof handler !== "function") {
+                items.push(queueItemResult(rec, "dropped", undefined, "handler-unresolved"));
+                removeQueueRecord(rec.id); dropped++;
+                if (feed.hook !== null) emitQueue("queue:settle", rec.key, rec.keyHash, queueStore.length, false, null, "handler-unresolved");
+                continue;
+            }
+            // Dispatch: tries increments per attempt. The item stays durable until
+            // its terminal result exists (at-least-once, OR-6 -- see doReplayItem).
+            rec.tries = (rec.tries + 1) | 0;
+            if (feed.hook !== null) emitQueue("queue:replay", rec.key, rec.keyHash, queueSize(), false, rec.vars, null);
+            let value;
+            let rejected = false;
+            try { value = await handler(rec.vars); } catch (err) { rejected = true; value = err; }
+            const r = doReplayItem(rec, value, rejected);
+            items.push(r);
+            if (rejected) failed++; else replayed++;
+            if (feed.hook !== null) emitQueue("queue:settle", rec.key, rec.keyHash, queueSize(), !rejected, value, r.reason);
+        }
+        return { status: "done", total: snapshot.length, replayed, failed, dropped, items };
+    }
+
+    // Terminal disposition of one replayed item (OR-6 at-least-once ordering, made
+    // explicit in C6): the record's terminal result is recorded FIRST; ONLY THEN
+    // is it removed from the durable store. A rejection (tracked by control flow,
+    // falsy included) keeps the item queued for the next call. A resolution builds
+    // the "ok" result, then removes the record.
+    function doReplayItem(rec, value, rejected) {
+        if (rejected) {
+            return queueItemResult(rec, "error", value, null);
+        }
+        const r = queueItemResult(rec, "ok", value, null);
+        removeQueueRecord(rec.id);
+        return r;
+    }
+
+    // The poison-item exit (ON-4). An offline queue with no removal surface traps
+    // a permanently-rejected mutation forever; dropQueued is the caller's explicit
+    // eviction. Found -> removed, persisted through the same save path, one
+    // queue:drop feed event (reason "caller-dropped"), returns true. Absent
+    // (including queueStore === null) -> returns false: an ANSWER, not an error,
+    // never a throw. Rejected-forever items stay visible via per-item results +
+    // tries until the caller chooses this exit.
+    function dropQueued(id) {
+        if (queueStore === null) return false;
+        for (let i = 0; i < queueStore.length; i++) {
+            if (queueStore[i].id === id) {
+                const rec = queueStore[i];
+                queueStore.splice(i, 1);
+                if (feed.hook !== null) emitQueue("queue:drop", rec.key, rec.keyHash, queueStore.length, false, null, "caller-dropped");
+                return true;
+            }
+        }
+        return false;
     }
 
     // Highest epochSeq this client has ever seen on any shared-stream key.
@@ -1755,6 +1882,13 @@ export function queryClient(options = {}) {
         // Read-only count of durably-enqueued offline mutations (Q9). 0 when the
         // queue was never touched (queueStore === null); null is not zero.
         queueSize,
+        // Replay the durable offline queue (caller-triggered, OR-4). Sequential
+        // FIFO, single-flight, per-item results surfaced; at-least-once across a
+        // crash. See llms.txt for the resolver contract and result shapes.
+        replayQueue,
+        // The poison-item exit (ON-4): evict one permanently-rejected record by
+        // id. Returns true if found+removed, false if absent -- never throws.
+        dropQueued,
         // Internal API consumed by query()/mutation() and the /stream subpath.
         // Not part of the public surface; documented as such in llms.txt. `feed`
         // is the live per-client cell (V2: a `let` cannot cross the subpath
