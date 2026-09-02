@@ -605,8 +605,9 @@ export function queryClient(options = {}) {
             entry.gcTimerId = null;
             if (entry.observerCount === 0) {
                 if (entry.abortController) {
+                    const was = entry.abortController.signal.aborted;   // QD-2: emit at most once per controller
                     entry.abortController.abort(ABORT_REASON.REMOVED);
-                    if (feed.hook !== null) emitFetch("fetch:abort", entry, entry.fetchGen, false, null, ABORT_REASON.REMOVED);   // site 10 (gc)
+                    if (was === false && feed.hook !== null) emitFetch("fetch:abort", entry, entry.fetchGen, false, null, ABORT_REASON.REMOVED);   // site 10 (gc)
                 }
                 entries.delete(entry.keyHash);
                 disposeEntry(entry);
@@ -665,8 +666,9 @@ export function queryClient(options = {}) {
             // Last observer gone -- abort in-flight if any. Resolution paths
             // gate on the generation guard, so a late resolution is harmless.
             if (entry.abortController) {
+                const was = entry.abortController.signal.aborted;   // QD-2: emit at most once per controller
                 entry.abortController.abort(ABORT_REASON.DETACH);
-                if (feed.hook !== null) emitFetch("fetch:abort", entry, entry.fetchGen, false, null, ABORT_REASON.DETACH);   // site 10 (detach)
+                if (was === false && feed.hook !== null) emitFetch("fetch:abort", entry, entry.fetchGen, false, null, ABORT_REASON.DETACH);   // site 10 (detach)
                 entry.abortController = null;
                 entry.promise = null;
                 entry.fetching.set(false);
@@ -757,8 +759,9 @@ export function queryClient(options = {}) {
         // Abort any prior in-flight fetch. The old promise's resolution will
         // be filtered by the generation guard below.
         if (entry.abortController) {
+            const was = entry.abortController.signal.aborted;   // QD-2: emit at most once per controller
             entry.abortController.abort(ABORT_REASON.REFETCH);
-            if (feed.hook !== null) emitFetch("fetch:abort", entry, entry.fetchGen, false, null, ABORT_REASON.REFETCH);   // site 10 (supersede)
+            if (was === false && feed.hook !== null) emitFetch("fetch:abort", entry, entry.fetchGen, false, null, ABORT_REASON.REFETCH);   // site 10 (supersede)
         }
 
         const gen = ++entry.fetchGen;
@@ -782,8 +785,9 @@ export function queryClient(options = {}) {
         let timeoutId = null;
         if (entry.timeout != null && isFinite(entry.timeout)) {
             timeoutId = opts.setTimeout(() => {
+                const was = ac.signal.aborted;   // QD-2: emit at most once per controller
                 ac.abort(ABORT_REASON.TIMEOUT);
-                if (feed.hook !== null) emitFetch("fetch:abort", entry, gen, false, null, ABORT_REASON.TIMEOUT);   // site 10 (timeout)
+                if (was === false && feed.hook !== null) emitFetch("fetch:abort", entry, gen, false, null, ABORT_REASON.TIMEOUT);   // site 10 (timeout)
             }, entry.timeout);
             if (timeoutId && typeof timeoutId.unref === "function") {
                 timeoutId.unref();
@@ -998,8 +1002,9 @@ export function queryClient(options = {}) {
         for (const [h, e] of [...entries]) {
             if (!keyMatches(e.key, key, exact)) continue;
             if (e.abortController) {
+                const was = e.abortController.signal.aborted;   // QD-2: emit at most once per controller
                 e.abortController.abort(ABORT_REASON.REMOVED);
-                if (feed.hook !== null) emitFetch("fetch:abort", e, e.fetchGen, false, null, ABORT_REASON.REMOVED);   // site 10 (removeQueries)
+                if (was === false && feed.hook !== null) emitFetch("fetch:abort", e, e.fetchGen, false, null, ABORT_REASON.REMOVED);   // site 10 (removeQueries)
             }
             cancelGc(e);
             clearSharedTimer(e);
@@ -1016,8 +1021,9 @@ export function queryClient(options = {}) {
         const had = entries.size > 0;
         for (const e of entries.values()) {
             if (e.abortController) {
+                const was = e.abortController.signal.aborted;   // QD-2: emit at most once per controller
                 e.abortController.abort(ABORT_REASON.REMOVED);
-                if (feed.hook !== null) emitFetch("fetch:abort", e, e.fetchGen, false, null, ABORT_REASON.REMOVED);   // site 10 (clear)
+                if (was === false && feed.hook !== null) emitFetch("fetch:abort", e, e.fetchGen, false, null, ABORT_REASON.REMOVED);   // site 10 (clear)
             }
             cancelGc(e);
             clearSharedTimer(e);

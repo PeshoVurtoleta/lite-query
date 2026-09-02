@@ -58,24 +58,34 @@ const BREAK = process.env.QUERY_TORTURE_BREAK === "1" || process.env.QUERY_TORTU
 // disables. The C-feed control (QUERY_TORTURE_BREAK=feed) skips exactly ONE
 // entry:attach bookkeeping update -> a guaranteed detach-without-attach.
 //
-// The gated invariant is a GLOBAL running balance, not a per-keyHash epoch. A
+// The gated invariants are BALANCES, not per-keyHash sequence epochs (QD-2). A
 // keyHash is NOT a stable identity under this fuzzer: it deliberately
 // removeQueries()es OBSERVED entries and then restart()/refetch()es the now-
 // stranded handles, so a removed-and-disposed entry OBJECT and a freshly-created
-// one legitimately emit on the SAME keyHash at the same time -- a per-keyHash
-// machine cannot separate those instances and would false-flag. The attach/detach
-// balance is the one lifecycle invariant that survives aliasing AND does not
-// double-fire: cumulative entry:attach - entry:detach == the sum of live
-// observerCounts, which is >= 0 at every instant (each event fires AFTER its
-// ++/-- commit, sites 2/3, exactly once per observer transition). A detach that
-// drives the running total below zero is detach-without-attach -- the C-feed
-// control's signature. (A fetch-balance was tried and dropped: an already-aborted
-// controller that a later site re-aborts emits a SECOND, honest fetch:abort for
-// one dispatch, so dispatch/resolve is not a clean balance -- a budget that moves
-// under legal chaos is not a gate.) tab:send/receive are counted and bounded
-// (receives <= sends * (tabs-1), else an echo loop shows as receive-overflow).
-// shared:*/mutation:*/persist:* are not fuzz-reachable here (sharedFetch off, no
-// mutations/persisters) -- excluded from the coverage set (G4).
+// one legitimately emit on the SAME keyHash at the same time. A per-keyHash
+// SEQUENCE machine cannot separate those instances and would false-flag -- and
+// the 10-key vocabulary is frozen, so no entry-identity discriminator can be
+// added. Hence the sequence-order rules (create-over-live, event-after-remove,
+// status-from-mismatch, the per-hash stream ladder) STAY DROPPED (operator ruling
+// QD-2): they are unresolvable without entry identity.
+//
+// What DOES hold under aliasing is additive balance -- the sum of two balanced
+// streams is balanced -- so these are gated:
+//   1. attach/detach: cumulative entry:attach - entry:detach == the sum of live
+//      observerCounts, >= 0 at every instant (each event fires AFTER its ++/--
+//      commit, sites 2/3, once per transition). A detach below zero is
+//      detach-without-attach -- the C-feed control's signature.
+//   2. fetch dispatch/resolve: after teardown drains, fetch:dispatch count ==
+//      fetch:settle + fetch:abort count, PER-HASH and GLOBAL, strict equality.
+//      Each dispatched controller resolves EXACTLY once (settle OR the first
+//      abort); QD-2's `was = signal.aborted` guard makes a re-aborted controller
+//      emit no second fetch:abort, so the balance is exact. (No verified
+//      counter-example forces a tolerance; if one ever does it is recorded here
+//      verbatim, never silently loosened.)
+// tab:send/receive are counted and bounded (receives <= sends * (tabs-1), else an
+// echo loop shows as receive-overflow). shared:*/mutation:*/persist:* are not
+// fuzz-reachable here (sharedFetch off, no mutations/persisters) -- excluded from
+// the coverage set (G4).
 const FEED_ASSERT = process.env.TORTURE_FEED !== "0";
 const FEED_BREAK = process.env.QUERY_TORTURE_BREAK === "feed";
 const feedViolations = [];
@@ -83,6 +93,8 @@ const feedCoverage = new Set();
 let tabSends = 0, tabReceives = 0;
 let feedBreakArmed = FEED_BREAK;
 let atCount = 0, dtCount = 0;          // cumulative attach / detach (global, >= 0)
+let dispatchTotal = 0, resolveTotal = 0;   // cumulative fetch dispatch / (settle+abort)
+const fetchByHash = new Map();        // keyHash -> { dispatch, resolve }
 const EXPECTED_TYPES = [
     "entry:create", "entry:attach", "entry:detach", "entry:gc", "entry:remove",
     "entry:status", "entry:stale", "fetch:dispatch", "fetch:settle", "fetch:abort",
@@ -90,6 +102,11 @@ const EXPECTED_TYPES = [
 ];
 function feedViolate(rule, keyHash, detail) {
     if (feedViolations.length < 10000) feedViolations.push({ rule, keyHash, detail: detail || null });
+}
+function fetchSlot(kh) {
+    let f = fetchByHash.get(kh);
+    if (f === undefined) { f = { dispatch: 0, resolve: 0 }; fetchByHash.set(kh, f); }
+    return f;
 }
 function feedStep(e) {
     const t = e.type;
@@ -104,6 +121,15 @@ function feedStep(e) {
         case "entry:detach":
             dtCount++;
             if (dtCount > atCount) feedViolate("detach-without-attach", e.keyHash);
+            break;
+        case "fetch:dispatch":
+            dispatchTotal++;
+            fetchSlot(e.keyHash).dispatch++;
+            break;
+        case "fetch:settle":
+        case "fetch:abort":
+            resolveTotal++;
+            fetchSlot(e.keyHash).resolve++;
             break;
     }
 }
@@ -372,7 +398,19 @@ if (FEED_ASSERT) {
     if (tabReceives > tabSends * (tabs.length - 1)) {
         feedViolate("receive-overflow", null, "recv " + tabReceives + " sends " + tabSends);
     }
-    console.log("  feed classes covered:", feedCoverage.size, " tab send/recv:", tabSends, "/", tabReceives);
+    // Fetch dispatch/resolve balance (QD-2), evaluated after the teardown drain so
+    // every in-flight fetch has settled or aborted: global AND per-hash strict
+    // equality. Each dispatched controller resolves exactly once.
+    if (dispatchTotal !== resolveTotal) {
+        feedViolate("fetch-balance-global", null, "dispatch " + dispatchTotal + " resolve " + resolveTotal);
+    }
+    for (const [kh, f] of fetchByHash) {
+        if (f.dispatch !== f.resolve) {
+            feedViolate("fetch-balance-hash", kh, "dispatch " + f.dispatch + " resolve " + f.resolve);
+        }
+    }
+    console.log("  feed classes covered:", feedCoverage.size, " tab send/recv:", tabSends, "/", tabReceives,
+        " fetch d/r:", dispatchTotal, "/", resolveTotal);
     if (feedViolations.length > 0) {
         const shown = Math.min(10, feedViolations.length);
         for (let i = 0; i < shown; i++) {

@@ -65,7 +65,7 @@ The honest comparison. Numbers are min+gzip, current as of writing.
 | Per-query timeout | Yes | No (manual via fetcher) | No (manual via fetcher) |
 | Devtools feed | **`qc.inspect` (23-type push feed)** | Feed + bundled UI | Feed + UI |
 | Devtools UI | External (lite-studio) | Yes (mature) | Yes |
-| Tests | 312 | ~hundreds | ~hundreds |
+| Tests | 313 | ~hundreds | ~hundreds |
 | Foundation | Signals (lite-signal) | Observer pattern | SWR algo + hooks |
 
 Where lite-query trails: the devtools *panel* is external (lite-studio), not bundled. What lite-query ships is the FEED a panel renders (`qc.inspect`, zero-cost when off). Where it leads: cross-tab, cursor pagination, and the signal-native composition story.
@@ -370,16 +370,16 @@ If you're new to the family, start with lite-signal -- every other library here 
 npm test
 ```
 
-312 deterministic tests. Run output:
+313 deterministic tests. Run output:
 
 ```
-# tests 312
-# pass 312
+# tests 313
+# pass 313
 # fail 0
 # skipped 0
 ```
 
-The core suite (251) uses a controlled fetcher, mock clock, and mock `BroadcastChannel` so every test is deterministic -- no real timers, no real network, and it covers `infiniteQuery` cursor pagination, `qc.prefetch`, the persistence primitive + adapter (with a dependency-free dehydrated-cache corruption matrix), and the devtools feed `qc.inspect` (all 23 event types, the 10-key monomorphic shape + pooled-reuse identity, two-seam independence, and throwing-hook containment). The optional entry points add 31 (`/await`) and 24 (`/stream`) tests, the latter driving a manually-pumped async iterator through every termination path, and 6 repo drift guards keep the shipped files ASCII-clean, the documented surface in sync with the real exports, and the runtime `VERSION` const equal to `package.json`. See `test/harness.js` for the mocks.
+The core suite (252) uses a controlled fetcher, mock clock, and mock `BroadcastChannel` so every test is deterministic -- no real timers, no real network, and it covers `infiniteQuery` cursor pagination, `qc.prefetch`, the persistence primitive + adapter (with a dependency-free dehydrated-cache corruption matrix), and the devtools feed `qc.inspect` (all 23 event types, the 10-key monomorphic shape + pooled-reuse identity, two-seam independence, and throwing-hook containment). The optional entry points add 31 (`/await`) and 24 (`/stream`) tests, the latter driving a manually-pumped async iterator through every termination path, and 6 repo drift guards keep the shipped files ASCII-clean, the documented surface in sync with the real exports, and the runtime `VERSION` const equal to `package.json`. See `test/harness.js` for the mocks.
 
 Every entry point exports `VERSION` -- lite-query's own version string, the single runtime version source. It lives in `Query.js`, is re-exported by `/stream` and `/await`, and `test/version-sync.test.js` asserts it equals `package.json`.
 

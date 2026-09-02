@@ -149,7 +149,12 @@ export interface QueryFeedEvent {
     to: string | null;
     /** Abort reason / remove cause / hydrate code / role / stream phase / msg type. */
     reason: string | null;
-    /** Numeric payload (observerCount / fetchGen / streamCount / records); 0 if N/A. */
+    /**
+     * Numeric payload (observerCount / fetchGen / streamCount / records); 0 if
+     * N/A. For `mutation:settle` this is the settling mutation's OWN generation
+     * (pairs with `mutation:start` by value) -- not the current latest gen, so a
+     * `superseded` settle still carries the id of the mutation that finished.
+     */
     count: number;
     /** Outcome flag; false if N/A. */
     ok: boolean;

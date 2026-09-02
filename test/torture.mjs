@@ -405,6 +405,13 @@ async function runProvenance() {
       ' minor=' + absent.minor + ' maxMs=' + absent.maxMs.toFixed(2) + ' (expected 0/0/0.00)\n');
     provOk = false;
   }
+  // QD-1: heapDelta is bookkeeping noise (informational), but hold it under a hard
+  // 1.0 B/op bound so a real per-op retention regression on the warm read path
+  // still trips even if it does not perturb the GC-event count.
+  if (!(Math.abs(absent.perOp) < 1.0)) {
+    process.stderr.write('  FAIL provenance: absent B/op=' + absent.perOp.toFixed(2) + ' (bound < 1.0)\n');
+    provOk = false;
+  }
   // The installed candidate (c) must still hold maxMajor 0 under the emit load.
   if (!(pooled.ok && pooled.verdict === 'pass' && pooled.major === 0)) {
     process.stderr.write('  FAIL provenance: installed-pooled major=' + pooled.major +

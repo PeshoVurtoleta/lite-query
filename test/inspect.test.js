@@ -329,6 +329,31 @@ test("fetch:abort reason 'lite-query:timeout' when the per-query timeout fires",
     stop();
 });
 
+test("fetch:abort emits exactly ONCE per dispatched gen when a controller is aborted twice (QD-2)", async () => {
+    // A timeout fires (abort #1), then removeQueries aborts the SAME still-live
+    // controller (abort #2) before the aborted resolution has cleared the timer.
+    // The `was = signal.aborted` guard makes only the FIRST abort emit -- one
+    // fetch:abort per dispatch, so dispatch == settle + abort stays exact.
+    const { qc, clock } = clockClient({ defaultStaleTime: 0, defaultTimeout: 500 });
+    const events = [];
+    const stop = qc.inspect((e) => events.push({ ...e }));
+    const cf = createControlledFetcher();            // never resolves -> resolution can't clear the timer
+    const q = query(qc, { key: ["dbl"], fetcher: cf.fetcher });
+    const stopE = createRoot(() => effect(() => q.data()));
+    await tick();                                    // gen 1 dispatched, timeout armed
+    clock.advance(501);                              // timeout -> .abort(TIMEOUT), was=false -> emit #1
+    qc.removeQueries(["dbl"]);                        // .abort(REMOVED) on the SAME ac, was=true -> no emit
+    const aborts = only(events, "fetch:abort").filter((e) => e.count === 1);
+    assert.equal(aborts.length, 1, "gen 1 aborted exactly once despite two .abort() calls");
+    assert.equal(aborts[0].reason, "lite-query:timeout", "the first abort wins the single emit");
+    // Balance: one dispatch, exactly one resolution (the abort; no settle).
+    const disp = only(events, "fetch:dispatch").length;
+    const settle = only(events, "fetch:settle").length;
+    assert.equal(disp, settle + only(events, "fetch:abort").length, "dispatch == settle + abort");
+    stopE(); q.dispose();
+    stop();
+});
+
 // -- cross-tab + shared-fetch (C3) -------------------------------------------
 
 test("tab:send (issuer) and tab:receive (peer) mirror the message type", async () => {

@@ -77,15 +77,28 @@ and the `VERSION` const held at `1.4.0`.
   inspect-hook closure carried across install/uninstall while the owner tree is
   torn down) DID NOT FIRE -- recorded verbatim in `INCONCLUSIVE.md` beside A/B/C;
   it is explicitly NOT a gate clause (a control that cannot trip is decorative).
+- **QD-2 (operator ruling)** -- abort-emit honesty: every `fetch:abort` emit
+  site captures `const was = signal.aborted` BEFORE the (unchanged, unconditional)
+  `.abort(...)` call and emits only when `was === false`, so a controller a later
+  site re-aborts (a timeout racing a remove/clear/supersede) emits ONE
+  `fetch:abort` per dispatched generation -- zero behavior change, the feed is now
+  one-abort-per-dispatch honest. The fuzzer assertion mode gates on this: after
+  the teardown drain, `fetch:dispatch` count == `fetch:settle + fetch:abort`
+  count, per-hash and global, strict equality. (The dropped per-keyHash SEQUENCE
+  rules stay dropped -- keyHash aliasing under the fuzzer's remove-observed +
+  restart-stranded-handle chaos is unresolvable without an entry-identity
+  discriminator the frozen 10-key vocabulary cannot carry; rationale recorded in
+  the fuzzer header.)
+- **QD-3 (operator ruling)** -- `mutation:settle.count` is the settling
+  mutation's OWN generation (pairs with `mutation:start` by value), NOT the
+  current latest gen -- so a `superseded` settle still carries the id of the
+  mutation that finished. Pinned in `llms.txt` and `Query.d.ts`.
 
 ### Phase H provenance -- T3 candidates measured (OR-6)
 
 Both candidate designs measured under the same warm body (200000 reads) with a
 20000-write emit sub-loop for the installed runs, outside the frozen GATE window.
-The absent run's GC profile is byte-identical to the frozen GATE line (major 0 /
-minor 0 / maxMs 0.00) -- the true zero-added-allocation signal; `heapDelta` is
-V8 heap bookkeeping noise even at minor 0, so the GC-event count is what is gated,
-not the byte count. Representative run:
+Representative run:
 
 | run | major | minor | maxMs | heapDelta bytes | B/op |
 |---|---|---|---|---|---|
@@ -93,6 +106,10 @@ not the byte count. Representative run:
 | installed-pooled (candidate c) | 0 | 1 | 0.08 | ~61000 | ~0.28 |
 | installed-fresh (candidate b) | 0 | 1 | 0.07 | ~41600 | ~0.19 |
 
+The absent `B/op` is V8 heap bookkeeping noise (nonzero even at minor 0); the GATE
+is the absent run's GC-PROFILE IDENTITY to the frozen GATE line (major 0 / minor 0
+/ maxMs 0.00) -- the true zero-added-allocation signal -- with `B/op` held under a
+hard < 1.0 bound so a real per-op retention regression still trips (QD-1).
 Candidate (c) -- one pooled record per type -- ships: it holds `maxMajor 0` under
 the emit load and allocates zero per event (the pooled record is overwritten in
 place); candidate (b), a fresh per-event object, is the same order but pays the
