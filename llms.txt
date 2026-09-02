@@ -21,7 +21,10 @@ A query/mutation cache layer like TanStack Query or SWR, but signals-based and f
 ## Public API
 
 ### queryClient(options)
-Creates a cache client. Returns { options, getQueryData, setQueryData, invalidate, removeQueries, clear, prefetch, dispose }.
+Creates a cache client. Returns { options, getQueryData, setQueryData, invalidate, removeQueries, clear, prefetch, dehydrate, hydrate, dispose }.
+
+### Persistence: qc.dehydrate() / qc.hydrate(state) / persistQueryClient(qc, opts)
+qc.dehydrate() -> { entries } snapshots SUCCESS entries only (never pending/error/stream). qc.hydrate(state) -> { ok, count, reason } seeds a fresh (empty) cache at boot, fail-closed and all-or-nothing. persistQueryClient(qc, { save, load, version, throttle? }) -> { restored, flush, stop } is the storage-agnostic adapter on top. Full contract in the Persistence section below.
 
 Options:
 - defaultStaleTime: number (default 0) -- ms before cache entries are considered stale

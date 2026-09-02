@@ -42,6 +42,11 @@ export const VERSION = "1.3.0";
 
 const noop = () => {};
 
+// One persister per client (OR-5 single-slot seam). A second install on the
+// same client throws synchronously; stop() clears the reservation so a later
+// re-install succeeds. Weak so a discarded client never pins its entry.
+const persistInstalled = new WeakSet();
+
 // -----------------------------------------------------------------------------
 // Key hashing & matching
 // -----------------------------------------------------------------------------
@@ -1577,4 +1582,159 @@ export function mutation(qc, mutOpts) {
             try { disposeNode(status); }  catch {}
         },
     };
+}
+
+// -----------------------------------------------------------------------------
+// persistQueryClient() -- the persistence adapter
+// -----------------------------------------------------------------------------
+
+/**
+ * Wire a query client to a storage backend (OR-5). Storage-agnostic: `save` and
+ * `load` are thunks the caller supplies (localStorage, IndexedDB, a bake-stream
+ * cache -- see Cookbook); the adapter never touches a specific backend and adds
+ * zero deps.
+ *
+ * On install it restores once from `load()` (before any observer attaches) and
+ * then subscribes to the client's PRIVATE cache-write hook, throttling the
+ * dehydrated snapshot to `save()`. The write hook is armed only AFTER the
+ * restore outcome settles, in all three branches, so a boot-window write can
+ * never persist a half-restored cache.
+ *
+ * Fail-closed everywhere: a schema `version` is REQUIRED (a bump drops the old
+ * cache); a malformed / mismatched / unreadable payload restores NOTHING and the
+ * outcome is observable via `handle.restored` (a promise that always RESOLVES,
+ * never rejects). save() rejections are contained.
+ *
+ * @param {import("./Query.js").QueryClient} qc
+ * @param {import("./Query.js").PersistOptions} persistOpts
+ * @returns {import("./Query.js").PersistHandle}
+ */
+export function persistQueryClient(qc, persistOpts) {
+    if (persistOpts === null || typeof persistOpts !== "object") {
+        throw new TypeError("persistQueryClient: an options object is required");
+    }
+    const { save, load, version, throttle } = persistOpts;
+    if (typeof save !== "function") {
+        throw new TypeError("persistQueryClient: `save` must be a function (envelope) => void | Promise");
+    }
+    if (typeof load !== "function") {
+        throw new TypeError("persistQueryClient: `load` must be a function () => envelope | Promise");
+    }
+    if (version === undefined) {
+        throw new TypeError("persistQueryClient: `version` is required (no default) -- a schema bump must drop the old cache");
+    }
+    if (typeof version !== "string" && typeof version !== "number") {
+        throw new TypeError("persistQueryClient: `version` must be a string or number");
+    }
+    const throttleMs = throttle ?? 1000;
+    if (typeof throttleMs !== "number" || !Number.isFinite(throttleMs) || throttleMs < 0) {
+        throw new TypeError("persistQueryClient: `throttle` must be a finite number >= 0");
+    }
+    if (persistInstalled.has(qc)) {
+        throw new Error("persistQueryClient: a persister is already installed on this client (single-slot seam)");
+    }
+    persistInstalled.add(qc);
+
+    const opts = qc.options;      // resolved, public -- carries setTimeout/clearTimeout
+    let timer = null;
+    let uninstall = null;
+    let stopped = false;
+
+    function clearTimer() {
+        if (timer !== null) {
+            opts.clearTimeout(timer);
+            timer = null;
+        }
+    }
+
+    // Build the snapshot and hand it to save(). The timer is nulled BEFORE the
+    // state is built (via clearTimer) so a cache write DURING save() opens a
+    // fresh window rather than being swallowed. save() rejections are contained
+    // -- never unhandled; the persister keeps running.
+    function doSave() {
+        clearTimer();
+        let envelope;
+        try {
+            envelope = { version, state: qc.dehydrate() };
+        } catch {
+            return;                // a snapshot build must never wedge the persister
+        }
+        try {
+            const r = save(envelope);
+            if (r && typeof r.then === "function") r.then(noop, noop);
+        } catch { /* synchronous save throw contained */ }
+    }
+
+    // Trailing-edge coalescing (OR-7): the first write in a window arms the
+    // timer; subsequent writes ride the same window. throttle 0 saves eagerly.
+    function onWrite() {
+        if (stopped) return;
+        if (throttleMs === 0) { doSave(); return; }
+        if (timer !== null) return;
+        timer = opts.setTimeout(doSave, throttleMs);
+        if (timer && typeof timer.unref === "function") timer.unref();
+    }
+
+    // Restore ladder (OR-6). Always resolves; the outcome is observable before
+    // any observer attaches. Reasons: null | load-threw | malformed-envelope |
+    // version-mismatch | cache-not-empty | a hydrate reason code.
+    const restored = (async () => {
+        let envelope;
+        try {
+            envelope = await load();
+        } catch {
+            return { status: "dropped", count: 0, reason: "load-threw" };
+        }
+        if (envelope === null || envelope === undefined) {
+            return { status: "empty", count: 0, reason: null };   // normal boot (OR-3)
+        }
+        if (typeof envelope !== "object" || Array.isArray(envelope) ||
+            Object.keys(envelope).length !== 2 ||
+            !("version" in envelope) || !("state" in envelope)) {
+            return { status: "dropped", count: 0, reason: "malformed-envelope" };
+        }
+        if (envelope.version !== version) {               // strict ===, no coercion
+            return { status: "dropped", count: 0, reason: "version-mismatch" };
+        }
+        let result;
+        try {
+            result = qc.hydrate(envelope.state);
+        } catch {
+            // OR-2 precondition: a late load() whose entries already exist. The
+            // adapter CATCHES the throw and resolves a drop -- never a merge,
+            // never an unhandled rejection, never a silent nothing.
+            return { status: "dropped", count: 0, reason: "cache-not-empty" };
+        }
+        if (!result.ok) {
+            return { status: "dropped", count: 0, reason: result.reason };
+        }
+        return { status: "restored", count: result.count, reason: null };
+    })().then((outcome) => {
+        // Arm the write hook AFTER the restore settles -- in ALL three branches.
+        if (!stopped) {
+            try { uninstall = qc._internal.installPersistHook(onWrite); }
+            catch { /* client disposed, or a manual hook already holds the slot */ }
+        }
+        return outcome;
+    });
+
+    // Force the pending save now.
+    function flush() {
+        doSave();
+    }
+
+    // Idempotent. FLUSH-ON-STOP (OR-7/ON-3c): a pending timer means a committed
+    // cache write is not yet on disk; stop() fires at teardown / logout / client
+    // dispose -- exactly when the last write matters most. Uninstalls the hook
+    // and clears the timer; clears the single-slot reservation.
+    function stop() {
+        if (stopped) return;
+        stopped = true;
+        if (timer !== null) doSave();     // flush the pending write to disk
+        clearTimer();
+        if (uninstall) { uninstall(); uninstall = null; }
+        persistInstalled.delete(qc);
+    }
+
+    return { restored, flush, stop };
 }

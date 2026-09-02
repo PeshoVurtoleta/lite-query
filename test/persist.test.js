@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 
 import { effect } from "@zakkster/lite-signal";
 
-import { queryClient, query, infiniteQuery } from "../Query.js";
+import { queryClient, query, infiniteQuery, persistQueryClient } from "../Query.js";
 import { streamQuery } from "../StreamQuery.js";
 import {
     createControlledFetcher,
@@ -499,4 +499,148 @@ test("write hook: zero calls with no adapter installed; a second install throws"
     assert.equal(typeof u2, "function");
     u2();
     qc.dispose();
+});
+
+// -----------------------------------------------------------------------------
+// C4 -- the adapter (persistQueryClient)
+// -----------------------------------------------------------------------------
+
+test("adapter: version is REQUIRED -- no default, install throws without it (OR-6)", () => {
+    const qc = queryClient({ defaultStaleTime: 0 });
+    assert.throws(() => persistQueryClient(qc, { save: () => {}, load: () => null }), /`version` is required/);
+    assert.throws(() => persistQueryClient(qc, { save: () => {}, load: () => null, version: {} }), /must be a string or number/);
+    assert.throws(() => persistQueryClient(qc, { save: "x", load: () => null, version: "v1" }), /`save` must be a function/);
+    assert.throws(() => persistQueryClient(qc, { save: () => {}, load: () => null, version: "v1", throttle: -1 }), /`throttle` must be a finite number/);
+    qc.dispose();
+});
+
+test("adapter: load() -> null is an EMPTY store, status \"empty\", not an error (OR-3)", async () => {
+    const qc = queryClient({ defaultStaleTime: 0 });
+    const p = persistQueryClient(qc, { save: () => {}, load: () => null, version: "v1" });
+    assert.deepEqual(await p.restored, { status: "empty", count: 0, reason: null });
+    p.stop(); qc.dispose();
+});
+
+test("adapter: a throwing/rejecting load() resolves { status: \"dropped\", reason: \"load-threw\" } -- never unhandled", async () => {
+    const qc1 = queryClient({ defaultStaleTime: 0 });
+    const p1 = persistQueryClient(qc1, { save: () => {}, load: () => { throw new Error("io"); }, version: "v1" });
+    assert.deepEqual(await p1.restored, { status: "dropped", count: 0, reason: "load-threw" });
+    p1.stop(); qc1.dispose();
+
+    const qc2 = queryClient({ defaultStaleTime: 0 });
+    const p2 = persistQueryClient(qc2, { save: () => {}, load: () => Promise.reject(new Error("io")), version: "v1" });
+    assert.equal((await p2.restored).reason, "load-threw");
+    p2.stop(); qc2.dispose();
+});
+
+test("adapter: version mismatch drops 100% of entries and fetches fresh", async () => {
+    const src = queryClient({ defaultStaleTime: 0 });
+    src.setQueryData(["a"], 1);
+    src.setQueryData(["b"], 2);
+    const stored = { version: "v1", state: JSON.parse(JSON.stringify(src.dehydrate())) };
+    src.dispose();
+
+    const qc = queryClient({ defaultStaleTime: 0 });
+    const p = persistQueryClient(qc, { save: () => {}, load: () => stored, version: "v2" });
+    assert.deepEqual(await p.restored, { status: "dropped", count: 0, reason: "version-mismatch" });
+    assert.equal(qc.getQueryData(["a"]), undefined, "0 of N hydrated");
+    assert.equal(qc.getQueryData(["b"]), undefined);
+    p.stop(); qc.dispose();
+});
+
+test("adapter: throttle coalesces N writes in a window into exactly ONE save (mock clock, trailing edge)", async () => {
+    const clock = createMockClock();
+    const qc = queryClient({ now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, defaultStaleTime: 0 });
+    let saves = 0; let last = null;
+    const p = persistQueryClient(qc, { save: (env) => { saves++; last = env; }, load: () => null, version: "v1", throttle: 1000 });
+    await p.restored;
+    qc.setQueryData(["a"], 1);
+    qc.setQueryData(["b"], 2);
+    qc.setQueryData(["c"], 3);
+    assert.equal(saves, 0, "no save yet -- window open");
+    clock.advance(999);
+    assert.equal(saves, 0);
+    clock.advance(1);
+    assert.equal(saves, 1, "exactly one save coalesced from three writes");
+    assert.equal(last.version, "v1");
+    assert.equal(last.state.entries.length, 3, "the ONE save carries all three writes");
+    p.stop(); qc.dispose();
+});
+
+test("adapter: stop() uninstalls the hook and clears the pending timer; further writes save nothing", async () => {
+    const clock = createMockClock();
+    const qc = queryClient({ now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, defaultStaleTime: 0 });
+    let saves = 0;
+    const p = persistQueryClient(qc, { save: () => saves++, load: () => null, version: "v1", throttle: 1000 });
+    await p.restored;
+    qc.setQueryData(["a"], 1);
+    clock.advance(1000);
+    assert.equal(saves, 1);
+    p.stop();
+    assert.equal(saves, 1, "stop with no pending timer saves nothing extra");
+    qc.setQueryData(["b"], 2);
+    clock.advance(5000);
+    assert.equal(saves, 1, "hook uninstalled: further writes save nothing");
+    qc.dispose();
+});
+
+test("adapter: stop() FLUSHES a pending save (OR-7/ON-3c decision); clear() + stop() persists emptiness", async () => {
+    const clock = createMockClock();
+    const qc = queryClient({ now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, defaultStaleTime: 0 });
+    let saves = 0; let last = null;
+    const p = persistQueryClient(qc, { save: (env) => { saves++; last = env; }, load: () => null, version: "v1", throttle: 1000 });
+    await p.restored;
+    qc.setQueryData(["a"], 1);          // window open, timer pending
+    assert.equal(saves, 0);
+    p.stop();                            // flush-on-stop
+    assert.equal(saves, 1, "pending save flushed at stop");
+    assert.equal(last.state.entries.length, 1);
+    qc.dispose();
+
+    // logout path: clear() then stop() persists emptiness
+    const clock2 = createMockClock();
+    const qc2 = queryClient({ now: clock2.now, setTimeout: clock2.setTimeout, clearTimeout: clock2.clearTimeout, defaultStaleTime: 0 });
+    let saved = null;
+    const p2 = persistQueryClient(qc2, { save: (env) => { saved = env; }, load: () => null, version: "v1", throttle: 1000 });
+    await p2.restored;
+    qc2.setQueryData(["u"], 1);
+    clock2.advance(1000);
+    assert.equal(saved.state.entries.length, 1, "one entry persisted");
+    qc2.clear();                         // hook site 5 opens a fresh window (empty snapshot)
+    p2.stop();                           // flush-on-stop -> persists emptiness
+    assert.equal(saved.state.entries.length, 0, "clear() + stop() persists emptiness");
+    qc2.dispose();
+});
+
+test("adapter: a rejecting save() is contained -- the adapter keeps running, no unhandled rejection", async () => {
+    const clock = createMockClock();
+    const qc = queryClient({ now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, defaultStaleTime: 0 });
+    let attempts = 0;
+    const p = persistQueryClient(qc, {
+        save: () => { attempts++; return Promise.reject(new Error("disk full")); },
+        load: () => null, version: "v1", throttle: 1000,
+    });
+    await p.restored;
+    qc.setQueryData(["a"], 1);
+    clock.advance(1000);
+    assert.equal(attempts, 1, "save attempted");
+    qc.setQueryData(["b"], 2);
+    clock.advance(1000);
+    assert.equal(attempts, 2, "adapter kept running after a rejected save");
+    p.stop(); qc.dispose();
+});
+
+test("adapter: the restore outcome is observable before the first observer attaches", async () => {
+    const src = queryClient({ defaultStaleTime: 0 });
+    src.setQueryData(["a"], 41);
+    const stored = { version: "v1", state: JSON.parse(JSON.stringify(src.dehydrate())) };
+    src.dispose();
+
+    const qc = queryClient({ defaultStaleTime: 30_000 });
+    const p = persistQueryClient(qc, { save: () => {}, load: () => stored, version: "v1" });
+    const outcome = await p.restored;
+    assert.equal(outcome.status, "restored");
+    assert.equal(outcome.count, 1);
+    assert.equal(qc.getQueryData(["a"]), 41, "readable with no observer ever attached");
+    p.stop(); qc.dispose();
 });

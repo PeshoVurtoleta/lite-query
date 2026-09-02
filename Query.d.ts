@@ -165,11 +165,122 @@ export interface QueryClient {
         },
     ): Promise<T | undefined>;
 
+    /**
+     * Snapshot the SUCCESS entries into a plain-JSON dehydrated state (cold
+     * path; walks the whole cache). Pending / error / stream entries are never
+     * serialized. Infinite entries are marked and carry a shallow copy of their
+     * pages array. The emitted state has no `version` field -- the adapter
+     * stamps `{ version, state }`. key, data, and page CONTENTS are references,
+     * not deep copies: serialize before any further cache write.
+     */
+    dehydrate(): DehydratedState;
+
+    /**
+     * Boot-only cache restore (fail-closed). THROWS if the cache is non-empty
+     * (a programming error -- hydrate before any observer attaches); a malformed
+     * STORED payload RETURNS `{ ok: false, count: 0, reason }`. Validation runs
+     * over the WHOLE payload before any mutation (all-or-nothing). Seeded
+     * entries are stale-aware (a future timestamp is clamped to now()) and never
+     * broadcast.
+     */
+    hydrate(state: DehydratedState): HydrateResult;
+
     /** Clear the cache and close the BroadcastChannel listener. */
     dispose(): void;
 }
 
 export function queryClient(options?: QueryClientOptions): QueryClient;
+
+// --- Persistence (dehydrate / hydrate / persistQueryClient) ------------------
+
+/** A single dehydrated cache entry -- monomorphic wire shape, four own keys. */
+export interface DehydratedEntry {
+    /** The entry's key array (by reference). */
+    key: readonly unknown[];
+    /** Plain entry: the data value. Infinite entry: a shallow copy of pages. */
+    data: unknown;
+    /** The entry's staleness timestamp (must be finite). */
+    dataUpdatedAt: number;
+    /** True iff this record is an infinite entry (always present). */
+    infinite: boolean;
+}
+
+/** The dehydrated state emitted by `qc.dehydrate()` -- exactly one own key. */
+export interface DehydratedState {
+    entries: DehydratedEntry[];
+}
+
+/** Reason codes returned by `qc.hydrate` on a malformed payload (fail-closed). */
+export type HydrateReason =
+    | "malformed-state"
+    | "malformed-entries"
+    | "malformed-entry"
+    | "malformed-key"
+    | "malformed-data"
+    | "malformed-timestamp"
+    | "malformed-pages"
+    | "duplicate-key";
+
+/** The observable result of `qc.hydrate(state)`. */
+export interface HydrateResult {
+    /** True iff the whole payload validated and seeded. */
+    ok: boolean;
+    /** Number of entries seeded (0 on any drop). */
+    count: number;
+    /** null on success, else a stable reason code. */
+    reason: HydrateReason | null;
+}
+
+/** Options for `persistQueryClient(qc, opts)`. */
+export interface PersistOptions {
+    /** Persist the dehydrated envelope. May return a promise; rejections are contained. */
+    save: (envelope: { version: string | number; state: DehydratedState }) => void | Promise<void>;
+    /** Load the stored envelope (or null/undefined for an empty store). May be async. */
+    load: () => unknown | Promise<unknown>;
+    /** REQUIRED schema version (string or number). A mismatch drops the whole cache. */
+    version: string | number;
+    /** Trailing-edge coalescing window in ms. Default 1000. Must be finite and >= 0. */
+    throttle?: number;
+}
+
+/** The status of a restore attempt. */
+export type RestoreStatus = "restored" | "empty" | "dropped";
+
+/** The reason a restore resolved as it did. */
+export type RestoreReason =
+    | null
+    | "load-threw"
+    | "malformed-envelope"
+    | "version-mismatch"
+    | "cache-not-empty"
+    | HydrateReason;
+
+/** The settled restore outcome (the `restored` promise always RESOLVES). */
+export interface RestoreOutcome {
+    status: RestoreStatus;
+    count: number;
+    reason: RestoreReason;
+}
+
+/** The handle returned by `persistQueryClient`. */
+export interface PersistHandle {
+    /** Resolves (never rejects) with the restore outcome, observable before any observer attaches. */
+    restored: Promise<RestoreOutcome>;
+    /** Force the pending save now. */
+    flush: () => void;
+    /** Idempotent. Flushes any pending save, uninstalls the write hook, clears the timer. */
+    stop: () => void;
+}
+
+/**
+ * Wire a query client to a storage backend. Storage-agnostic thunks only; zero
+ * new deps. Restores once on install (before any observer attaches), then
+ * throttles the dehydrated snapshot to `save()` through the client's private
+ * write hook. Fail-closed: `version` is required, and a malformed / mismatched
+ * / unreadable payload restores nothing with the outcome observable via
+ * `handle.restored`.
+ */
+export function persistQueryClient(qc: QueryClient, opts: PersistOptions): PersistHandle;
 
 // --- query() -----------------------------------------------------------------
 
