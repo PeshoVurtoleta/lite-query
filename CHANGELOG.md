@@ -5,13 +5,13 @@ All notable changes to `@zakkster/lite-query` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.4.0] -- unreleased
+## [1.4.0] -- 2026-09-02
 
 Persistence: a dehydrate/hydrate primitive and a `persistQueryClient` adapter on
-top, built in that order. Instant cold start, fail-closed. No version stamp
-lands in this changelog entry: per OR-1, `package.json` and the `VERSION` const
-stay `1.3.0`; the `/release 1.4.0` drill performs the stamp across its sites
-after the pipeline closes.
+top, built in that order. Instant cold start, fail-closed. Per OR-1 the version
+stamp landed only with the `/release 1.4.0` drill after the pipeline closed (no
+in-session stamp; the pipeline ran with `package.json` and the `VERSION` const
+at `1.3.0`).
 
 ### Added
 
