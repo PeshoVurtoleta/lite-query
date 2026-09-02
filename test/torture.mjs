@@ -234,25 +234,39 @@ async function runPhaseH() {
 }
 
 // ---- orchestration --------------------------------------------------------
-const pFailures = runPhaseP();
-const h = await runPhaseH();
-const gate = evaluateGate({
-  live: h.live, findings: h.findings, leaks, warns,
-  summary: h.summary, report: h.report, censusOk: h.censusOk,
-});
-console.log(gate.line);
-const ok = gate.ok && pFailures.length === 0;
-if (ok) {
-  console.log('ok');
+const BREAK = process.env.QUERY_TORTURE_BREAK;
+if (BREAK) {
+  // Phase C only (cold path): phases P and H are skipped so exactly one
+  // profiler is ever in flight and no phase-P child can fail for the wrong
+  // reason. Controls reuse the module tracker, RULES and the SAME evaluateGate
+  // -- a control that trips a lookalike gate proves nothing.
+  const mod = await import('./torture/controls.mjs');
+  await mod.runControls(BREAK, {
+    tracker, RULES, evaluateGate, leaks, warns,
+    makeController, FETCHER, NOOP_RELEASE, tick, HOT,
+  });
+  process.exitCode = 1; // break mode exits non-zero always
 } else {
-  for (const f of pFailures) process.stderr.write('FAIL P ' + f + '\n');
-  if (!gate.ok) {
-    if (h.live !== 0 || leaks.length > 0) process.stderr.write('FAIL H leak=size ' + h.live + '/0\n');
-    if (!h.censusOk) process.stderr.write('FAIL H census ' + h.sampledLive + '/' + h.sampleSize + ' live\n');
-    if (h.report.verdict !== 'pass') process.stderr.write('FAIL H gc verdict=' + h.report.verdict + ' -- see INCONCLUSIVE.md\n');
-    for (const v of h.report.violations) process.stderr.write('  violation ' + v.metric + ' limit=' + v.limit + ' actual=' + v.actual + '\n');
-    for (const f of h.findings) process.stderr.write('  finding ' + f.kind + ':' + f.reason + '\n');
-    for (const l of leaks) process.stderr.write('  leak ' + l + '\n');
+  const pFailures = runPhaseP();
+  const h = await runPhaseH();
+  const gate = evaluateGate({
+    live: h.live, findings: h.findings, leaks, warns,
+    summary: h.summary, report: h.report, censusOk: h.censusOk,
+  });
+  console.log(gate.line);
+  const ok = gate.ok && pFailures.length === 0;
+  if (ok) {
+    console.log('ok');
+  } else {
+    for (const f of pFailures) process.stderr.write('FAIL P ' + f + '\n');
+    if (!gate.ok) {
+      if (h.live !== 0 || leaks.length > 0) process.stderr.write('FAIL H leak=size ' + h.live + '/0\n');
+      if (!h.censusOk) process.stderr.write('FAIL H census ' + h.sampledLive + '/' + h.sampleSize + ' live\n');
+      if (h.report.verdict !== 'pass') process.stderr.write('FAIL H gc verdict=' + h.report.verdict + ' -- see INCONCLUSIVE.md\n');
+      for (const v of h.report.violations) process.stderr.write('  violation ' + v.metric + ' limit=' + v.limit + ' actual=' + v.actual + '\n');
+      for (const f of h.findings) process.stderr.write('  finding ' + f.kind + ':' + f.reason + '\n');
+      for (const l of leaks) process.stderr.write('  leak ' + l + '\n');
+    }
+    process.exitCode = 1;
   }
-  process.exitCode = 1;
 }

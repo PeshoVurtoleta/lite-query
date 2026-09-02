@@ -47,6 +47,10 @@ const N_OBS_PER    = 48;    // observer slots per tab
 const N_STREAM_PER = 4;     // stream handles per tab
 const OPS_PER_TICK = 900;
 const CACHE_TIME   = 600;
+// Phase-C control hook (test/torture.mjs C-fuzz): when set, inject ONE phantom
+// re-broadcast into the echo-oracle snapshot below -- exactly the echo-storm
+// regression the invariant exists to catch. Unset on every plain run.
+const BREAK = process.env.QUERY_TORTURE_BREAK === "1" || process.env.QUERY_TORTURE_BREAK === "fuzz";
 
 // -- deterministic PRNG -------------------------------------------------------
 let _s = SEED;
@@ -242,7 +246,7 @@ const elapsed = await run();
 const mismatches = await convergeCheck();
 // Snapshot before teardown: qc.dispose() calls clear(), which legitimately
 // broadcasts one {clear} per tab -- not an echo, so it's outside the invariant.
-const broadcastsDuringFuzz = broadcasts;
+const broadcastsDuringFuzz = broadcasts + (BREAK ? 1 : 0);
 await teardown();
 
 const after = reg.stats();
