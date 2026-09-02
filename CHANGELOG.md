@@ -5,6 +5,66 @@ All notable changes to `@zakkster/lite-query` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] -- 2026-09-02
+
+The sibling refresh: catch up to both peers in one minor. `npm test` -> 177
+pass, 0 fail, 0 skipped; `npm run torture` -> 3x PASS, exit 0. Version stays
+1.1.2 in `package.json` -- the /release drill owns the bump.
+
+### Added
+
+- **18-name parity with `@zakkster/lite-await` 1.3.0** (Q-07). The `/await`
+  subpath now re-exports the eight primitives that were `undefined` from it
+  while sitting in the installed dependency: `allSettledOf`, `withResolvers`,
+  `tryFn`, `delay`, `withRetry`, `mapLimit`, `whenStatechart`,
+  `createAwaitScope`. Verbatim, zero wrapping -- single source of truth.
+  Boundary docs keep them and `query()` apart: `withRetry` is not the cache's
+  refetch; `delay` advances wall clock, not a mock clock; `createAwaitScope`
+  binds N signal-aware awaiters to one `AbortController` (upstream
+  `decisions/0007` owns the contract).
+- **`VERSION` const** (Q-16). Defined in `Query.js`, re-exported by `/stream`
+  and `/await`, so every entry reports one version string -- the single
+  runtime version source. `test/version-sync.test.js` asserts
+  `VERSION === package.json` (string compare).
+- **Tests 158 -> 177.** Five streamQuery parity tests recording the observable
+  semantics across the pipeToSignal collapse (status ladder, droppedCount
+  ladder, restart reset, throwing iterator, abort-is-not-an-error); eight
+  re-export identity tests plus `withRetry` / `mapLimit` / `createAwaitScope`
+  integrations and the subpath surface set-compare; the version-sync guard.
+
+### Changed
+
+- **StreamQuery internals: the hand-rolled buffer ring collapses into
+  lite-stream 1.3.0's own `pipeToSignal`.** `mode`/`maxBuffer` replace the
+  ring; `onValue` drives the status ladder + count; `onAbort` absorbs
+  intentional aborts (detach / restart / removeQueries), which with it present
+  never reach `onError` (lite-stream `decisions/0001`); `droppedCount` reads
+  the stop fn's own overflow getter, snapshotted on every terminal path.
+  Zero user-visible API change -- the parity suite passes untouched on both
+  sides. Buffer-mode bench (node v26.3.1, 2026-09-02; N=200000, maxBuffer=8,
+  median of 3): 31.9 ms before / 31.8 ms after -- within run-to-run noise, no
+  measurable delta; both drop exactly 204992.
+- **Sibling floors -> `^1.3.0`** for both `@zakkster/lite-await` and
+  `@zakkster/lite-stream` (peer + devDep). Installed-surface verified before
+  any dependent code: await exposes 18 named + `VERSION` incl.
+  `createAwaitScope`; stream's `pipeToSignal` accepts `mode`/`maxBuffer`/
+  `onValue`/`onAbort` and its stop fn carries `droppedCount`/`overflowCount`.
+- **Vendored demo copies -> 1.3.0** (`demo/vendor/lite-await.js`,
+  `demo/vendor/lite-stream.js`), byte-copies of the published registry
+  tarballs; `demo/VENDOR.md` rows + per-copy grep checks updated. Not shipped
+  (`demo/` is never in `files[]`).
+
+### Fixed
+
+- Nothing. No defect surfaced; the collapse is behavior-preserving by
+  construction and proven so by the frozen parity suite.
+
+### Notes
+
+- **`fromPromise` vocabulary is final.** lite-await `decisions/0009` verdict =
+  REJECT (accepted 2026-09-01): the name and its `{status, data, error}`
+  signal-state projection are locked, and the docs mapping table is permanent.
+
 ## [1.1.2] -- 2026-08-31
 
 A docs-and-guards patch. Zero logic: no runtime token in `Query.js`,
