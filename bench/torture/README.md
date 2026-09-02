@@ -77,3 +77,21 @@ map drains * pool returns to baseline.
 Like the `bench/` benchmarks and the lite-signal `bench/torture/` soaks these
 mirror, this directory is dev-only: it is not in `package.json` `files[]` and
 never ships to npm.
+
+## Measured
+
+ops/s was first recorded 2026-08-31 on Apple Silicon / darwin 25.5 for context
+only. The rows below add date / machine / node provenance; the 2026-09-02 rows
+are from the phase P and phase H runs of `test/torture.mjs` this session.
+
+| run | date | machine | node | figure |
+|-----|------|---------|------|--------|
+| query-soak.mjs        | 2026-08-31 | Apple Silicon / darwin 25.5 | unrecorded | ~51k ops/s |
+| cache-fuzzer.mjs      | 2026-08-31 | Apple Silicon / darwin 25.5 | unrecorded | ~131k ops/s |
+| shared-fetch-soak.mjs | 2026-08-31 | Apple Silicon / darwin 25.5 | unrecorded | ~31k ops/s |
+| phase P (all three)   | 2026-09-02 | arm64 / darwin 25.6 | v26.3.1 | soak ~50k / fuzz ~123k / shared ~30k ops/s |
+| phase H leak          | 2026-09-02 | arm64 / darwin 25.6 | v26.3.1 | 4096 cycles, size 0/0, findings 0, warnings 0, census 0/256 live |
+| phase H gc            | 2026-09-02 | arm64 / darwin 25.6 | v26.3.1 | 200000 reads, major 0, minor 0, maxMs 0.00 (rules maxMajor 0 / maxPauseMs 4) |
+
+ops/s is context, not a gate. The gate is the invariant list above; phase H's
+gate is `GATE ... | ok` from `npm run torture:law`.
