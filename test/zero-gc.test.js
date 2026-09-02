@@ -13,7 +13,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { signal, effect, createRegistry, setDefaultRegistry } from "@zakkster/lite-signal";
-import { queryClient, query } from "../Query.js";
+import { queryClient, query, infiniteQuery } from "../Query.js";
 
 const hasGc = typeof global !== "undefined" && typeof global.gc === "function";
 
@@ -42,6 +42,43 @@ test("zero-GC: warm accessors retain ~no memory across 50k re-runs", { skip: !ha
     // reintroduces per-read closure allocation would push this >100 B/re-run.
     assert.ok(perRun < 50, `expected retained < 50 B/effect-re-run; got ${perRun.toFixed(2)} B`);
     stop();
+    qc.dispose();
+});
+
+test("zero-GC: warm infinite reads retain ~no memory across 50k re-runs", { skip: !hasGc && "run with --expose-gc to enable" }, async () => {
+    setDefaultRegistry(createRegistry({ maxNodes: 16384 }));
+
+    const qc = queryClient({ defaultStaleTime: 60_000 });
+    const src = [[1, 2], [3, 4], [5, 6]];
+    const q = infiniteQuery(qc, {
+        key: ["z"],
+        fetcher: ({ cursor }) => Promise.resolve(src[cursor == null ? 0 : cursor]),
+        getNextCursor: (lastPage, allPages) => (allPages.length < 3 ? allPages.length : null),
+    });
+
+    const trig = signal(0);
+    // Warm reads of the three infinite accessors on an attached observer: pages()
+    // returns the stored array, data() returns the live flat view, hasNextPage()
+    // a non-reactive bool -- none allocate. The hoisted cleanupObserver is the
+    // only closure and it is allocated once at infiniteQuery() construction.
+    const stop = effect(() => { trig(); q.pages(); q.data(); q.hasNextPage(); });
+    await new Promise((r) => queueMicrotask(r));
+    await q.fetchNextPage();
+    await q.fetchNextPage();               // three pages accumulated, then read warm
+
+    for (let w = 0; w < 5_000; w++) trig.set(w + 1);
+
+    global.gc(); global.gc();
+    const before = process.memoryUsage().heapUsed;
+    const ITERS = 50_000;
+    for (let i = 0; i < ITERS; i++) trig.set(i + 100_000);
+    global.gc(); global.gc();
+    const after = process.memoryUsage().heapUsed;
+
+    const perRun = (after - before) / ITERS;
+    assert.ok(perRun < 50, `expected retained < 50 B/infinite-re-run; got ${perRun.toFixed(2)} B`);
+    stop();
+    q.dispose();
     qc.dispose();
 });
 
