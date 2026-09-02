@@ -46,10 +46,10 @@ Registry state, checked with `npm view <pkg> version`:
 | `@zakkster/lite-gc-profiler` | 1.16.0 | same (Q-09) |
 
 Full suite verified green against the **newest** published peers (await 1.3.0,
-stream 1.3.0, signal 1.5.0): 203 pass / 0 fail with `--expose-gc` (Q5
-closeout, 2026-09-02). No compatibility break from any peer bump since 1.1.0
-shipped. (Baselines: 153 on 2026-08-31 against await 1.2.0 / stream 1.1.0;
-181 at the Q3/Q4 closeouts.)
+stream 1.3.0, signal 1.5.0): 268 pass / 0 fail with `--expose-gc` (Q6
+pipeline closeout, 2026-09-02). No compatibility break from any peer bump
+since 1.1.0 shipped. (Baselines: 153 on 2026-08-31 against await 1.2.0 /
+stream 1.1.0; 181 at the Q3/Q4 closeouts; 203 at the Q5 closeout.)
 
 **The dev-env corruption, so it never recurs.** There is no `.gitignore`. The
 initial commit included `node_modules/` and `package-lock.json`; commits
@@ -737,12 +737,18 @@ DONE WHEN
 ---
 package: "@zakkster/lite-query"
 version_target: 1.4.0
-status: planned
-tests_min: 218   # re-rebased 2026-09-02 post-Q5 (203 base; a floor below the shipped suite is decorative)
+status: pipeline-complete (2026-09-02; ladder 493264c..8e8caf4 C1-C8, coder resumed twice at turn limits; reviewer APPROVED w/10-point audit, QA FAIL(4: flush-after-stop re-save, validation-to-seeding TOCTOU, symbol-key bypass, throwing-getter escape) -> fixed w/pinned QD-1..QD-4 a87a4f8 -> reviewer DELTA REJECTED (seed loop re-hashed the caller's key array) -> QD-5 fix beed579 (ensureEntryByHash consumes the validated hash + rollback-wrapped seed loop) -> DELTA APPROVED -> QA re-probe PASS incl. an independent QD-5 vector; suite 268, GATE byte-identical, 4/4 controls; awaiting /release 1.4.0 drill + operator publish per standing PR-1)
+tests_min: 218   # re-rebased 2026-09-02 post-Q5 (203 base; a floor below the shipped suite is decorative); shipped at 268
 carry_from_q5: the findings-clause control -- STILL uncontrolled after
   Q5's two new-surface attempts (QA re-ran both, findings=0);
   INCONCLUSIVE.md holds the attempt record; re-attempt via Q6's
-  persistence teardown paths or re-record and carry again
+  persistence teardown paths or re-record and carry again.
+  OUTCOME 2026-09-02: Attempt C (adapter stop() with a pending throttled
+  save and a tracked payload handle) does NOT fire -- adapter teardown
+  touches no lite-signal owner tree (audit 0). Recorded verbatim in
+  INCONCLUSIVE.md; no ctlPersist control added (cannot trip = decorative).
+  Clause stays uncontrolled, carried to Q7 (candidate surface: the
+  inspect-hook lifecycle).
 skip_max: 0
 torture: "law harness ok + hydrate/dehydrate cycle phase"
 findings: []   # SPEC.md post-publish item, reconciled by Q2
@@ -853,7 +859,11 @@ DONE WHEN
 package: "@zakkster/lite-query"
 version_target: 1.5.0
 status: planned
-tests_min: 228   # re-rebased 2026-09-02 post-Q5 (203 base)
+tests_min: 278   # re-rebased 2026-09-02 post-Q6 pipeline (268 base; a floor below the shipped suite is decorative)
+carry_from_q6: the findings-clause control -- STILL uncontrolled after
+  three attempts (Q5 A/B, Q6 C; INCONCLUSIVE.md holds all three verbatim);
+  re-attempt via Q7's inspect-hook install/uninstall lifecycle or
+  re-record and carry again
 skip_max: 0
 torture: "law harness ok; hook-installed vs not, both gated"
 findings: []   # SPEC.md devtools item, feed half; panel is lite-studio's
@@ -923,7 +933,7 @@ DONE WHEN
 package: "@zakkster/lite-query"
 version_target: 2.0.0
 status: planned
-tests_min: 258   # re-rebased 2026-09-02 post-Q5 (203 base)
+tests_min: 308   # re-rebased 2026-09-02 post-Q6 pipeline (268 base)
 skip_max: 0
 torture: "law harness ok + leader-failover stream soak"
 findings: []   # the old roadmap's Future section, sequencing preserved
