@@ -304,6 +304,151 @@ async function runPhaseH() {
   return { live, findings, summary: s, report, censusOk, sampledLive, sampleSize: sample.length };
 }
 
+// ---- phase H provenance: the feed double-run (ON-2, Q7) --------------------
+// Runs AFTER the frozen gate evaluation and prints its OWN lines -- it NEVER
+// touches the byte-frozen GATE line (option a). Three configs share one warm body
+// (200000 reads) plus a 20000-write sub-loop that REWRITES a pre-created 64-key
+// space (bounded retention, so the feed's per-event cost is isolated from entry
+// growth), each under its own GcProfiler gated by RULES:
+//   absent          -- no hook. Proves G3: zero added allocation (B/op 0.00).
+//   installed-pooled -- candidate (c): a no-op COPYING hook that reads pooled
+//                       fields; 0 B allocated per event. The T3 recommendation.
+//   installed-fresh  -- candidate (b) simulated: the hook allocates a fresh
+//                       3-field object per event and discards it.
+// heapDelta is bracketed by gc() so it reports NET RETAINED (~0 for all three:
+// pooled retains nothing, fresh's per-event objects are transient); the pooled-
+// vs-fresh difference shows in the minor-GC column. Both installed runs must hold
+// maxMajor 0 (G3). Recorded as a 3-row table in the CHANGELOG [1.5.0] head.
+const PROV_HOT = 200000;
+const PROV_WRITES = 20000;
+let provSink = 0;
+let provKeep = null;
+async function provRun(cfg) {
+  const qc = queryClient({ defaultStaleTime: 0 });
+  const warm = query(qc, { key: ['warm'], fetcher: FETCHER });
+  const stopWarm = effect(() => warm.data());
+  const c = makeController();
+  const buf = streamQuery(qc, { key: ['buf'], stream: c.factory, mode: 'buffer', maxBuffer: 4 });
+  const stopBuf = effect(() => buf.data());
+  await tick();
+  for (let k = 0; k < 64; k++) qc.setQueryData(['pw', k], 0);   // pre-create -> writes only rewrite
+  let hookCount = 0;
+  let uninstall = null;
+  if (cfg === 'installed-pooled') {
+    uninstall = qc.inspect((e) => { hookCount++; provSink = e.type.length + e.count; });
+  } else if (cfg === 'installed-fresh') {
+    uninstall = qc.inspect((e) => { hookCount++; provKeep = { type: e.type, ts: e.ts, keyHash: e.keyHash }; });
+  }
+  // The absent baseline is the zero-alloc WARM READ path (V7): 200000 reads, no
+  // writes -> a true 0.00 B/op, the same allocation profile the frozen GATE
+  // proves. Runs 2 and 3 ADDITIONALLY drive the 20000-write sub-loop to produce
+  // emits (the warm read loop performs no status writes, so it would not exercise
+  // an installed hook otherwise). Both installed runs must still hold maxMajor 0.
+  const doWrites = cfg !== 'absent';
+  // Warmup pass (unmeasured): grow lite-signal's node/link pools to steady state
+  // so the MEASURED window rewrites into already-sized pools and retains ~0.
+  for (let i = 0; i < PROV_HOT; i++) {
+    provSink += (warm.data() | 0) + buf.count() + buf.droppedCount();
+    if (doWrites && i < PROV_WRITES) qc.setQueryData(['pw', i & 63], i);
+  }
+  hookCount = 0;                                      // count only the MEASURED window's emits
+  globalThis.gc?.();
+  await new Promise((r) => setTimeout(r, 20));
+  const before = process.memoryUsage().heapUsed;     // pre-loop, post-gc (outside the window)
+  const gcp = new GcProfiler().start();
+  for (let i = 0; i < PROV_HOT; i++) {
+    provSink += (warm.data() | 0) + buf.count() + buf.droppedCount();
+    if (doWrites && i < PROV_WRITES) qc.setQueryData(['pw', i & 63], i);   // rewrite -> emits, no new entry
+    if ((i & 8191) === 0) gcp.sampleHeap(performance.now(), process.memoryUsage().heapUsed);
+  }
+  await new Promise((r) => setTimeout(r, 50));
+  const s = gcp.summary();                            // window = the loop only (no forced gc)
+  const report = checkNoGc(s, RULES);
+  gcp.stop();
+  globalThis.gc?.();                                  // net-retained bracket, OUTSIDE the window
+  await new Promise((r) => setTimeout(r, 20));
+  const after = process.memoryUsage().heapUsed;
+  stopWarm(); stopBuf(); if (uninstall) uninstall();
+  warm.dispose(); buf.dispose(); qc.dispose();
+  if (provSink === Number.MIN_SAFE_INTEGER) console.log('unreachable', provKeep);
+  const ops = PROV_HOT + PROV_WRITES;
+  const heapDelta = after - before;
+  return {
+    cfg, major: s.gc.major, minor: s.gc.minor, maxMs: s.gc.maxMs,
+    heapDelta, perOp: heapDelta / ops, verdict: report.verdict, ok: report.ok, hookCount,
+  };
+}
+
+async function runProvenance() {
+  const results = [];
+  for (const cfg of ['absent', 'installed-pooled', 'installed-fresh']) {
+    results.push(await provRun(cfg));
+  }
+  console.log('phase H provenance (ON-2; outside the frozen GATE window):');
+  console.log('  run              | major | minor | maxMs | heapDelta B |  B/op | emits');
+  for (const r of results) {
+    console.log('  ' + r.cfg.padEnd(16) + ' | ' + String(r.major).padStart(5) + ' | ' +
+      String(r.minor).padStart(5) + ' | ' + r.maxMs.toFixed(2).padStart(5) + ' | ' +
+      String(r.heapDelta).padStart(11) + ' | ' + r.perOp.toFixed(2).padStart(5) + ' | ' + r.hookCount);
+  }
+  const absent = results.find((r) => r.cfg === 'absent');
+  const pooled = results.find((r) => r.cfg === 'installed-pooled');
+  let provOk = true;
+  // G3, zero added allocation: the absent warm-read window is byte-identical in
+  // GC PROFILE to the frozen GATE line (major=0, minor=0, maxMs=0.00) -- zero
+  // collectible allocation on the hot read path (V7). The GC-event count is the
+  // true signal: a window that triggers no minor GC allocated nothing. The
+  // heapDelta byte count is V8 heap bookkeeping (sample arrays, async timer
+  // state) even at minor=0, so it is reported but not gated.
+  if (!(absent.major === 0 && absent.minor === 0 && absent.maxMs < 0.005)) {
+    process.stderr.write('  FAIL provenance: absent GC profile major=' + absent.major +
+      ' minor=' + absent.minor + ' maxMs=' + absent.maxMs.toFixed(2) + ' (expected 0/0/0.00)\n');
+    provOk = false;
+  }
+  // The installed candidate (c) must still hold maxMajor 0 under the emit load.
+  if (!(pooled.ok && pooled.verdict === 'pass' && pooled.major === 0)) {
+    process.stderr.write('  FAIL provenance: installed-pooled major=' + pooled.major +
+      ' verdict=' + pooled.verdict + '\n');
+    provOk = false;
+  }
+  console.log(provOk
+    ? '  PASS: absent GC profile == frozen GATE (0/0/0.00); installed-pooled holds maxMajor 0 (G3)'
+    : '  provenance FAILED');
+  if (!provOk) process.exitCode = 1;
+}
+
+// ---- OR-10 attempt D: inspect install/uninstall retention (NOT a gate) -----
+// 4096 cycles: a hook closure tracked { audit: true } OUTSIDE any owner and
+// carried across the inspect() install/uninstall boundary while the client's
+// owner tree is torn down (clear + dispose). Honest pass-or-fail; the outcome is
+// recorded verbatim in INCONCLUSIVE.md as Attempt D. It is NOT a gate clause
+// (ON-3): a control that cannot trip is decorative.
+let dSink = 0;
+function makeInspectHook() { return (e) => { dSink = e.type.length; }; }
+async function runAttemptD() {
+  const beforeSize = tracker.size();
+  const CYC = 4096;
+  for (let i = 0; i < CYC; i++) {
+    const qc = queryClient({ defaultStaleTime: 0 });
+    const hookClosure = makeInspectHook();       // closes over dSink (module) only, not qc
+    tracker.track(hookClosure, NOOP_RELEASE, 'inspect-hook', { audit: true });
+    const uninstall = qc.inspect(hookClosure);
+    qc.setQueryData(['d', i & 15], i);           // drive events through the hook
+    uninstall();                                 // carried across the install/uninstall boundary
+    qc.clear();
+    qc.dispose();                                // tear down the client owner tree
+  }
+  globalThis.gc?.();
+  await new Promise((r) => setTimeout(r, 50));
+  const liveD = tracker.size() - beforeSize;
+  const findingsD = tracker.audit();
+  const fired = liveD !== 0 || findingsD.length !== 0;
+  if (dSink === Number.MIN_SAFE_INTEGER) console.log('unreachable');
+  console.log('phase H OR-10 attempt D (inspect install/uninstall retention; NOT a gate clause):');
+  console.log('  cycles=' + CYC + ' tracked-hook live-delta=' + liveD + ' audit-findings=' +
+    findingsD.length + ' -> ' + (fired ? 'FIRED' : 'DID NOT FIRE (carried; recorded verbatim in INCONCLUSIVE.md)'));
+}
+
 // ---- orchestration --------------------------------------------------------
 // Fail closed on a missing --expose-gc BEFORE any phase runs: without it the
 // census settle cycles cannot collect and phase H reports a leak-shaped
@@ -351,4 +496,10 @@ if (BREAK) {
     }
     process.exitCode = 1;
   }
+  // C7 (ON-2): the feed provenance double-run + OR-10 attempt D run AFTER the
+  // frozen gate evaluation and print their own lines -- they never alter the GATE
+  // line above. The provenance can independently fail the process (G3); attempt D
+  // is recorded only (never a gate clause).
+  await runProvenance();
+  await runAttemptD();
 }

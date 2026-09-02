@@ -123,6 +123,37 @@ resolve the cause, do not widen the budget.
   control that cannot trip is decorative). The four live controls remain
   `alloc` / `detach` / `fuzz` / `pages`.
 
+  Q7 (OR-10) added NEW public surface (`qc.inspect` -- the devtools feed) and
+  re-attempted a legal trigger through the inspect install/uninstall lifecycle.
+  The attempt was run this session against the real entry points, as a section of
+  phase H that executes AFTER the frozen gate evaluation (ON-2), so it can never
+  move the byte-frozen GATE line:
+
+    Attempt D -- carry a tracked inspect-hook closure across the install/uninstall
+      boundary while the client owner tree is torn down. 4096 cycles of:
+      `const hookClosure = makeInspectHook()` (closes over a module-level sink
+      only, never the client -- held-value contract preserved), `tracker.track(
+      hookClosure, NOOP_RELEASE, 'inspect-hook', { audit: true })` OUTSIDE any
+      lite-signal owner, `qc.inspect(hookClosure)`, drive events through the hook
+      (`qc.setQueryData`), then `uninstall()` + `qc.clear()` + `qc.dispose()` --
+      the hook carried the whole way through. Result (this session):
+      `tracker.size()` returned to its pre-attempt value (live-delta `0`) and
+      `tracker.audit().length === 0` after `gc()` + a settle tick. The inspect
+      seam holds a plain single-slot cell (`feed = { hook, pool }`); uninstall
+      nulls both, and the feed uses no `createRoot`/`effect`, so tearing it down
+      touches no lite-signal owner tree the owner-cascade kernel watches -- it
+      cannot leave the kernel's trip state, exactly as query()/streamQuery()/
+      persistQueryClient do not.
+
+  OUTCOME: does NOT fire. Attempt D re-recorded verbatim above; the
+  findings-clause stays uncontrolled and is carried forward. Per ON-3, Attempt D
+  is explicitly NOT a gate clause. The honest Q7 addition that DOES gate is the
+  fuzzer feed state-machine control C-feed (`QUERY_TORTURE_BREAK=feed` -> a
+  guaranteed `detach-without-attach` via a dropped attach bookkeeping update);
+  the live controls are now `alloc` / `detach` / `fuzz` / `pages` / `feed`
+  (`tripped=5/5` under `QUERY_TORTURE_BREAK=1`). No `ctlFindings` control was
+  added (a control that cannot trip is decorative).
+
 The census clause (`censusOk`) WAS uncontrolled between commit e56af54 and its
 fix: C-detach hardcoded `censusOk: true` (an undeclared drift from PLAN
 Assertion 3). It is now controlled -- C-detach builds a WeakRef census over its
