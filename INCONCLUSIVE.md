@@ -96,6 +96,33 @@ resolve the cause, do not widen the budget.
   (a control that cannot trip is decorative). The four live controls remain
   `alloc` / `detach` / `fuzz` / `pages`.
 
+  Q6 (OR-11) added NEW public surface (`persistQueryClient` / `qc.dehydrate` /
+  `qc.hydrate`) and re-attempted a legal trigger through the adapter teardown
+  path. The attempt was run this session against the real entry points:
+
+    Attempt C -- track a dehydrated payload with `{ audit: true }` and carry it
+      across `persistQueryClient.stop()` with a PENDING throttled save.
+      `persistQueryClient(dst, { save, load: () => payload, version: 'v1',
+      throttle: 1000 })`; then `await handle.restored` (arms the write hook),
+      `dst.setQueryData(['w'], i)` (opens a pending save window on the injected
+      mock clock), and `handle.stop()` (FLUSH-ON-STOP fires the pending save and
+      uninstalls the hook) -- the payload tracked and audited the whole way
+      through. Result: `tracker.audit().length === 0` observed while the payload
+      was tracked immediately after `stop()`. The adapter's teardown touches no
+      lite-signal owner tree (persistQueryClient uses no `createRoot`/`effect`;
+      the write hook is a plain single-slot thunk), so it cannot leave the
+      owner-cascade kernel's trip state. `size()` reflects the tracked payload
+      only while the probe itself holds the reference -- an artifact of the
+      probe, not a lite-query retention (and a payload has no reactive owner to
+      auto-untrack, so lite-leak 1.10.0 `untrack` does not drop `size()`
+      synchronously; the shipped phase-1b loop therefore proves payload
+      reachability with a WeakRef census, not a registration).
+
+  OUTCOME: does NOT fire. Attempt C re-recorded verbatim above; the clause stays
+  uncontrolled and is carried forward. No `ctlPersist` control was added (a
+  control that cannot trip is decorative). The four live controls remain
+  `alloc` / `detach` / `fuzz` / `pages`.
+
 The census clause (`censusOk`) WAS uncontrolled between commit e56af54 and its
 fix: C-detach hardcoded `censusOk: true` (an undeclared drift from PLAN
 Assertion 3). It is now controlled -- C-detach builds a WeakRef census over its

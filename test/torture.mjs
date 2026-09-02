@@ -44,7 +44,7 @@ import {
 import { createRoot, effect } from '@zakkster/lite-signal';
 
 // >>> WIRE 1: the package under test
-import { queryClient, query, infiniteQuery } from '../Query.js';
+import { queryClient, query, infiniteQuery, persistQueryClient } from '../Query.js';
 import { streamQuery } from '../StreamQuery.js';
 
 const CYCLES = 4096;
@@ -72,6 +72,19 @@ const FETCHER = async () => 1;
 // cursor is the page index, exhausting after four pages.
 const PAGE_FETCHER = async ({ cursor }) => { const b = (cursor == null ? 0 : cursor) * 2; return [b, b + 1]; };
 const GET_NEXT = (lastPage, allPages) => (allPages.length < 4 ? allPages.length : null);
+// Persistence churn support (phase 1b): a no-op save (closes over no tracked
+// target) and a minimal per-cycle mock clock whose timers are created + cleared
+// inside the cycle and never advanced, so no wall-clock timer is ever armed.
+const NOOP_SAVE = () => {};
+function makePersistClock() {
+  let id = 1;
+  const timers = new Map();
+  return {
+    now: () => 0,
+    setTimeout: (fn, ms) => { const t = id++; timers.set(t, fn); return t; },
+    clearTimeout: (t) => { timers.delete(t); },
+  };
+}
 
 // A minimal manually-driven async iterator: yields queued values, done on
 // return() (abort-on-detach). No wall-clock timers.
@@ -189,6 +202,40 @@ async function runPhaseH() {
     if (sHandle) { sHandle.dispose(); sHandle = null; }
     if (iHandle) { iHandle.dispose(); iHandle = null; }
     qc.clear();                                        // disposeEntry -> release entry signal nodes
+  }
+
+  // ---- phase 1b: persistence churn (dehydrate/hydrate/teardown) -----------
+  // Serialization is the classic accidental-retention factory: a payload that
+  // closes over the cache, or a persister that outlives stop(), pins the whole
+  // entry map. Each cycle snapshots a small cache, restores it into a fresh
+  // client THROUGH THE ADAPTER, then tears both down -- install -> restored ->
+  // a write that opens a pending throttled save -> stop() (FLUSH-ON-STOP, which
+  // fires the pending save and uninstalls). The payload is the retention
+  // subject; it is WeakRef-sampled into the census below (not tracker.track'd:
+  // lite-leak 1.10.0 size() counts live REGISTRATIONS, and a payload has no
+  // reactive owner to auto-untrack, so a WeakRef census -- not a registration
+  // -- is the right reachability tool for it). The OR-11 findings-clause attempt
+  // (a payload tracked with { audit: true } carried across stop()) was run
+  // against this exact path and did NOT fire; recorded verbatim in
+  // INCONCLUSIVE.md (Attempt C). Runs before the gc() settle below, so the
+  // census (8 cycles) proves the payloads collect.
+  for (let i = 0; i < CYCLES; i++) {
+    const clock = makePersistClock();
+    const src = queryClient({ now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, defaultStaleTime: 0 });
+    src.setQueryData(['p', 0], i);
+    src.setQueryData(['p', 1], { v: i });
+    const payload = { version: 'v1', state: src.dehydrate() };
+    src.clear();
+    src.dispose();
+
+    const dst = queryClient({ now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, defaultStaleTime: 0 });
+    const handle = persistQueryClient(dst, { save: NOOP_SAVE, load: () => payload, version: 'v1', throttle: 1000 });
+    censusRefs.push(new WeakRef(payload));
+    await handle.restored;                 // arm the write hook (drain the load microtask)
+    dst.setQueryData(['w'], i);            // opens a pending throttled save window
+    handle.stop();                         // FLUSH-ON-STOP: fires the pending save, then teardown
+    dst.clear();
+    dst.dispose();
   }
 
   globalThis.gc?.();
