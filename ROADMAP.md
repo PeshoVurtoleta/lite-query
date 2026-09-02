@@ -1063,6 +1063,32 @@ surfaces were fresh)
      corpus to LS4 before it codes.
   4. LS4 shrinking to the push-writer alone is a perfectly good 1.4.0.
 
+SPIKE VERDICT (2026-09-02, planner-run, operator-ratified in PLAN.md
+ON-1..ON-5; recorded here and relayed to lite-stream's session same day):
+  - Facts 2 and 3 CONFIRMED at source. Fact 1 confirmed in substance,
+    FALSIFIED in naming -- the ratified wording, the only one either
+    roadmap may carry: "followers receive frames as BroadcastChannel
+    messages over the existing crossTab channel; lite-channel supplies
+    only the caller-wired isLeader oracle." No lite-channel import, ever.
+  - push-writer -> lite-stream, SURVIVES (evidence upgraded: their
+    hand-made-queue escape hatch allocates promise+resolver per frame on
+    the follower warm path -- falsified on law 4). LS4 shrinking to
+    createSignalWriter alone is the right 1.4.0.
+  - idleTimeout -> lite-query in-package watchdog (lastFrameAt + one
+    periodic check-and-rearm timer, their design note verbatim); stays
+    parked on their side pending a standalone consumer.
+  - share/refcount -> struck (no matrix cell produces one-iterator ->
+    N-local-consumers).
+  - SEQUENCING: Q8 proceeds in PARALLEL. Follower window behind one seam
+    (projectFrame); semantics pinned by a differential parity test whose
+    oracle is lite-stream's live pipeToSignal in our suite; LS4's writer
+    swaps the seam body at a later minor with the test unchanged. Parity
+    assertion + 12-case frame corpus handed to lite-stream BEFORE LS4
+    codes (full text in PLAN.md, spike section).
+  - STOP-DECISION-1: SPLIT. 2.0.0 = shared streams; the offline mutation
+    queue defers to v2.1.0 (see the Q9 stub below) with G6 and the full
+    OR-6 semantics carried intact.
+
 ASSERTIONS (floor)
   - Failover matrix green, every cell named.
   - N-tab soak (fuzzer extended): 5 simulated tabs, one upstream
@@ -1082,7 +1108,33 @@ DONE WHEN
   five open tabs hold one upstream connection through leader churn without
   frame duplication; queued mutations survive a reload and replay exactly
   once; 2.0.0 published with the migration note
+  [SPIKE VERDICT amendment 2026-09-02: the queue clause moves to Q9/2.1.0
+  per STOP-DECISION-1; Q8's DONE WHEN is the streams half + the ON-3
+  falsy-rejection breaking fix.]
 ```
+
+===============================================================================
+# Q9 -- lite-query v2.1.0 -- offline mutation queue (deferred from Q8)
+===============================================================================
+
+Deferred by Q8's STOP-DECISION-1 (2026-09-02, PLAN.md ON-1): the queue does
+not ride an unfinished failover story. This stub is the explicit deferral
+record; the full charter text lives in the Q8 block above (DESIGN
+OBLIGATIONS, offline queue bullet) and carries forward INTACT:
+  - explicit opt-in PER MUTATION (a silent queueing default is fail-open
+    and forbidden);
+  - durable via the Q6 persistence seam, version-stamped;
+  - replay preserves order per key, surfaces per-item results, and DROPS
+    (never silently retries) items whose entries no longer exist;
+  - replay observable via the Q7 feed;
+  - G6 (airplane-mode script: dispatch offline -> reload -> reconnect ->
+    in-order exactly-once replay, feed-observable) moves here with it;
+  - the projectFrame seam swap to lite-stream's createSignalWriter (LS4)
+    also rides 2.1 if LS4 has shipped by then (parity test unchanged --
+    it is the contract).
+tests_min: set at session start from the then-shipped base (the Q8 rule:
+a floor below the shipped suite is decorative). carry_from_q8: whatever
+INCONCLUSIVE.md holds after attempt E.
 
 ---
 
