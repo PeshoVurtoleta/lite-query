@@ -343,16 +343,16 @@ If you're new to the family, start with lite-signal -- every other library here 
 npm test
 ```
 
-177 deterministic tests. Run output:
+181 deterministic tests. Run output:
 
 ```
-# tests 177
-# pass 177
+# tests 181
+# pass 181
 # fail 0
 # skipped 0
 ```
 
-The core suite (120) uses a controlled fetcher, mock clock, and mock `BroadcastChannel` so every test is deterministic -- no real timers, no real network. The optional entry points add 31 (`/await`) and 20 (`/stream`) tests, the latter driving a manually-pumped async iterator through every termination path, and 6 repo drift guards keep the shipped files ASCII-clean, the documented surface in sync with the real exports, and the runtime `VERSION` const equal to `package.json`. See `test/harness.js` for the mocks.
+The core suite (120) uses a controlled fetcher, mock clock, and mock `BroadcastChannel` so every test is deterministic -- no real timers, no real network. The optional entry points add 31 (`/await`) and 24 (`/stream`) tests, the latter driving a manually-pumped async iterator through every termination path, and 6 repo drift guards keep the shipped files ASCII-clean, the documented surface in sync with the real exports, and the runtime `VERSION` const equal to `package.json`. See `test/harness.js` for the mocks.
 
 Every entry point exports `VERSION` -- lite-query's own version string, the single runtime version source. It lives in `Query.js`, is re-exported by `/stream` and `/await`, and `test/version-sync.test.js` asserts it equals `package.json`.
 
