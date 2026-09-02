@@ -5,6 +5,68 @@ All notable changes to `@zakkster/lite-query` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] -- 2026-09-02
+
+Cursor pagination and route-loader prefetch, both first-class. The last honest
+"trails TanStack" row -- pagination as a Cookbook recipe -- is gone.
+
+### Added
+
+- `infiniteQuery(qc, { key, fetcher, getNextCursor, enabled?, cacheTime?,
+  staleTime?, retry? })` -- the cursor-paginated sibling of `query()`. One cache
+  entry holds the whole list: `pages()` is the array of raw page results,
+  `data()` is the flattened accumulation, `fetchNextPage()` appends the next page
+  (dedups on the in-flight promise; no-op once exhausted), `hasNextPage()` reads
+  the cursor state, plus `status()/error()/fetching()/refetch()/dispose()`. The
+  fetcher receives `{ key, cursor, signal }` (cursor is `null` for page one).
+  Lives in the SAME cache as `query()` -- getQueryData / setQueryData /
+  invalidate / removeQueries / cross-tab all operate on it uniformly.
+  `invalidate` / `refetch` rebuild from page one and replace the array on success
+  (stale-while-revalidate over the whole list); a `pageGen` generation guard
+  swallows a late page from a superseded fetch, so two generations never mix.
+- `qc.prefetch(key, fetcher, opts?)` -- warm an entry with zero observers (route
+  loaders, hover speculation). Fetches unless already fresh; a later `query()`
+  adopts it without refetching; the entry GCs at cacheTime like any unobserved
+  one. Per OR-4, prefetch of a fresh entry is a NO-OP -- no fetch, no cacheTime
+  GC re-arm; a `force` variant is deferred until a consumer needs it.
+- Entry monomorphism preserved: seven uniform infinite slots (`isInfinite`,
+  `pages`, `flat`, `nextCursor`, `hasNext`, `pageGen`, `getNextCursor`) sit at
+  their null/false/0 defaults on every plain entry -- one hidden class, zero new
+  signal nodes for a plain query. Pages ride the entry's `data` signal (recreated
+  once with a never-equal comparator so a same-ref set after an in-place push
+  still notifies); the flat accumulation appends in place with no O(n) re-copy.
+- Aliasing contract (documented in Query.d.ts + llms.txt): `data()` returns a
+  LIVE array that grows in place as pages arrive -- copy it (`[...q.data()]`) to
+  retain a snapshot across a `fetchNextPage`.
+
+### Tests + torture
+
+- 199 deterministic tests (138 core + 31 await + 24 stream + 6 drift guards),
+  up from 181: `test/infinite-query.test.js` (17 -- accumulation/flat order,
+  cursor exhaustion, concurrent-fetchNextPage dedup, invalidate/refetch page-one
+  replace, late-page-from-dead-generation swallow, detach + key-change mid-page
+  abort, error ladder, enabled gate, cross-tab page sync, prefetch adoption /
+  fresh no-op / cacheTime GC) plus a zero-GC warm-read contract for infinite
+  handles.
+- `test/torture.mjs` phase H reads a prefilled 4-page infinite handle inside the
+  200000 warm loop at zero allocation; the GATE line is byte-identical:
+  `GATE leak=size 0/0 findings=0 warnings=0 | gc major=0 minor=0 maxMs=0.00 | ok`.
+- `bench/torture/query-soak.mjs` gains 32 infinite handles, fetchNextPage storms
+  and invalidate races with a gen/idx page-accumulation oracle;
+  `QUERY_TORTURE_BREAK=pages` splices a foreign-generation page and the oracle
+  trips (`FAIL: page mixing`, exit 1). New phase-C control `pages` joins
+  `alloc`/`detach`/`fuzz`; `QUERY_TORTURE_BREAK=1` trips 4/4; the unknown-value
+  message reads `1|alloc|detach|fuzz|pages`.
+- `bench/torture/shared-fetch-soak.mjs` gains a two-tab infinite page-storm
+  oracle: a follower storms `fetchNextPage` on a shared key and converges to the
+  leader's exact pages array while the leader fetches each page exactly once
+  (`per-page [[0,1],[1,1],[2,1],[3,1],[4,1]]`, follower self-fetches 0). Proven
+  able to fail via `QUERY_TORTURE_BREAK=storm` (`FAIL: page-storm divergence`).
+- OR-6: the findings-clause audit path was re-attempted through the new
+  infinite/prefetch teardown paths (dispose-owner-mid-page-fetch and
+  tracked-fetchNextPage-promise + removeQueries-mid-flight). Neither fired;
+  re-recorded in INCONCLUSIVE.md and carried to Q6.
+
 ## [1.2.1] -- 2026-09-02
 
 Harness only. No runtime change: Query.js, StreamQuery.js and Awaitable.js are
