@@ -7,7 +7,7 @@ ROADMAP wins over this file only where this file is silent.
 ---
 package: "@zakkster/lite-query"
 session: Q6
-status: pipeline-complete (2026-09-02; C1-C8 + QD-1..QD-5 fixes; reviewer APPROVED x2, QA PASS; suite 268, GATE byte-identical; awaiting /release 1.4.0 + operator publish per OR-1)
+status: shipped (2026-09-02; C1-C8 + QD-1..QD-5 fixes; reviewer APPROVED x2, QA PASS; suite 268, GATE byte-identical; drill sites=3/65 tests=268/0 pack 80.2 kB; operator publish e2f07ba; registry artifact verified)
 version_target: 1.4.0        # stamped by the /release drill, NOT in-session (OR-1)
 tests_min: 218               # floor; suite is 203 at session start
 skip_max: 0

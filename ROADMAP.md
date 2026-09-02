@@ -36,7 +36,7 @@ Registry state, checked with `npm view <pkg> version`:
 
 | Package | Latest | Relevant fact |
 | --- | --- | --- |
-| `@zakkster/lite-query` | 1.3.0 | Q5 shipped (operator publish `855214e`, 2026-09-02; registry `latest` = 1.3.0). Artifact verified same day from the registry tarball: 13 files, `[1.3.0]` CHANGELOG head, `Query.js` `VERSION = "1.3.0"` string-equal to the manifest. infiniteQuery + qc.prefetch are public surface; the facts table's last "trails TanStack" row is gone. Prior artifact verifications (1.2.0 `c339c12`, 1.2.1 `e7f69bd`) hold in history |
+| `@zakkster/lite-query` | 1.4.0 | Q6 shipped (operator publish `e2f07ba`, 2026-09-02; registry `latest` = 1.4.0). Artifact verified same day from the registry tarball: 13 files, `[1.4.0]` CHANGELOG head, `Query.js` `VERSION = "1.4.0"` string-equal to the manifest. dehydrate/hydrate + persistQueryClient are public surface; bake-stream's MX1 tripwire is ARMED. Prior artifact verifications (1.2.0 `c339c12`, 1.2.1 `e7f69bd`, 1.3.0 `855214e`) hold in history |
 | `@zakkster/lite-await` | 1.3.0 | fully upgraded (V1 -> 1.2.1, C1 -> 1.3.0): **18 named exports** + VERSION. `createAwaitScope` shipped -- triggering consumer was lite-room 1.1.0 (`decisions/0007`), NOT our Q5; that gate resolved externally. `decisions/0009` verdict: **REJECT** (locked decision #4 closes). Q3's re-export target is now EIGHT (Q-07) |
 | `@zakkster/lite-stream` | 1.1.0 | published 2026-07-10; additive `toAsyncIterable` enrichments; `^1.0.0` peer admits it; suite green against it. Roadmap enriched 2026-09-01 (`../LiteStream/ROADMAP.md`, LS1..LS4): its LS-01 (dispose-mid-pump pulls forever; llms claim false since 1.0.0) verified NOT to bite us -- `streamStop` aborts before any teardown (`StreamQuery.js:156`); its LS3 v1.3.0 targets our hand-rolled ring (see parking ledger). UPDATE 2026-09-02: lite-stream is now **1.3.0** -- LS1..LS3 all shipped (their harness caught and fixed a real pump bug, LS-13, on the way); `pipeToSignal` gained `mode`/`maxBuffer`, `droppedCount`/`overflowCount` getters on the stop fn, an `onValue` tap, and `onAbort` (abort vocabulary pinned in their `decisions/0001`); their s7 conformance tier freezes OUR exact 1.1.x call shape and proves a rewrite-parity case. The collapse rider is folded into Q3. LS4 (1.4.0) stays GATED on Q8's spike; SPIKE INPUTS recorded in the Q8 brief |
 | `@zakkster/lite-signal` | 1.5.0 | stable; the `>=1.5.0-alpha` peer floor is now pointing below a released stable (Q-06) |
@@ -737,7 +737,7 @@ DONE WHEN
 ---
 package: "@zakkster/lite-query"
 version_target: 1.4.0
-status: pipeline-complete (2026-09-02; ladder 493264c..8e8caf4 C1-C8, coder resumed twice at turn limits; reviewer APPROVED w/10-point audit, QA FAIL(4: flush-after-stop re-save, validation-to-seeding TOCTOU, symbol-key bypass, throwing-getter escape) -> fixed w/pinned QD-1..QD-4 a87a4f8 -> reviewer DELTA REJECTED (seed loop re-hashed the caller's key array) -> QD-5 fix beed579 (ensureEntryByHash consumes the validated hash + rollback-wrapped seed loop) -> DELTA APPROVED -> QA re-probe PASS incl. an independent QD-5 vector; suite 268, GATE byte-identical, 4/4 controls; awaiting /release 1.4.0 drill + operator publish per standing PR-1)
+status: shipped (2026-09-02; ladder 493264c..8e8caf4 C1-C8, coder resumed twice at turn limits; reviewer APPROVED w/10-point audit, QA FAIL(4: flush-after-stop re-save, validation-to-seeding TOCTOU, symbol-key bypass, throwing-getter escape) -> fixed w/pinned QD-1..QD-4 a87a4f8 -> reviewer DELTA REJECTED (seed loop re-hashed the caller's key array) -> QD-5 fix beed579 (ensureEntryByHash consumes the validated hash + rollback-wrapped seed loop) -> DELTA APPROVED -> QA re-probe PASS incl. an independent QD-5 vector; suite 268, GATE byte-identical, 4/4 controls; drill sites=3/65 tests=268/0 GATE ok pack 80.2 kB; operator publish e2f07ba; registry artifact verified: 13 files, [1.4.0] head, VERSION sync)
 tests_min: 218   # re-rebased 2026-09-02 post-Q5 (203 base; a floor below the shipped suite is decorative); shipped at 268
 carry_from_q5: the findings-clause control -- STILL uncontrolled after
   Q5's two new-surface attempts (QA re-ran both, findings=0);
@@ -1145,7 +1145,11 @@ scripts; Q4 onward: the law harness). No gate output is a FAIL.
   stands. Bake's next charter (MX1 both-repos soak / MX2 append-across-
   saves / MX3 preserve-RangeReader-stays-refused) WAITS ON OUR Q6
   (v1.4.0) -- MX1's tripwire is "lite-query Q6 ships", so Q6 now has a
-  downstream consumer counting on it. Recipe
+  downstream consumer counting on it. TRIPWIRE ARMED 2026-09-02: 1.4.0 IS
+  published (registry verified; operator publish e2f07ba) -- MX1/MX2/MX3 are
+  unblocked on bake's side. Recipe (1) DELIVERED the same day by the Q6 C7
+  docs pass; the ingest-progress candidate is re-parked further down this
+  entry. Recipe
   (1) requires MQ1 (abortable range reads: reader-level `{ signal }`,
   adapter `fetch(byteOffset, byteLength, signal?)`, `R_ABORTED`,
   no-partial-cache -- originally probed here: streamQuery's
