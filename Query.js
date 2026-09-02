@@ -514,9 +514,132 @@ export function queryClient(options = {}) {
                     }
                     break;
                 }
+                // -- shared streams (Q8). All four are inert unless
+                // sharedStreamActive AND a local entry has opted into sharing;
+                // a tab that never opts in early-returns at the gate. --
+                case "stream-open":  if (sharedStreamActive) onStreamOpen(m);  break;
+                case "stream-frame": if (sharedStreamActive) onStreamFrame(m); break;
+                case "stream-end":   if (sharedStreamActive) onStreamEnd(m);   break;
+                case "stream-req":   if (sharedStreamActive) onStreamReq(m);   break;
             }
         } finally {
             processingRemote = false;
+        }
+    }
+
+    // -- shared streams (Q8) --------------------------------------------------
+
+    // Control-message send that survives the echo guard (V2). A control message
+    // (a promotion announce, a stream-req reply) emitted from INSIDE
+    // onRemoteMessage would be swallowed by broadcast()'s `processingRemote`
+    // early-return; defer it onto a microtask so it leaves once the guard is
+    // down -- cold, once per announce, NEVER per frame. The guard itself is not
+    // weakened, so the per-frame echo storm the fuzzer pins still cannot loop.
+    function broadcastControl(msg) {
+        if (!channel) return;
+        queueMicrotask(() => {
+            if (!channel) return;
+            let ok = true;
+            try { channel.postMessage(msg); } catch { ok = false; }
+            if (feed.hook !== null) emitTab("tab:send", msg.type, ok);
+        });
+    }
+
+    // Ownership rank: is (ae, ac) strictly below (be, bc) in the (epochSeq,
+    // clientId) lexicographic order? The tiebreak is election-state-independent
+    // (OR-3): a higher epoch wins; equal epochs break on clientId. opts.now
+    // never enters -- a mock clock must not decide ownership.
+    function rankBelow(ae, ac, be, bc) {
+        if (ae !== be) return ae < be;
+        return ac < bc;
+    }
+
+    // Relinquish this tab's ownership of a shared stream's iterator (abdication
+    // in F3/F5, or teardown). Aborts the live iterator via the streamStop the
+    // /stream pump installed, then reverts to a follower (streamOwner false).
+    // The entry stays in the map projecting the winner's frames.
+    function closeStream(entry) {
+        if (entry.streamStop) {
+            try { entry.streamStop(); } catch {}
+            entry.streamStop = null;
+            entry.streamRestart = null;
+        }
+        entry.streamOwner = false;
+    }
+
+    // Follower frame projection. Body lands in C4 (latest) + C5 (buffer window);
+    // declared here so the C2 routing is complete and hoisting-safe. Inert until
+    // then -- no local entry sets streamShared until the /stream follower path.
+    function projectFrame(entry, epochSeq, seq, value) { /* C4 latest / C5 buffer */ }
+
+    // Watchdog liveness (C6): armWatchdog starts the periodic check-and-rearm
+    // timer; disarmWatchdog clears it. Declared as no-ops here so C2's terminal
+    // projection can call them; the real bodies land in C6.
+    function armWatchdog(entry) { /* C6 */ }
+    function disarmWatchdog(entry) { /* C6 */ }
+
+    // Promotion: open a FRESH iterator on this tab and claim ownership (C7). A
+    // no-op until then; declared for the watchdog/race call sites.
+    function openStream(entry, reason) { /* C7 */ }
+
+    // stream-open: an ownership claim. Track the epoch (so max(seen)+1 stays
+    // globally monotone) and abdicate if we own this key at a lower rank.
+    function onStreamOpen(m) {
+        if (m.epochSeq > maxEpochSeen) maxEpochSeen = m.epochSeq;
+        const e = entries.get(hashKey(m.key));
+        if (!e || !e.streamShared) return;
+        e.lastFrameAt = opts.now();                  // a claim is liveness evidence
+        if (e.streamOwner &&
+            rankBelow(e.streamEpoch, clientId, m.epochSeq, m.clientId)) {
+            closeStream(e);                          // F3/F5: loser reverts to projecting
+            e.projEpoch = m.epochSeq;
+            e.projSeq = -1;
+        }
+    }
+
+    // stream-frame: the hot receive path. Track the epoch, stamp liveness, and
+    // hand the frame to projectFrame's epoch/seq gate (C4/C5).
+    function onStreamFrame(m) {
+        if (m.epochSeq > maxEpochSeen) maxEpochSeen = m.epochSeq;
+        const e = entries.get(hashKey(m.key));
+        if (!e || !e.streamShared) return;
+        e.lastFrameAt = opts.now();
+        projectFrame(e, m.epochSeq, m.seq, m.value);
+    }
+
+    // stream-end: terminal for this key at <= epochSeq. A strictly older
+    // epoch's late end is ignored; an end at our epoch-or-higher supersedes a
+    // local owner. Success settles success; error surfaces the failure AND arms
+    // the watchdog (F7) -- a follower is never wedged by a dead leader.
+    function onStreamEnd(m) {
+        if (m.epochSeq > maxEpochSeen) maxEpochSeen = m.epochSeq;
+        const e = entries.get(hashKey(m.key));
+        if (!e || !e.streamShared) return;
+        if (m.epochSeq < e.projEpoch) return;
+        if (e.streamOwner &&
+            !rankBelow(m.epochSeq, m.clientId, e.streamEpoch, clientId)) {
+            closeStream(e);
+        }
+        e.projEpoch = m.epochSeq;
+        if (m.ok) {
+            setStatus(e, "success");
+            e.lastCompletedAt = opts.now();
+            disarmWatchdog(e);
+        } else {
+            e.error.set(m.error);
+            setStatus(e, "error");
+            armWatchdog(e);
+        }
+    }
+
+    // stream-req: a follower asks for an owner. Mirrors fetch-req -- only a
+    // leader that currently owns this key answers, and it must defer the
+    // re-announce out of the handler (V2) or the echo guard swallows it.
+    function onStreamReq(m) {
+        if (!opts.isLeader()) return;
+        const e = entries.get(hashKey(m.key));
+        if (e && e.streamOwner) {
+            broadcastControl({ type: "stream-open", key: e.key, epochSeq: e.streamEpoch, clientId });
         }
     }
 
