@@ -1,6 +1,6 @@
 # @zakkster/lite-query
 
-Reactive async cache with cross-tab coherence. Built on @zakkster/lite-signal (>=1.5.0). ~6KB min+gzip core. Framework-agnostic. 267 deterministic tests (206 core incl. zero-GC hot-path contract + infiniteQuery + prefetch + persistence/dehydrated-cache conformance + 31 await + 24 stream + 6 repo drift guards). TypeScript types shipped for every entry point (Query.d.ts, StreamQuery.d.ts, Awaitable.d.ts). Three entry points: `.` (core), `./stream` (streamQuery, optional peer lite-stream), `./await` (async coordination, optional peer lite-await). Every entry exports `VERSION` -- lite-query's own version string, the single runtime version source (defined in Query.js, re-exported by /stream and /await, asserted equal to package.json).
+Reactive async cache with cross-tab coherence. Built on @zakkster/lite-signal (>=1.5.0). ~6KB min+gzip core. Framework-agnostic. 268 deterministic tests (207 core incl. zero-GC hot-path contract + infiniteQuery + prefetch + persistence/dehydrated-cache conformance + 31 await + 24 stream + 6 repo drift guards). TypeScript types shipped for every entry point (Query.d.ts, StreamQuery.d.ts, Awaitable.d.ts). Three entry points: `.` (core), `./stream` (streamQuery, optional peer lite-stream), `./await` (async coordination, optional peer lite-await). Every entry exports `VERSION` -- lite-query's own version string, the single runtime version source (defined in Query.js, re-exported by /stream and /await, asserted equal to package.json).
 
 ## Performance vs @tanstack/query-core (5.101)
 

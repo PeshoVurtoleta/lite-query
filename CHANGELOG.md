@@ -96,8 +96,8 @@ after the pipeline closes.
 
 ### Tests + torture
 
-- 64 new core tests (`test/persist.test.js` 35, `test/persist-conformance.test.js`
-  29); the suite is 267 (was 203), 0 fail, 0 skip. The conformance file mirrors
+- 65 new core tests (`test/persist.test.js` 36, `test/persist-conformance.test.js`
+  29); the suite is 268 (was 203), 0 fail, 0 skip. The conformance file mirrors
   the SHAPE of bake-stream's `test/DehydratedCache.test.js` (Part A round-trip,
   Part B corruption matrix with a pinned `MATRIX.length` of 23, Part C fail-open
   witness) and imports nothing from bake.
@@ -141,6 +141,19 @@ after the pipeline closes.
   reason union (Query.d.ts) and the llms.txt reason list. The conformance matrix
   gains the two adversarial classes (symbol-keyed record, throwing getter),
   moving `MATRIX.length` from 21 to 23.
+- QD-5 (reviewer delta): the hydrate seed path now consumes the VALIDATED key
+  hash. Validation materializes `record.keyHash`; seeding threads it through a new
+  internal `ensureEntryByHash(key, keyHash)` (and `createEntry` takes the hash),
+  so seeding re-walks NO caller object -- closing the last single-read gap (a
+  stateful getter nested in a key ELEMENT could otherwise be walked twice, one
+  walk escaping the contained validation pass, and a counting getter could
+  diverge the storage hash from the validated/dup-checked hash). The validated
+  hash is the storage hash and the map key by construction. The seed loop is also
+  wrapped belt-and-braces: on ANY throw mid-seeding it rolls back every entry the
+  call created (all fresh + unobserved: cancelGc + map delete + disposeEntry) and
+  returns `{ ok: false, count: 0, reason: "malformed-entry" }` -- a future
+  regression degrades to a clean all-or-nothing drop, never a throw or a partial
+  cache (ON-3a + OR-3 held structurally).
 
 ## [1.3.0] -- 2026-09-02
 

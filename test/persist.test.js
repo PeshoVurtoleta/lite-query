@@ -739,3 +739,20 @@ test("adapter: a hydrate that throws a non-precondition error resolves hydrate-t
     qc.hydrate = orig;
     p.stop(); qc.dispose();
 });
+
+test("hydrate: a stateful getter in a key element is walked exactly once -- seeding uses the validated hash (QD-5)", () => {
+    const qc = queryClient({ defaultStaleTime: 0 });
+    let getterCalls = 0;
+    const key = ["ns"];
+    Object.defineProperty(key, 1, {
+        enumerable: true, configurable: true,
+        get() { getterCalls++; if (getterCalls > 1) throw new Error("second key walk"); return "id-1"; },
+    });
+    const res = qc.hydrate({ entries: [{ key, data: "payload", dataUpdatedAt: 0, infinite: false }] });
+    assert.equal(res.ok, true, "hydrate succeeds on a single key walk");
+    assert.equal(res.count, 1);
+    assert.equal(getterCalls, 1, "the key element getter is invoked exactly once (no re-hash at seeding)");
+    // stored under the validated hash -> an equivalent plain key finds it
+    assert.equal(qc.getQueryData(["ns", "id-1"]), "payload", "entry stored under the validated hash");
+    qc.dispose();
+});

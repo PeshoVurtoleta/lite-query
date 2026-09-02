@@ -320,10 +320,10 @@ export function queryClient(options = {}) {
 
     // -- entries --
 
-    function createEntry(key) {
+    function createEntry(key, keyHash) {
         return {
             key,
-            keyHash: hashKey(key),
+            keyHash,
             data: signal(undefined),
             error: signal(undefined),
             status: signal("idle"),
@@ -371,11 +371,20 @@ export function queryClient(options = {}) {
     }
 
     function ensureEntry(key) {
-        const h = hashKey(key);
-        let e = entries.get(h);
+        return ensureEntryByHash(key, hashKey(key));
+    }
+
+    // As ensureEntry, but with the key hash SUPPLIED. The hydrate seed path uses
+    // this with the hash the validation pass already computed (record.keyHash),
+    // so seeding performs ZERO reads of the caller's key array -- no second
+    // hashKey walk (QD-5). The validated hash is threaded into createEntry as the
+    // storage hash and the map key, so the dup-check, the entry, and the map all
+    // agree; a getter nested in a key element can never diverge them.
+    function ensureEntryByHash(key, keyHash) {
+        let e = entries.get(keyHash);
         if (!e) {
-            e = createEntry(key);
-            entries.set(h, e);
+            e = createEntry(key, keyHash);      // hash SUPPLIED -- no re-walk of key
+            entries.set(keyHash, e);
             // Entry has no observers yet -- schedule GC immediately. attach()
             // will cancel this if an observer arrives before the timer fires.
             scheduleGc(e);
@@ -1015,11 +1024,29 @@ export function queryClient(options = {}) {
         const v = validateHydrateState(state);
         if (v.reason !== null) return { ok: false, count: 0, reason: v.reason };
         // Seed ONLY from the materialized snapshot -- never the caller's objects
-        // again (QD-2). What was validated IS what seeds, by construction.
-        for (const record of v.records) {
-            const e = ensureEntry(record.key);
-            if (record.infinite) seedInfinite(e, record);
-            else seedEntry(e, record);
+        // again (QD-2/QD-5): the entry is keyed by the VALIDATED hash
+        // (record.keyHash), so seeding reads no caller object and cannot re-walk
+        // a key element. The loop is wrapped belt-and-braces (QD-5): after fix
+        // above it reads no payload data, so this is unreachable from a payload
+        // getter, but a future regression must degrade to a clean all-or-nothing
+        // drop -- never a throw, never a partially seeded cache. On any throw,
+        // roll back every entry THIS call created (all fresh + unobserved) with
+        // the existing teardown discipline and return a malformed drop.
+        const seeded = [];
+        try {
+            for (const record of v.records) {
+                const e = ensureEntryByHash(record.key, record.keyHash);
+                seeded.push(e);
+                if (record.infinite) seedInfinite(e, record);
+                else seedEntry(e, record);
+            }
+        } catch {
+            for (const e of seeded) {
+                cancelGc(e);
+                entries.delete(e.keyHash);
+                disposeEntry(e);
+            }
+            return { ok: false, count: 0, reason: "malformed-entry" };
         }
         return { ok: true, count: v.records.length, reason: null };
     }
