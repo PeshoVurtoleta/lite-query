@@ -5,7 +5,7 @@ All notable changes to `@zakkster/lite-query` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.0] -- unreleased
+## [2.0.0] -- 2026-09-02
 
 Cross-tab SHARED STREAMS -- the strategic sequel the 1.1.0 streaming work was
 built to enable, and the eighth and final rung of the ladder. Shared fetch
@@ -13,9 +13,9 @@ collapsed N tabs to one request; a shared stream collapses N tabs to ONE upstrea
 SSE/websocket connection: the leader tab owns the single iterator and broadcasts
 frames, followers project them into their local caches and hold no iterator. The
 offline mutation queue was SPLIT out to 2.1 (see Deferred) so it never rides an
-unfinished failover story. Per OR-1 the version stamp lands only with the
-`/release 2.0.0` drill AFTER the pipeline closes -- this pipeline ran with
-`package.json` and the `VERSION` const at `1.5.0`; no in-session stamp.
+unfinished failover story. Per OR-1 the version stamp landed only with the
+`/release 2.0.0` drill after the pipeline closed (no in-session stamp; the
+pipeline ran with `package.json` and the `VERSION` const at `1.5.0`).
 
 ### BREAKING
 
