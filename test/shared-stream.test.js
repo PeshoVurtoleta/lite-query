@@ -611,6 +611,75 @@ test("shared-stream: an owner abdicates on a higher-ranked frame even without a 
     h.dispose(); tab.dispose(); peer.close();
 });
 
+// -- C8: teardown releases projection slots (V5) ----------------------------
+
+test("shared-stream: detach releases every follower projection slot (V5)", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const follower = makeTab(bc, clock, "T1", () => false, { streamIdleTimeout: 1000 });
+    const fs = streamQuery(follower, { key: ["k"], mode: "buffer", maxBuffer: 4, stream: () => makeControllable().iterable });
+    const df = observe(fs);
+    await drain();
+    const peer = new bc.BroadcastChannel("T1");
+    peer.postMessage({ type: "stream-frame", key: ["k"], epochSeq: 1, clientId: "L", seq: 1, value: "x" });
+    await drain();
+    const e = ent(follower, ["k"]);
+    assert.notEqual(e.projWindow, null, "window populated while following");
+    assert.notEqual(e.streamPromote, null, "promote closure installed");
+    // last observer leaves -> detach releases the slots (entry stays cached)
+    df();
+    await drain();
+    assert.equal(e.streamShared, false);
+    assert.equal(e.streamOwner, false);
+    assert.equal(e.streamPromote, null, "promote closure released");
+    assert.equal(e.projWindow, null, "window released");
+    assert.equal(e.streamWatchdog, null, "watchdog cleared");
+    assert.equal(e.projEpoch, -1);
+    assert.equal(e.projSeq, -1);
+    fs.dispose(); follower.dispose(); peer.close();
+});
+
+test("shared-stream: removeQueries -> disposeEntry releases projection slots (V5)", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const follower = makeTab(bc, clock, "T2", () => false, { streamIdleTimeout: 1000 });
+    const fs = streamQuery(follower, { key: ["k"], stream: () => makeControllable().iterable });
+    const df = observe(fs);
+    await drain();
+    const peer = new bc.BroadcastChannel("T2");
+    peer.postMessage({ type: "stream-frame", key: ["k"], epochSeq: 1, clientId: "L", seq: 1, value: "x" });
+    await drain();
+    const e = ent(follower, ["k"]);
+    follower.removeQueries(["k"]);
+    await drain();
+    assert.equal(ent(follower, ["k"]), undefined, "entry removed");
+    assert.equal(e.streamShared, false);
+    assert.equal(e.streamPromote, null);
+    assert.equal(e.projWindow, null);
+    assert.equal(e.streamWatchdog, null);
+    df(); fs.dispose(); follower.dispose(); peer.close();
+});
+
+test("shared-stream: clear releases an owner's projection slots + watchdog (V5)", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const src = makeControllable();
+    const leader = makeTab(bc, clock, "T3", () => true, { streamIdleTimeout: 1000 });
+    const ls = streamQuery(leader, { key: ["k"], stream: () => src.iterable });
+    const dl = observe(ls);
+    await drain();
+    src.push(1); await drain();
+    const e = ent(leader, ["k"]);
+    assert.equal(e.streamOwner, true);
+    leader.clear();
+    await drain();
+    assert.equal(e.streamShared, false);
+    assert.equal(e.streamOwner, false);
+    assert.equal(e.streamPromote, null);
+    assert.equal(e.streamWatchdog, null);
+    dl(); ls.dispose(); leader.dispose();
+});
+
 test("shared-stream: sharedStreamActive requires opt-in + a leader oracle + a channel", async () => {
     const clock = createMockClock();
     const bc = createMockBroadcastChannel();

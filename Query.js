@@ -554,6 +554,28 @@ export function queryClient(options = {}) {
         return ac < bc;
     }
 
+    // Release EVERY shared-stream projection slot back to its default (V5). A
+    // follower holds no iterator, so detach/disposeEntry's streamStop teardown
+    // never touches its window, epoch cursors, watchdog, or the streamPromote
+    // closure -- without this they (and the closure's captured /stream scope)
+    // survive detach and GC-schedule, manufacturing the OR-10 retention class by
+    // construction. Idempotent; safe on a plain query entry (all defaults).
+    function releaseProjection(entry) {
+        disarmWatchdog(entry);
+        entry.streamShared = false;
+        entry.streamOwner = false;
+        entry.streamPromoting = false;
+        entry.streamPromote = null;
+        entry.streamMode = null;
+        entry.streamMaxBuffer = 0;
+        entry.streamEpoch = 0;
+        entry.streamSeq = 0;
+        entry.projEpoch = -1;
+        entry.projSeq = -1;
+        entry.projWindow = null;
+        entry.lastFrameAt = 0;
+    }
+
     // Relinquish this tab's ownership of a shared stream's iterator (abdication
     // in F3/F5, or teardown). Aborts the live iterator via the streamStop the
     // /stream pump installed, then reverts to a follower (streamOwner false).
@@ -877,7 +899,6 @@ export function queryClient(options = {}) {
         if (sharedStreamActive && entry.streamOwner && channel) {
             broadcast({ type: "stream-end", key: entry.key, epochSeq: entry.streamEpoch, clientId, ok: false, error: undefined, reason: "closing" });
         }
-        disarmWatchdog(entry);
         // Stop any live stream first (abort the iterator -> iterator.return(),
         // closing the underlying SSE/websocket) before releasing signal nodes.
         if (entry.streamStop) {
@@ -885,8 +906,7 @@ export function queryClient(options = {}) {
             entry.streamStop = null;
             entry.streamRestart = null;
         }
-        entry.streamOwner = false;
-        entry.streamShared = false;
+        releaseProjection(entry);           // V5: null the window / cursors / promote closure
         // Release the infinite-query accumulation so a destroyed entry does not
         // pin its pages/flat arrays until the next major GC. These are plain
         // arrays, not signal nodes -- nulling is the whole release.
@@ -999,14 +1019,13 @@ export function queryClient(options = {}) {
                 if (s === "pending" || s === "streaming") setStatus(entry, "idle");
             }
             // Shared-stream teardown (owner or follower): stop the watchdog and
-            // reset the projection state so a re-attach before GC re-registers
-            // cleanly. (V5's slot release lands in C8.)
+            // release every projection slot so a re-attach before GC re-registers
+            // cleanly and nothing (window, cursors, promote closure) is retained
+            // past the last observer (V5).
             if (entry.streamShared) {
-                disarmWatchdog(entry);
-                entry.streamShared = false;
-                entry.streamOwner = false;
                 const s = entry.status();
                 if (s === "pending" || s === "streaming") setStatus(entry, "idle");
+                releaseProjection(entry);
             }
             clearSharedTimer(entry);
             scheduleGc(entry);
