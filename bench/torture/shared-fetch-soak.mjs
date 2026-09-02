@@ -37,7 +37,7 @@
  */
 import {performance} from "node:perf_hooks";
 import {createRegistry, setDefaultRegistry, effect} from "@zakkster/lite-signal";
-import {queryClient, query} from "../../Query.js";
+import {queryClient, query, infiniteQuery} from "../../Query.js";
 import {createMockClock, createMockBroadcastChannel} from "../../test/harness.js";
 
 // -- knobs --------------------------------------------------------------------
@@ -194,6 +194,72 @@ async function livenessProbe() {
     };
 }
 
+// -- ON-2: two-tab infinite page-storm oracle --------------------------------
+// One shared infinite key. A single follower storms fetchNextPage(); each call
+// broadcasts a fetch-req the leader fulfils, dedups per page (entry.promise),
+// and broadcasts the whole pages array back. Assert the follower converges to
+// the leader's exact pages array AND the leader fetched each page exactly once
+// (per-page dedup). The follower's own infinite fetcher is a spy that must
+// never run. QUERY_TORTURE_BREAK=storm corrupts the follower's final list to
+// prove the convergence oracle is able to fail.
+const STORM_BREAK = process.env.QUERY_TORTURE_BREAK === "storm";
+async function pageStormOracle() {
+    const INF_KEY = ["inf-storm"];
+    const PAGES = 5;
+    const perPageFetch = new Map();      // cursor -> leader fetch count
+    const getNext = (last, all) => (all.length < PAGES ? all.length : null);
+    const leaderInfFetcher = (ctx) => {
+        const k = ctx.cursor == null ? 0 : ctx.cursor;
+        perPageFetch.set(k, (perPageFetch.get(k) || 0) + 1);
+        return Promise.resolve([k * 10, k * 10 + 1]);
+    };
+    let folSelfFetches = 0;
+    const folInfFetcher = () => { folSelfFetches++; return Promise.resolve([-1]); };  // must never run
+
+    const lInf = infiniteQuery(leader, {key: INF_KEY, fetcher: leaderInfFetcher, getNextCursor: getNext});
+    const lStop = effect(() => { lInf.pages(); });
+    const f0 = followers[0];
+    const fInf = infiniteQuery(f0.qc, {key: INF_KEY, fetcher: folInfFetcher, getNextCursor: getNext});
+    const fStop = effect(() => { fInf.pages(); });
+    await drain(48);                     // leader + follower page one (via fetch-req)
+
+    for (let round = 0; round < PAGES + 3; round++) {
+        fInf.fetchNextPage();
+        fInf.fetchNextPage();            // concurrent storm -- dedups to one leader fetch
+        await drain(32);
+    }
+    await drain(48);
+
+    if (STORM_BREAK) {
+        // Corrupt the FOLLOWER'S entry data directly (not via setQueryData,
+        // which would broadcast the divergence back to the leader and re-
+        // converge them). A fresh array replaces the follower's page list so
+        // only the follower diverges -- the convergence oracle must catch it.
+        for (const e of f0.qc._internal.entries.values()) {
+            if (e.isInfinite) { e.data.set([[999]]); break; }
+        }
+        await drain(24);
+    }
+
+    const leaderPages = leader.getQueryData(INF_KEY);
+    const followerPages = f0.qc.getQueryData(INF_KEY);
+    lStop(); fStop(); lInf.dispose(); fInf.dispose();
+    await drain(24);
+
+    const converged =
+        Array.isArray(leaderPages) && Array.isArray(followerPages) &&
+        JSON.stringify(leaderPages) === JSON.stringify(followerPages);
+    let eachOnce = perPageFetch.size > 0;
+    for (const [, c] of perPageFetch) if (c !== 1) eachOnce = false;
+
+    return {
+        converged, eachOnce, folSelfFetches,
+        pageCount: Array.isArray(leaderPages) ? leaderPages.length : 0,
+        perPage: [...perPageFetch.entries()].sort((a, b) => a[0] - b[0]),
+        leaderPages, followerPages,
+    };
+}
+
 async function teardown() {
     for (const f of followers) for (let i = 0; i < N_OBS_PER_FOL; i++) unmountFol(f, i);
     for (let i = 0; i <= N_SHARED; i++) leaderObservers[i]();     // stop permanent leader observers
@@ -214,6 +280,7 @@ async function teardown() {
 
 const elapsed = await run();
 const probe = await livenessProbe();
+const storm = await pageStormOracle();
 await teardown();
 
 const after = reg.stats();
@@ -230,6 +297,9 @@ console.log("  leader fetches:", leaderFetches.toLocaleString());
 console.log("  follower fetches (must be 0):", followerTotal, "  per-tab:", followerFetches.join(","));
 console.log("  liveness probe: leaderVal", probe.leaderVal ? "set" : "unset",
     "/ followerVal", probe.followerVal ? "set" : "unset", "/ ok:", probe.ok);
+console.log("  page-storm: pages", storm.pageCount, "/ converged", storm.converged,
+    "/ leader per-page", JSON.stringify(storm.perPage), "/ eachOnce", storm.eachOnce,
+    "/ follower self-fetches", storm.folSelfFetches);
 console.log("  errors:", errors);
 console.log("  entries across all tabs after teardown:", leftoverEntries);
 console.log("  clock timers pending after teardown:", clock.pendingCount);
@@ -252,6 +322,19 @@ if (leaderFetches === 0) {
 }
 if (!probe.ok) {
     console.error("  FAIL: liveness -- a follower did not receive the leader's fetched value for the probe key");
+    exitCode = 1;
+}
+if (!storm.converged) {
+    console.error("  FAIL: page-storm divergence -- follower", JSON.stringify(storm.followerPages),
+        "!= leader", JSON.stringify(storm.leaderPages));
+    exitCode = 1;
+}
+if (!storm.eachOnce) {
+    console.error("  FAIL: page-storm dedup -- leader fetched a page more than once:", JSON.stringify(storm.perPage));
+    exitCode = 1;
+}
+if (storm.folSelfFetches !== 0) {
+    console.error("  FAIL: page-storm -- follower self-fetched", storm.folSelfFetches, "times");
     exitCode = 1;
 }
 if (leftoverEntries !== 0) {

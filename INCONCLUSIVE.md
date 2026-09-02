@@ -71,6 +71,31 @@ resolve the cause, do not widen the budget.
   Staging it would require a runtime edit to Query.js / StreamQuery.js, which
   OR-1 forbids in a harness session. Recorded, not faked; carried to Q5.
 
+  Q5 (OR-6) added NEW public surface (`infiniteQuery` / `qc.prefetch`) and
+  re-attempted a legal trigger through its teardown paths. Both attempts were
+  run this session against the real entry points:
+
+    Attempt A -- dispose the owner mid-page-fetch with the handle still tracked.
+      `createRoot(() => effect(() => { const iq = infiniteQuery(qc, { fetcher:
+      never-resolves, ... }); iq.data(); track(iq, ..., { audit:true }); }))`,
+      then dispose the root WHILE the page-one fetch is in flight and the handle
+      is NOT disposed. Result: `audit().length === 0`, `size() === 0`. The owner
+      cascade auto-untracks exactly as query()/streamQuery() do; the infinite
+      watcher rides the same `createRoot(effect)` discipline, so it cannot leave
+      the kernel's trip state.
+
+    Attempt B -- track the in-flight `fetchNextPage()` promise, then
+      `removeQueries` mid-flight (aborts with `lite-query:removed`). Result:
+      `audit().length === 0`. (`size()` shows the tracked promise only while the
+      test itself still holds the local reference -- an artifact of the probe,
+      not a lite-query retention; the audit finding, which is the clause under
+      test, never fires.)
+
+  OUTCOME: does NOT fire. Both attempts re-recorded verbatim above; the clause
+  stays uncontrolled and is carried to Q6. No `ctlFindings` control was added
+  (a control that cannot trip is decorative). The four live controls remain
+  `alloc` / `detach` / `fuzz` / `pages`.
+
 The census clause (`censusOk`) WAS uncontrolled between commit e56af54 and its
 fix: C-detach hardcoded `censusOk: true` (an undeclared drift from PLAN
 Assertion 3). It is now controlled -- C-detach builds a WeakRef census over its

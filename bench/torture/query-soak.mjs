@@ -34,7 +34,7 @@
  */
 import {performance} from "node:perf_hooks";
 import {createRegistry, setDefaultRegistry, signal, effect, dispose as disposeNode} from "@zakkster/lite-signal";
-import {queryClient, query} from "../../Query.js";
+import {queryClient, query, infiniteQuery} from "../../Query.js";
 import {createMockClock} from "../../test/harness.js";
 
 // -- knobs --------------------------------------------------------------------
@@ -144,13 +144,76 @@ function unmountSlot(i) {
 }
 for (let i = 0; i < N_OBSERVERS; i++) mountSlot(i);
 
+// -- infinite handles + page-accumulation oracle ------------------------------
+// 32 cursor-paginated handles on ["inf", i]. Page k is the single-item array
+// [k], so a correctly-accumulated entry has pages == [[0],[1],[2],...] with
+// pages[k][0] === k. fetchNextPage storms and invalidate races run against
+// these; the oracle asserts every live entry stays index-contiguous. A page
+// from a superseded generation (or a two-generation mix) breaks contiguity ->
+// FAIL: page mixing. QUERY_TORTURE_BREAK=pages splices exactly such a page.
+const N_INFINITE   = 32;
+const INF_PAGES_MAX = 6;
+const BREAK = process.env.QUERY_TORTURE_BREAK;
+let infFetches = 0;
+function infFetcher(ctx) {
+    infFetches++;
+    const idx = ctx.cursor == null ? 0 : ctx.cursor;
+    return Promise.resolve([idx]);              // page k == [k]
+}
+const infGetNext = (lastPage, allPages) => (allPages.length < INF_PAGES_MAX ? allPages.length : null);
+const infHandles = new Array(N_INFINITE);
+const infSlots   = new Array(N_INFINITE).fill(null);
+for (let i = 0; i < N_INFINITE; i++) {
+    infHandles[i] = infiniteQuery(qc, {key: ["inf", i], fetcher: infFetcher, getNextCursor: infGetNext});
+}
+function mountInf(i) {
+    if (infSlots[i]) infSlots[i]();
+    const h = infHandles[i];
+    infSlots[i] = effect(() => { h.pages(); h.data(); h.hasNextPage(); });
+}
+function unmountInf(i) { if (infSlots[i]) { infSlots[i](); infSlots[i] = null; } }
+for (let i = 0; i < N_INFINITE; i++) mountInf(i);
+
+let pageMixing = false;
+let pageMixMsg = "";
+function checkInfConsistency() {
+    for (let i = 0; i < N_INFINITE; i++) {
+        const pages = qc.getQueryData(["inf", i]);
+        if (!Array.isArray(pages)) continue;
+        for (let k = 0; k < pages.length; k++) {
+            const pg = pages[k];
+            if (!Array.isArray(pg) || pg.length !== 1 || pg[0] !== k) {
+                pageMixing = true;
+                pageMixMsg = "inf " + i + " page " + k + " = " + JSON.stringify(pg) + " (expected [" + k + "])";
+                return;
+            }
+        }
+    }
+}
+
+// Break injector (cold, env-gated): splice a foreign-generation page into a
+// live infinite entry -- exactly the corruption the pageGen guard exists to
+// prevent. The oracle must catch it. `broke` fires it once, mid-run.
+let broke = false;
+function injectPageMix() {
+    if (broke) return;
+    for (let i = 0; i < N_INFINITE; i++) {
+        const pages = qc.getQueryData(["inf", i]);   // live entry.pages ref
+        if (Array.isArray(pages) && pages.length >= 1) {
+            pages.push([999]);                        // index 999 at a low position
+            broke = true;
+            return;
+        }
+    }
+}
+
 // -- op mix -------------------------------------------------------------------
 let ops = 0;
 let errors = 0;
 let lastError = null;
 
 function step() {
-    const mode = randInt(8);
+    const mode = randInt(10);
     try {
         if (mode === 0) {
             qc.setQueryData(["k", randInt(N_KEYS)], {v: randInt(1e6)});
@@ -179,10 +242,27 @@ function step() {
         } else if (mode === 6) {
             reactiveSigs[randInt(N_REACTIVE)].set(randInt(N_KEYS)); // reactive-key flip
             ops++;
-        } else {
+        } else if (mode === 7) {
             // Grow/shrink the live observer population.
             if (rnd() < 0.5) unmountSlot(randInt(N_OBSERVERS));
             else mountSlot(randInt(N_OBSERVERS));
+            ops++;
+        } else if (mode === 8) {
+            // fetchNextPage storm: three concurrent calls dedup onto one fetch.
+            const h = infHandles[randInt(N_INFINITE)];
+            for (let s = 0; s < 3; s++) {
+                const p = h.fetchNextPage();
+                if (p && typeof p.then === "function") p.then(undefined, () => {});
+            }
+            ops++;
+        } else {
+            // Invalidate an infinite key -- refetch page one, replace on success.
+            // Races an in-flight fetchNextPage (the pageGen guard swallows the
+            // superseded page). Also toggle an infinite observer occasionally.
+            const i = randInt(N_INFINITE);
+            if (rnd() < 0.7) qc.invalidate(["inf", i]);
+            else if (infSlots[i]) unmountInf(i);
+            else mountInf(i);
             ops++;
         }
     } catch (e) {
@@ -202,6 +282,8 @@ async function run() {
         await clock.flush();                 // settle microtask-resolving fetches
         clock.advance(1 + randInt(64));      // fire some deferred fetches + GC mid-run
         await clock.flush();
+        if (BREAK === "pages") injectPageMix();   // env-gated corruption (control)
+        checkInfConsistency();               // gen/idx oracle -- runs every tick
         await nextTick();
     }
     const elapsed = (performance.now() - start) / 1000;
@@ -210,9 +292,11 @@ async function run() {
 
 async function teardown() {
     for (let i = 0; i < N_OBSERVERS; i++) unmountSlot(i);   // stop all observers
+    for (let i = 0; i < N_INFINITE; i++) unmountInf(i);     // stop infinite observers
     await clock.flush();                                    // run deferred stopWatcher microtasks
     for (let i = 0; i < N_HANDLES; i++) handles[i].dispose();
     for (let i = 0; i < N_REACTIVE; i++) reactiveHandles[i].dispose();
+    for (let i = 0; i < N_INFINITE; i++) infHandles[i].dispose();
     for (let i = 0; i < N_REACTIVE; i++) { try { disposeNode(reactiveSigs[i]); } catch {} }
     clock.advance(DEFER_MAX + CACHE_TIME + 10_000);         // fire every remaining timer
     await clock.flush();
@@ -233,6 +317,7 @@ console.log("  duration:", elapsed.toFixed(3), "s");
 console.log("  ops:", ops.toLocaleString());
 console.log("  ops/sec:", perSec.toLocaleString(undefined, {maximumFractionDigits: 0}));
 console.log("  fetches:", fetchCalls.toLocaleString(), "(rejections:", rejectCalls + ")");
+console.log("  infinite fetches:", infFetches.toLocaleString(), " page-mixing:", pageMixing);
 console.log("  errors:", errors);
 console.log("  entries.size after teardown:", entries.size);
 console.log("  clock timers pending after teardown:", clock.pendingCount);
@@ -243,6 +328,10 @@ console.log("  poolGrowths:", after.poolGrowths, " totalAllocations:", after.tot
 let exitCode = 0;
 if (errors > 0) {
     console.error("  FAIL: errors > 0; first =", lastError && lastError.message);
+    exitCode = 1;
+}
+if (pageMixing) {
+    console.error("  FAIL: page mixing --", pageMixMsg);
     exitCode = 1;
 }
 if (entries.size !== 0) {

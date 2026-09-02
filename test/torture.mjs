@@ -44,7 +44,7 @@ import {
 import { createRoot, effect } from '@zakkster/lite-signal';
 
 // >>> WIRE 1: the package under test
-import { queryClient, query } from '../Query.js';
+import { queryClient, query, infiniteQuery } from '../Query.js';
 import { streamQuery } from '../StreamQuery.js';
 
 const CYCLES = 4096;
@@ -67,6 +67,11 @@ const P_SCRIPTS = ['query-soak.mjs', 'cache-fuzzer.mjs', 'shared-fetch-soak.mjs'
 // (the held-value contract: capturing target defeats finalization).
 const NOOP_RELEASE = () => {};
 const FETCHER = async () => 1;
+// Infinite-query page fetcher + cursor -- module scope so they close over no
+// tracked target (held-value contract). Each page is a two-item array; the
+// cursor is the page index, exhausting after four pages.
+const PAGE_FETCHER = async ({ cursor }) => { const b = (cursor == null ? 0 : cursor) * 2; return [b, b + 1]; };
+const GET_NEXT = (lastPage, allPages) => (allPages.length < 4 ? allPages.length : null);
 
 // A minimal manually-driven async iterator: yields queued values, done on
 // return() (abort-on-detach). No wall-clock timers.
@@ -157,6 +162,7 @@ async function runPhaseH() {
     const c = makeController();
     let qHandle = null;
     let sHandle = null;
+    let iHandle = null;
     const stop = createRoot(() => effect(() => {
       const q = query(qc, { key: ['q'], fetcher: FETCHER });
       q.status();                                     // subscribe (attach)
@@ -167,14 +173,21 @@ async function runPhaseH() {
       sq.data();                                      // subscribe (attach + start pump)
       sHandle = sq;
       tracker.track(sq, NOOP_RELEASE, 'streamQuery', { audit: true });
+
+      const iq = infiniteQuery(qc, { key: ['i'], fetcher: PAGE_FETCHER, getNextCursor: GET_NEXT });
+      iq.data();                                      // subscribe (attach + fetch page one)
+      iHandle = iq;
+      tracker.track(iq, NOOP_RELEASE, 'infiniteQuery', { audit: true });
     }));
     stop();                                           // dispose the effect -> detach
     // Census sample: weak-reference the churn handles before release, so the
     // one-sided reachability check below can prove they were collectable.
     if (qHandle) censusRefs.push(new WeakRef(qHandle));
     if (sHandle) censusRefs.push(new WeakRef(sHandle));
+    if (iHandle) censusRefs.push(new WeakRef(iHandle));
     if (qHandle) { qHandle.dispose(); qHandle = null; }
     if (sHandle) { sHandle.dispose(); sHandle = null; }
+    if (iHandle) { iHandle.dispose(); iHandle = null; }
     qc.clear();                                        // disposeEntry -> release entry signal nodes
   }
 
@@ -194,14 +207,25 @@ async function runPhaseH() {
   const c2 = makeController();
   const buf = streamQuery(qc2, { key: ['buf'], stream: c2.factory, mode: 'buffer', maxBuffer: 4 });
   const stopBuf = effect(() => buf.data());
-  await tick();
+  // Prefilled infinite handle: four pages accumulated, then read WARM inside the
+  // hot loop. pages() returns the stored array, data() the live flat view,
+  // hasNextPage() a bool -- all zero-allocation on an attached observer. Pages
+  // are injected synchronously via setQueryData (the whole-list rebuild path)
+  // rather than three imperative fetchNextPage() awaits: an un-owned async
+  // fetch would trip the async-retention kernel's no-owner-set warning and move
+  // the GATE line off byte-identical.
+  const inf = infiniteQuery(qc2, { key: ['inf'], fetcher: PAGE_FETCHER, getNextCursor: GET_NEXT });
+  const stopInf = effect(() => inf.data());
+  await tick();                                       // attach + configure infinite
+  qc2.setQueryData(['inf'], [[0, 1], [2, 3], [4, 5], [6, 7]]);   // four pages, flat rebuilt
   for (let k = 0; k < 20; k++) { c2.push(k); await tick(); }   // drive drops (droppedCount -> 16)
 
   let sink = 0;
   const gc = new GcProfiler().start();
   for (let i = 0; i < HOT; i++) {
     const dv = warm.data();
-    sink += (dv | 0) + buf.count() + buf.droppedCount() + (Array.isArray(buf.data()) ? buf.data().length : 0);
+    sink += (dv | 0) + buf.count() + buf.droppedCount() + (Array.isArray(buf.data()) ? buf.data().length : 0)
+      + inf.pages().length + inf.data().length + (inf.hasNextPage() ? 1 : 0);
     if ((i & 8191) === 0) {
       gc.sampleHeap(performance.now(), process.memoryUsage().heapUsed);
     }
@@ -211,7 +235,7 @@ async function runPhaseH() {
   const s = gc.summary();
   const report = checkNoGc(s, RULES);
   gc.stop();
-  stopWarm(); stopBuf(); warm.dispose(); buf.dispose();
+  stopWarm(); stopBuf(); stopInf(); warm.dispose(); buf.dispose(); inf.dispose();
   if (sink === Number.MIN_SAFE_INTEGER) console.log('unreachable');   // keep sink live
 
   // ---- phase H census (additive, non-flaky) ------------------------------

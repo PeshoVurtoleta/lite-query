@@ -13,13 +13,18 @@
 //               (no auto-untrack) and never disposed, so tracker.size() === 128.
 //   C-fuzz   -> phase P's echo oracle: spawns cache-fuzzer.mjs with the break
 //               var, which injects one phantom re-broadcast; child exit 1.
+//   C-pages  -> phase P's page-accumulation oracle: spawns query-soak.mjs with
+//               the break var, which splices a foreign-generation page into a
+//               live infinite entry; the gen/idx oracle catches it -> child
+//               exit 1 with "FAIL: page mixing".
 //
 // The findings.length === 0 clause has NO control: owner-cascade audit() fires
 // only when a lite-signal owner tree breaks under a still-tracked handle, and
 // lite-query's public surface never leaves that state (clean owner disposal
-// auto-untracks). Confirmed empirically this session; recorded in
-// INCONCLUSIVE.md and carried to Q5. OR-1 forbids the runtime edit that would
-// stage it.
+// auto-untracks). Q5 re-attempted a legal trigger through the NEW infinite/
+// prefetch teardown paths (OR-6, both attempts A + B): neither fired. Recorded
+// in INCONCLUSIVE.md and carried to Q6. OR-1 forbids the runtime edit that
+// would stage it.
 
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -32,6 +37,7 @@ import { effect } from '@zakkster/lite-signal';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FUZZER = join(HERE, '..', '..', 'bench', 'torture', 'cache-fuzzer.mjs');
+const SOAK = join(HERE, '..', '..', 'bench', 'torture', 'query-soak.mjs');
 const DETACH_CYCLES = 64;
 
 const settle = () => new Promise((r) => setTimeout(r, 50));
@@ -144,13 +150,28 @@ function ctlFuzz() {
   return { id: 'fuzz', tripped, clause: 'fuzz-oracle', stderrText: tripped ? '' : ('  fuzz child status=' + res.status + '\n' + out) };
 }
 
+// C-pages: spawn query-soak.mjs WITH the break var. Its env-gated injector
+// splices a foreign-generation page into a live infinite entry -- exactly the
+// two-generation mix the pageGen guard prevents. The soak's gen/idx oracle
+// catches the broken index contiguity: child exit 1 with the page-mixing text.
+function ctlPages() {
+  const res = spawnSync(process.execPath, [SOAK], {
+    stdio: 'pipe',
+    env: { ...process.env, QUERY_TORTURE_BREAK: 'pages', TORTURE_SECONDS: '2' },
+  });
+  const out = (res.stdout ? res.stdout.toString() : '') + (res.stderr ? res.stderr.toString() : '');
+  const tripped = res.status === 1 && out.includes('FAIL: page mixing');
+  return { id: 'pages', tripped, clause: 'pages-oracle', stderrText: tripped ? '' : ('  pages child status=' + res.status + '\n' + out) };
+}
+
 export async function runControls(mode, ctx) {
-  const ids = mode === '1' ? ['alloc', 'detach', 'fuzz'] : [mode];
+  const ids = mode === '1' ? ['alloc', 'detach', 'fuzz', 'pages'] : [mode];
   const results = [];
   for (const id of ids) {
     if (id === 'alloc') results.push(await ctlAlloc(ctx));
     else if (id === 'detach') results.push(await ctlDetach(ctx));
     else if (id === 'fuzz') results.push(ctlFuzz());
+    else if (id === 'pages') results.push(ctlPages());
     // Unknown value: fail loudly (ambiguous state is not "off"; note "0" is
     // truthy in JS, so it reaches here rather than running the plain gate).
     else results.push({ id, unknown: true, tripped: false, stderrText: '  unknown QUERY_TORTURE_BREAK=' + id + '\n' });
@@ -158,7 +179,7 @@ export async function runControls(mode, ctx) {
   let tripped = 0;
   for (const r of results) {
     if (r.unknown) {
-      console.log('CONTROL unknown QUERY_TORTURE_BREAK value "' + r.id + '" -- valid: 1|alloc|detach|fuzz');
+      console.log('CONTROL unknown QUERY_TORTURE_BREAK value "' + r.id + '" -- valid: 1|alloc|detach|fuzz|pages');
     } else if (r.tripped) {
       tripped++;
       console.log('CONTROL ' + r.id + ' tripped: ' + r.clause);
