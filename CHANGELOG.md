@@ -55,11 +55,22 @@ unfinished failover story. Per OR-1 the version stamp lands only with the
   `stream-req` (follower asks for an owner, mirrors `fetch-req`).
 - **At-most-once projection (OR-4)**, enforced in `projectFrame` BEFORE any signal
   write, so duplication and reordering are structurally impossible; frame loss on
-  failover is permitted and COUNTED. Epoch/seq gate: a lower epoch drops (dead
-  leader's late frame), a duplicate seq drops, a seq jump is accepted with the
-  missed count reported, a higher epoch adopts. `epochSeq` is a monotone integer
-  (max seen + 1 by whoever opens); `clientId` is one ASCII string per client --
-  neither derived from `opts.now` (a mock clock must not decide ownership).
+  failover is permitted and COUNTED. The projection cursor is the TRIPLE
+  `(projEpoch, projClientId, projSeq)` -- an epoch is NOT a unique owner
+  (QD-1, reviewer): two tabs promoting from the same observed epoch claim
+  identical `epochSeq` with distinct `clientId`s and independent seq counters, so
+  a lower epoch drops (dead leader's late frame), a higher epoch adopts, and an
+  EQUAL epoch with a different owner is resolved by the SAME `(epochSeq, clientId)`
+  rank the ownership tiebreak uses -- a lower-ranked owner's frame is dropped (the
+  loser is about to abdicate; followers converge on the winner independent of
+  arrival order), a higher-ranked owner is adopted as a boundary. Seq dedup
+  applies only WITHIN one `(epochSeq, clientId)` pair. An OWNER never projects
+  (QD-2): its own iterator holds the authoritative data, so a straggler frame from
+  a lower-ranked owner can neither overwrite it nor drag `projEpoch` forward. Both
+  laws carry a counted regression test plus a soak concurrency phase that forces
+  >1 owner live at once (QD-3). `epochSeq` is a monotone integer (max seen + 1 by
+  whoever opens); `clientId` is one ASCII string per client -- neither derived
+  from `opts.now` (a mock clock must not decide ownership).
 - **The seven named failover cells (F1-F7)** as tests: leader closes gracefully /
   killed / hung, follower promoted mid-buffer, two tabs racing promotion (the
   `(epochSeq, clientId)` tiebreak leaves exactly one owner), completion during

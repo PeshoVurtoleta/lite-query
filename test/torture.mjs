@@ -491,6 +491,112 @@ function makeCountedStreamSource() {
 
 async function soakDrain(n) { for (let i = 0; i < n; i++) await Promise.resolve(); }
 
+// A source that stamps every connection with a distinct owner id and pushes a
+// DISTINCT per-connection value each round ({ owner, s }), so a follower can
+// prove the per-(epoch,owner)-segment subsequence law when multiple owners are
+// live at once. Tracks the max simultaneous connection count (the concurrency
+// window the reviewer proved the plain soak never entered).
+function makeStampedSource() {
+  let live = 0, nextId = 0, maxLive = 0;
+  const conns = new Set();
+  const factory = (ctx) => {
+    const conn = { id: nextId++, s: 0, buf: [], wake: null, aborted: false, closed: false };
+    conn.k = () => { if (conn.wake) { const r = conn.wake; conn.wake = null; r(); } };
+    const close = () => { if (!conn.closed) { conn.closed = true; live--; conns.delete(conn); } };
+    conns.add(conn); live++; if (live > maxLive) maxLive = live;
+    if (ctx && ctx.signal) ctx.signal.addEventListener('abort', () => { conn.aborted = true; conn.k(); close(); });
+    return { async *[Symbol.asyncIterator]() {
+      try {
+        while (true) {
+          if (conn.buf.length) { yield conn.buf.shift(); continue; }
+          if (conn.aborted) return;
+          await new Promise((r) => { conn.wake = r; });
+        }
+      } finally { close(); }
+    } };
+  };
+  return { factory, pushRound() { for (const c of conns) { c.s++; c.buf.push({ owner: c.id, s: c.s }); c.k(); } },
+    get live() { return live; }, get maxLive() { return maxLive; } };
+}
+
+// Concurrency phase: force TWO+ owners live at once (kill the leader, let the
+// racers' watchdogs fire, push from every owner BEFORE convergence) and prove a
+// PURE follower (a tab whose watchdog never fires this window) projects a stream
+// where every owner-run is strictly increasing (dup=0, reorder=0) and no owner
+// re-appears after convergence -- the QD-1 law under real concurrency.
+async function runStreamConcurrencySoak() {
+  const clock = createMockClock();
+  const bc = createMockBroadcastChannel();
+  const src = makeStampedSource();
+  // tab 0: initial leader; tabs 1-3: racers (short idle); tab 4: pure observer
+  // (huge idle -> never self-connects this window, stays a follower).
+  const mk = (idx, idle, lead) => queryClient({
+    crossTab: true, broadcastChannel: bc.BroadcastChannel, crossTabChannel: 'conc',
+    sharedStream: true, isLeader: () => lead,
+    now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
+    streamIdleTimeout: idle,
+  });
+  const tabs = [mk(0, 1000, true), mk(1, 1000, false), mk(2, 1000, false), mk(3, 1000, false), mk(4, 1e9, false)];
+  const obs = [];   // pure follower's projected frames
+  const handles = tabs.map((t, i) => {
+    const h = streamQuery(t, { key: ['c'], stream: src.factory });
+    const d = createRoot(() => effect(() => { const v = h.data(); if (i === 4 && v && typeof v === 'object') obs.push(v); }));
+    return { h, d };
+  });
+  await soakDrain(20);
+
+  // leader streams a few rounds; the observer projects them
+  for (let r = 0; r < 5; r++) { src.pushRound(); await soakDrain(3); }
+
+  // KILL the leader (abort its connection, NO stream-end -> watchdog only).
+  const lead = tabs[0]._internal.entries.get(JSON.stringify(['c']));
+  if (lead && lead.streamStop) { try { lead.streamStop(); } catch {} lead.streamStop = null; lead.streamOwner = false; }
+  // fire the racers' watchdogs together -> several promote CONCURRENTLY
+  clock.advance(1000);
+  // push from EVERY live owner while they are still racing (minimal drain, so
+  // the opens have not yet crossed and multiple owners are broadcasting).
+  await soakDrain(2);
+  for (let r = 0; r < 4; r++) { src.pushRound(); await soakDrain(1); }
+  // now let it converge
+  await soakDrain(40);
+  for (let r = 0; r < 4; r++) { src.pushRound(); await soakDrain(3); }
+  await soakDrain(20);
+
+  // -- assert the QD-1 law on the pure follower's projected stream --
+  let dup = 0, reorder = 0;
+  const seenVal = new Set();
+  const lastSByOwner = new Map();
+  const ownerOrder = [];
+  for (const v of obs) {
+    const key = v.owner + ':' + v.s;
+    if (seenVal.has(key)) dup++; else seenVal.add(key);
+    if (lastSByOwner.has(v.owner) && v.s <= lastSByOwner.get(v.owner)) reorder++;
+    lastSByOwner.set(v.owner, v.s);
+    if (ownerOrder.length === 0 || ownerOrder[ownerOrder.length - 1] !== v.owner) ownerOrder.push(v.owner);
+  }
+  // no owner re-appears in a non-adjacent run (converged, not oscillating)
+  let reappear = 0;
+  const runOwners = new Set();
+  for (const o of ownerOrder) { if (runOwners.has(o)) reappear++; runOwners.add(o); }
+  const concurrentOwners = src.maxLive;
+  const tailConverged = obs.length >= 2 && obs[obs.length - 1].owner === obs[obs.length - 2].owner;
+
+  handles.forEach((x) => { x.d(); x.h.dispose(); });
+  await soakDrain(10);
+  tabs.forEach((t) => t.dispose());
+  await soakDrain(10);
+
+  const ok = dup === 0 && reorder === 0 && reappear === 0 && concurrentOwners > 1 && tailConverged;
+  console.log('phase H shared-stream CONCURRENCY soak (Q8 QD-1/QD-2/QD-3; outside the frozen GATE window):');
+  console.log('  observer-frames=' + obs.length + ' owner-runs=' + ownerOrder.length +
+    ' concurrent-owners(maxLive)=' + concurrentOwners +
+    ' | dup=' + dup + ' reorder=' + reorder + ' owner-reappear=' + reappear + ' tailConverged=' + tailConverged);
+  console.log(ok
+    ? '  PASS: >1 owner live simultaneously; every owner-run strictly increasing, no dup/reorder/oscillation (QD-1 under real concurrency)'
+    : '  FAIL: concurrency-phase projection law broken');
+  if (!ok) process.exitCode = 1;
+}
+
 async function runStreamSoak() {
   const N = 5, KILL_EVERY = 500, FRAMES = 50000;
   const clock = createMockClock();
@@ -688,6 +794,8 @@ if (BREAK) {
   // C11 (Q8): the 5-tab shared-stream soak + leader-failover churn + G5, all
   // AFTER the frozen gate evaluation, printing their own lines (never the GATE).
   await runStreamSoak();
+  // QD-3(b): the concurrency phase that actually enters the multi-owner window.
+  await runStreamConcurrencySoak();
   // C12 (OR-10): attempt E through the new follower-projection teardown surface.
   await runAttemptE();
 }

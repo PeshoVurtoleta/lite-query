@@ -587,6 +587,7 @@ export function queryClient(options = {}) {
         entry.streamEpoch = 0;
         entry.streamSeq = 0;
         entry.projEpoch = -1;
+        entry.projClientId = null;
         entry.projSeq = -1;
         entry.projWindow = null;
         entry.lastFrameAt = 0;
@@ -611,16 +612,36 @@ export function queryClient(options = {}) {
     // a single signal write + field stores -- zero allocation per frame. Buffer
     // mode routes through projectBuffer (C5), whose budget is one snapshot array
     // per frame (the parity contract).
-    function projectFrame(entry, epochSeq, seq, value) {
-        if (epochSeq < entry.projEpoch) return;              // dead leader's late frame -> drop
+    function projectFrame(entry, epochSeq, frameClientId, seq, value) {
+        // The projection cursor is the TRIPLE (projEpoch, projClientId, projSeq):
+        // an epoch is not a unique owner. Two tabs promoting from the same
+        // observed epoch both claim max(seen)+1 -- identical epochSeq, distinct
+        // clientIds, independent seq counters. Resolving ownership by the SAME
+        // (epochSeq, clientId) rank the tiebreak uses makes every follower
+        // converge on the winner INDEPENDENT of arrival order (QD-1); seq dedup
+        // then applies only WITHIN one (epochSeq, clientId) pair.
+        if (epochSeq < entry.projEpoch) return;              // stale epoch -> drop
         let gap = 0;
         let epochChange = false;
-        if (epochSeq > entry.projEpoch) {                    // new epoch: first frame or failover
+        if (epochSeq > entry.projEpoch) {                    // strictly higher epoch: owner boundary
             epochChange = entry.projEpoch !== -1;            // a real boundary, not the first-ever frame
             entry.projEpoch = epochSeq;
+            entry.projClientId = frameClientId;
             entry.projSeq = 0;                               // expect seq 1 next (fresh iterator)
+        } else if (frameClientId !== entry.projClientId) {   // SAME epoch, different owner (collision)
+            // Resolve by rank: a frame from a lower-ranked (epochSeq, clientId)
+            // pair is a loser about to abdicate -- DROP it (F5's "discarded, not
+            // interleaved", now by construction). A higher-ranked pair is the new
+            // owner: adopt it as a boundary, exactly like a higher epoch.
+            if (entry.projClientId !== null &&
+                !rankBelow(entry.projEpoch, entry.projClientId, epochSeq, frameClientId)) {
+                return;                                      // incoming ranks below -> drop
+            }
+            epochChange = entry.projClientId !== null;
+            entry.projClientId = frameClientId;
+            entry.projSeq = 0;
         }
-        if (seq <= entry.projSeq) return;                    // duplicate -> drop
+        if (seq <= entry.projSeq) return;                    // duplicate within this owner -> drop
         if (seq > entry.projSeq + 1) gap = (seq - entry.projSeq - 1) | 0;   // missed frames (at-most-once loss)
         entry.projSeq = seq;
         if (entry.streamCount === 0) setStatus(entry, "streaming");
@@ -744,8 +765,9 @@ export function queryClient(options = {}) {
             rankBelow(e.streamEpoch, clientId, m.epochSeq, m.clientId)) {
             if (feed.hook !== null) emitStreamPromote(e, e.streamEpoch, m.epochSeq, false, "abdicate");
             closeStream(e);                          // F3/F5: loser reverts to projecting
-            e.projEpoch = m.epochSeq;
-            e.projSeq = -1;
+            e.projEpoch = m.epochSeq;                // adopt the winner's (epoch, owner) as the cursor
+            e.projClientId = m.clientId;
+            e.projSeq = 0;                           // expect the winner's seq 1 next (no spurious gap)
             armWatchdog(e);                          // and stay live if the winner then hangs (F3)
         }
     }
@@ -767,7 +789,11 @@ export function queryClient(options = {}) {
             closeStream(e);                          // a higher-ranked owner won
             armWatchdog(e);                          // stay live if it then hangs (F3/F7)
         }
-        projectFrame(e, m.epochSeq, m.seq, m.value);
+        // An OWNER never projects (QD-2): its own iterator holds the authoritative
+        // data, and a straggler frame from a lower-ranked owner must not overwrite
+        // it or drag projEpoch forward. Once the owner has abdicated above
+        // (streamOwner false), subsequent frames project normally.
+        if (!e.streamOwner) projectFrame(e, m.epochSeq, m.clientId, m.seq, m.value);
     }
 
     // stream-end: terminal for this key at <= epochSeq. A strictly older
@@ -859,7 +885,8 @@ export function queryClient(options = {}) {
             streamEpoch: 0,              // the epoch this tab stamps when it owns
             streamSeq: 0,                // per-frame seq counter on the owned iterator
             projEpoch: -1,               // highest epoch projected (dedup cursor, -1 = none)
-            projSeq: -1,                 // highest seq projected within projEpoch
+            projClientId: null,          // owner clientId of the projected epoch (QD-1 triple cursor)
+            projSeq: -1,                 // highest seq projected within (projEpoch, projClientId)
             lastFrameAt: 0,              // watchdog stamp: opts.now() of the last frame
             streamWatchdog: null,        // periodic check-and-rearm liveness timer
             streamPromote: null,         // (reason) => open THIS tab's iterator (adopt path, V1)

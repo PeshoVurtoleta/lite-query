@@ -255,6 +255,7 @@ function streamQuery(qc, streamOpts) {
         entry.streamMode = mode;
         entry.streamMaxBuffer = maxBuffer;
         entry.projEpoch = -1;
+        entry.projClientId = null;
         entry.projSeq = -1;
         entry.projWindow = null;
         entry.streamCount = 0;

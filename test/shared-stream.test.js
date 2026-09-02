@@ -1045,6 +1045,72 @@ test("feed: zero-cost off -- a non-shared stream never emits stream:project/prom
     stop(); h.dispose(); solo.dispose();
 });
 
+// -- QD-1/QD-2: epoch-collision projection cursor + owners never project ------
+
+test("QD-1: interleaved frames from two SAME-epoch owners project per-owner-segment (no cross-owner mix)", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const follower = makeTab(bc, clock, "QD1", () => false, { streamIdleTimeout: 100000 });
+    // record each projected frame (latest mode: one value per frame)
+    const rec = [];
+    const fs = streamQuery(follower, { key: ["k"], stream: () => makeControllable().iterable });
+    const df = createRoot(() => effect(() => { const v = fs.data(); if (v && typeof v === "object") rec.push(v); }));
+    await drain();
+    const peer = new bc.BroadcastChannel("QD1");
+    const F = (cid, seq) => ({ type: "stream-frame", key: ["k"], epochSeq: 5, clientId: cid, seq, value: { o: cid, s: seq } });
+    // Two owners at the SAME epoch 5, distinct clientIds ("B" outranks "A"),
+    // independent seq counters. Arrival: A1,A2,B1,B2,B3,A3 -- the exact order the
+    // reviewer proved projects as a subsequence of NEITHER stream under a
+    // seq-only cursor.
+    peer.postMessage(F("A", 1)); await drain();
+    peer.postMessage(F("A", 2)); await drain();
+    peer.postMessage(F("B", 1)); await drain();
+    peer.postMessage(F("B", 2)); await drain();
+    peer.postMessage(F("B", 3)); await drain();
+    peer.postMessage(F("A", 3)); await drain();
+
+    const bSeqs = rec.filter((v) => v.o === "B").map((v) => v.s);
+    const aSeqs = rec.filter((v) => v.o === "A").map((v) => v.s);
+    // The winner's frames are ALL projected in order -- not b3 alone (the bug
+    // skipped b1,b2 because they shared A's seq cursor).
+    assert.deepEqual(bSeqs, [1, 2, 3], "every winner (B) frame projected in order, none skipped");
+    // The loser's frames appear only before adoption, in order, and never after B.
+    assert.deepEqual(aSeqs, [1, 2], "loser (A) frames projected only pre-adoption; A3 dropped after B won");
+    const lastB = rec.lastIndexOf(rec.filter((v) => v.o === "B").pop());
+    const lastA = rec.lastIndexOf(rec.filter((v) => v.o === "A").pop());
+    assert.ok(lastB > lastA, "no A run appears after the winner B run (converged, not interleaved)");
+    assert.deepEqual(rec[rec.length - 1], { o: "B", s: 3 }, "final data() equals the winner's last frame");
+    df(); fs.dispose(); follower.dispose(); peer.close();
+});
+
+test("QD-2: an owner never projects a straggler -- its authoritative data is never overwritten", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const src = makeControllable();
+    const tab = makeTab(bc, clock, "QD2", () => true, { streamIdleTimeout: 100000 });
+    const h = streamQuery(tab, { key: ["k"], stream: () => src.iterable });
+    observe(h);
+    await drain();
+    const e = ent(tab, ["k"]);
+    assert.equal(e.streamOwner, true, "opened as owner");
+    src.push({ mine: 1 }); await drain();
+    src.push({ mine: 2 }); await drain();
+    assert.deepEqual(tab.getQueryData(["k"]), { mine: 2 }, "owner shows its own latest");
+    const ownerEpoch = e.streamEpoch;
+    // A straggler frame from a LOWER-ranked/older owner arrives. An owner must
+    // NOT project it (QD-2) -- and it must not drag projEpoch forward.
+    const peer = new bc.BroadcastChannel("QD2");
+    peer.postMessage({ type: "stream-frame", key: ["k"], epochSeq: ownerEpoch - 1, clientId: "straggler", seq: 1, value: { straggler: true } });
+    peer.postMessage({ type: "stream-frame", key: ["k"], epochSeq: ownerEpoch, clientId: "aaaa-lower", seq: 99, value: { straggler: true } });
+    await drain();
+    assert.deepEqual(tab.getQueryData(["k"]), { mine: 2 }, "owner data never shows the straggler frame");
+    assert.equal(e.streamOwner, true, "still the owner (straggler did not outrank)");
+    // owner keeps producing; its data stays authoritative
+    src.push({ mine: 3 }); await drain();
+    assert.deepEqual(tab.getQueryData(["k"]), { mine: 3 });
+    h.dispose(); tab.dispose(); peer.close();
+});
+
 test("shared-stream: sharedStreamActive requires opt-in + a leader oracle + a channel", async () => {
     const clock = createMockClock();
     const bc = createMockBroadcastChannel();
