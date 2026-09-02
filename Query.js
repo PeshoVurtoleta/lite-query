@@ -38,7 +38,7 @@ import {
 // asserted equal to package.json by test/version-sync.test.js. The /release
 // drill bumps this in lockstep with package.json + llms.txt (packaging law:
 // same commit or not at all).
-export const VERSION = "1.2.0";
+export const VERSION = "1.2.1";
 
 const noop = () => {};
 

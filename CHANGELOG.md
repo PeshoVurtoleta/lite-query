@@ -22,8 +22,11 @@ byte-identical to 1.2.0.
   `fuzz`): an alloc-per-iteration twin of the warm loop, a skipped-detach
   teardown, and a one-phantom-broadcast corruption of the fuzzer's echo oracle.
   Each verified to exit non-zero individually (alloc 1, detach 1, fuzz 1);
-  `QUERY_TORTURE_BREAK=1` trips 3/3. `npm run torture:control`.
-  Closes Q-09: the 1.2.0 leak/gc gate had no control and could not fail.
+  `QUERY_TORTURE_BREAK=1` trips 3/3. `npm run torture:control`. An unknown
+  value (including `"0"`, which is truthy) exits 1 naming the valid set
+  (`1|alloc|detach|fuzz`); an empty value runs the plain gate ("set" means
+  non-empty). Closes Q-09: the 1.2.0 leak/gc gate had no control and could
+  not fail.
 - WeakRef census beside `tracker.size()` (lite-leak 1.10.0: size() counts
   registrations, not reachability). One-sided gate: fails only when nothing in
   the sample is collected across 8 settle cycles (plain run 0/256). The detach
