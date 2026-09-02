@@ -1,562 +1,458 @@
-# PLAN -- Q8 -- lite-query v2.0.0 -- shared streams (ratified)
+# PLAN -- Q9 -- lite-query v2.1.0 -- ratified 2026-09-03
 
-Operator ratification, 2026-09-02. The planner spec below is verbatim; this
-header resolves STOP-DECISION-1 and STOP-1..STOP-6 and binds the coder.
-BRIEF.md OR-1..OR-11 remain in force; where this header speaks, it rules.
+Planner spec ratified by the operator with the amendments ON-1..ON-5 below.
+Where an ON note conflicts with the spec text underneath, the ON note wins.
+BRIEF.md (c4ca7c5) holds the operator rulings OR-1..OR-10; this file is the
+coder's source of truth for WHAT to build.
 
-- ON-1 (STOP-DECISION-1): SPLIT, ratified. 2.0.0 = shared streams alone;
-  the offline mutation queue defers to 2.1.0 as a named ROADMAP brief with
-  its full OR-6 semantics carried intact and G6 moving with it -- recorded
-  explicitly, never implied. The charter's lean held: the queue does not
-  ride an unfinished failover story. tests_min 354 stands (G1); the plan's
-  44 new tests plus ON-3's rung target ~362.
-- ON-2 (spike verdicts + STOP-1): all four rulings RATIFIED -- push-writer
-  -> lite-stream (LS4 shrinking to createSignalWriter alone is the right
-  1.4.0; the law-4 falsification of their hand-made-queue escape hatch is
-  the recorded reason); idleTimeout -> in-package watchdog here (their
-  design note implemented in the domain that can see the failure;
-  standalone lite-stream version stays parked their side); share/refcount
-  -> struck; sequencing -> Q8 proceeds in PARALLEL behind the single
-  projectFrame seam, semantics pinned by the differential parity test
-  whose oracle is lite-stream's live pipeToSignal -- the test is the
-  contract and outlives both bodies; LS4's writer swaps in at a later
-  minor with the test unchanged. STOP-1's corrected transport wording is
-  RATIFIED and is the ONLY wording either roadmap may carry: "followers
-  receive frames as BroadcastChannel messages over the existing crossTab
-  channel; lite-channel supplies only the caller-wired isLeader oracle."
-  The parity assertion + 12-case corpus go to lite-stream via the live
-  peer session BEFORE LS4 codes (G9; operator relays).
-- ON-3 (STOP-2): FIX IT AT THE MAJOR. The falsy-rejection quirk
-  (Query.js ~1817 `if (resolvedError)`: a mutation rejecting with
-  null/0/""/undefined settles "success", feed ok true) violates suite law
-  ("fail closed on every unverified state; null is not zero") and 2.0 is
-  the only major on the ladder. mutation() now tracks rejection by
-  CONTROL FLOW, not truthiness: any rejection settles status "error", the
-  error signal holds the rejection verbatim (falsy values included), feed
-  `ok` = not-rejected. BREAKING entry + migration note ("branch on
-  status(), never on error() truthiness"); the llms.txt/d.ts quirk
-  clauses are replaced by the fixed contract. New rung C10b with >= 4
-  counted tests (null / 0 / "" / undefined rejections; superseded
-  interplay). If any of the 314 pins the quirk, it is retired BY NAME per
-  OR-9 (expected: none -- report either way).
-- ON-4 (STOP-3/4/5/6): llms.txt's stale count lines (207, 219) reconciled
-  in C13; the coder verifies package.json files[] against the 13-file
-  expectation before C1 (STOP-4); the charter's stale "Suite >= 230" is
-  corrected in the closeout docs commit only (STOP-5); STOP-6 binds --
-  stream-frame carries ONE key per message, and any cross-key batching
-  proposal is a spec decision requiring operator ratification, not an
-  optimization.
-- ON-5 (design ratifications): V1's `startStream(entry, { adopt })`
-  preservation path; V2's deferred promotion announce (one queueMicrotask
-  per promotion, cold -- a cross-tab control-message scheduling decision;
-  the feed's synchronous-dispatch law is untouched and the processingRemote
-  echo guard is NOT weakened); the deliberate no-`stream:frame-send` trim
-  (tab:send + stream:value already tell the truth; no 60Hz double work);
-  the additive 23 -> 26 feed vocabulary on the frozen 10-key record; G5 as
-  PROHIBITION (the leader keeps zero per-follower state -- no replay
-  buffer, no acks, no cursors, ever); the epoch/seq/clientId law exactly
-  as specified (monotonic integers + one cold ASCII clientId; never
-  derived from opts.now -- a mock clock must not decide ownership).
+## OPERATOR NOTES (amendments to the spec below)
 
-- ON-6 (post-review amendment, 2026-09-02): the reviewer REJECTED the
-  ladder on two structural OR-4 defects living in the epoch-collision
-  window (two uncoordinated watchdog promotions both claim max(seen)+1 --
-  G5 forbids the shared counter that would prevent the collision). The
-  spec itself seeded defect 1: the "Ordering and dedup law" bullets below
-  gate on (epochSeq, seq) only, while F5's own mechanism text requires the
-  (epochSeq, clientId) follower gate -- the bullets were incomplete, F5
-  was right. Operator contracts QD-1..QD-3 (Q8) supersede the bullets:
-  QD-1 the projection cursor is the TRIPLE (projEpoch, projClientId,
-  projSeq); equal-epoch different-owner frames resolve by the ownership
-  rank order (adopt if outranking, drop if outranked -- convergent,
-  arrival-order-independent); seq dedup applies only within one
-  (epochSeq, clientId) pair; the stream:gap reason enum does not grow
-  (owner boundaries report "epoch-change"). QD-2 an OWNER never projects
-  (guard the projection call on !streamOwner; abdication first, then
-  projection on later frames). QD-3 the soak gains a concurrency phase --
-  distinct per-connection values, pushes DURING the promotion drain, a
-  nonzero concurrent-owner counter proving the window is entered, and the
-  per-(epoch,owner)-segment subsequence law asserted in every follower --
-  plus counted regressions for both falsifying scenarios verbatim.
-
-Pipeline: coder implements C1..C13 (with C10b inserted) in order, one
-commit per rung, suite + guards green at every rung, the frozen GATE
-byte-identical throughout; reviewer audits the full diff before qa; QA
-count-freeze applies (docs print the frozen final count in C13).
+- ON-1 -- STOP-DECISION-2 RATIFIED: outcome (a), the swap proceeds via
+  writer-slot injection. The deciding evidence was re-verified by the
+  operator at source before ratification (2026-09-03): the ONLY non-null
+  `streamMode` assignment in the package is StreamQuery.js:255
+  (`entry.streamMode = mode` in registerFollower); core Query.js writes
+  only `null` (releaseProjection :585, entry literal); projectBuffer has
+  exactly one caller, Query.js:649, guarded by
+  `entry.streamMode === "buffer"`; the projWindow contracts live at
+  test/shared-stream.test.js:627/:635/:658; the frozen envelope/state
+  length gates exist at Query.js:2412/:1524. Buffer-mode projection is
+  unreachable without the /stream subpath loaded -- no second window body
+  can survive the swap.
+- ON-2 -- AT-LEAST-ONCE RATIFIED, sentence corrected for truthfulness.
+  Per-item RESULTS are not persisted; the REMOVAL is. The required
+  verbatim llms.txt sentence is therefore (replacing the spec's version):
+  "Replay is at-least-once across a crash: an item leaves the durable
+  queue only after its terminal per-item result exists and the removal
+  write has been handed to queueSave, so a crash between dispatch and
+  that write replays the item on the next replayQueue() call. Every
+  queue record carries a stable id -- use it as your idempotency key on
+  the server. In-run, within a single replayQueue() call, every item is
+  dispatched exactly once."
+- ON-3 -- opt-in shape validation moves to mutation() CONSTRUCTION (the
+  package's validate-at-the-door norm), and malformed opt-in fails
+  closed instead of silently not queueing: `queue` present and not a
+  boolean -> TypeError at mutation() (a caller who wrote `queue: 1`
+  believes they opted in; silently taking the normal path is fail-open).
+  `queue: true` requires at construction: `offline` a function, `name` a
+  string, `queueKey` an array -- each violation a TypeError, nothing
+  constructed. mutate() then handles ONLY the runtime oracle outcomes
+  (throw / non-boolean return -> rejection with code LQ_OFFLINE_ORACLE,
+  status "error", nothing dispatched, nothing queued). The enqueue
+  receipt mutate() resolves is `{ queued: true, id }` -- exactly 2 keys,
+  one build site. C3's assertions adjust to construction-time throws.
+- ON-4 -- poison-item lever (scope addition, rung C4): an offline queue
+  with no removal surface traps a permanently-rejected mutation forever.
+  Add `qc.dropQueued(id) -> boolean`: true = found, removed, persisted
+  through the same save path, one `queue:drop` feed event with reason
+  "caller-dropped"; false = not present (including queueStore === null)
+  -- an answer, not an error, no throw. Rejected-forever items remain
+  visible via per-item results + `tries`; this is the caller's explicit
+  exit. d.ts entry + 2 tests; the floor moves 387 -> 389.
+- ON-5 -- everything else ratified as returned: tasks C1..C9 in ladder
+  order (C3/C4 adjusted per ON-3/ON-4), the test floors (+27 total ->
+  389 >= 380), the torture additions (airplane-mode soak + attempt F
+  after the frozen GATE), the d.ts/llms.txt deltas, rejections (f)1-6
+  with their forcing clauses, and the RISK escalation rule: if the
+  shipped surface-drift guard hard-codes a client-method list and fails
+  on replayQueue/queueSize/dropQueued, the coder STOPS and escalates to
+  the operator -- editing the guard test is forbidden (OR-2/G5).
 
 ---
 
-# Q8 PLANNER SPEC (verbatim)
+## PLANNER SPEC (verbatim, 2026-09-03)
 
-# (a) SPIKE VERDICT -- T0
+STOPPED-EARLY: no. Full ruling below.
 
-## Facts 1-3 against the real code
+### (a) STOP-DECISION-2 (OR-8): OUTCOME (a) -- writer-slot injection. Swap APPROVED.
 
-**Fact 1 -- CONFIRMED IN SUBSTANCE, FALSIFIED IN NAMING.** Followers receive
-push messages and hold no iterator: the only iterator site in the package is
-`StreamQuery.js:131` (`pipeToSignal`), reached only from `startStream`; the
-follower fetch analogue never calls a fetcher (`Query.js:729-750
-requestSharedFetch` broadcasts + arms a timer). But the transport is **not
-lite-channel** -- it is `opts.broadcastChannel` (`Query.js:111-112`,
-constructed `Query.js:447-450`). lite-channel appears only as prose in the
-`isLeader` comment (`Query.js:103-106`). Recording "lite-channel messages" in
-both roadmaps invites a coder to import it and break zero-runtime-deps.
-**Corrected wording: "followers receive frames as BroadcastChannel messages
-over the existing crossTab channel; lite-channel supplies only the
-caller-wired `isLeader` oracle."**
+Deciding evidence (caller analysis): projectBuffer has exactly ONE caller,
+Query.js:649, guarded by `entry.streamMode === "buffer"`. `streamMode` is
+assigned "buffer" at exactly ONE site in the package: StreamQuery.js:255
+(registerFollower). Core Query.js assigns it only null (:882 entry literal,
+:585 releaseProjection). Therefore buffer-mode projection is unreachable in
+a tab that never loaded the /stream subpath -- moving the body behind a
+/stream-installed slot cannot leave a second reachable body. The "two live
+window bodies by load-state luck" hazard does not exist here.
 
-**Fact 2 -- CONFIRMED.** `startStream` (`StreamQuery.js:97`) unconditionally
-builds a fresh `AbortController` (`:114`) and calls `streamOpts.stream(...)`
-fresh (`:117`); `entry.streamRestart = () => startStream(entry)` (`:177`).
-There is no code path that can adopt a foreign iterator; adoption is not
-merely forbidden, it is unexpressible in the current shape.
+Slot shape (on the entry, declared next to projWindow at Query.js:894 so
+every entry keeps one hidden class):
+- `projWriter: null` -- holds lite-stream's 4-name handle
+  (push/end/error/droppedCount), or null.
 
-**Fact 3 -- CONFIRMED.** `shouldStartStream` (`StreamQuery.js:183-189`), line
-`:184` `if (entry.streamStop !== null) return false;` with the comment
-"already streaming (shared observer)". In-process sharing exists; cross-tab
-sharing is the channel broadcast.
+Install -- StreamQuery.js:252 registerFollower, ONLY when mode === "buffer",
+after `entry.projWindow = null`:
+`entry.projWriter = createSignalWriter(shim, { mode: "buffer", maxBuffer })`
+where `shim` is a per-entry, per-registration object
+`{ set(v) { entry.projWindow = v; entry.data.set(v); } }`. One cold
+allocation per follower registration; ZERO per frame.
 
-## Candidate rulings
+Why the shim is required, not cosmetic: shipped test
+test/shared-stream.test.js:627 asserts `e.projWindow != null` "window
+populated while following" (buffer mode, maxBuffer: 4), and :635/:658
+assert it returns to null. The writer holds its ring privately, so a
+direct entry.data target would silently break a frozen contract (OR-2/G5
+forbid editing it). The shim is a legal target under lite-stream's own
+validation -- Stream.js:721 requires only `typeof target.set ===
+"function"`, and llms.txt states the rule as "invalid target (null /
+non-object / no .set) -> TypeError". Document the adaptation in llms.txt
+design notes.
 
-**push-writer -> lite-stream. SURVIVES. Verdict upheld and its evidence
-UPGRADED (not a matrix-cell overturn).** LS4's own menu offers an escape
-hatch -- "possibly just documenting the enriched pipeToSignal over a
-hand-made async queue" (`LiteStream/ROADMAP.md:566-568`). That escape hatch
-is **falsified here on law 4, not on taste**: a hand-made async queue feeding
-`pipeToSignal` allocates one promise plus one resolver **per frame** on the
-follower's warm path. At 60Hz across N tabs that is exactly the young-gen
-pressure `Query.js:1410-1417` was written to eliminate. So the push-writer is
-not a convenience for avoiding a third copy; it is the only zero-alloc
-expression of follower projection. `createSignalWriter` is therefore
-**required in lite-stream**, and LS4 shrinking to it alone is the right
-1.4.0.
+Hot body after the swap (projectFrame, replacing the streamMode ===
+"buffer" string compare):
 
-**idleTimeout -> lite-query (NOT structurally required in lite-stream).
-Verdict upheld.** The cell that could have resurrected it is **F3 leader
-hung (frames stop, channel alive)**, and it does not: the detector must run
-on **channel** messages, and by hypothesis the stalled party is the leader's
-own iterator -- the party least able to act. lite-stream cannot observe
-channel traffic (fact 1), so an `idleTimeout` on `pipeToSignal` would arm on
-the wrong side of the failure. Our watchdog adopts their recorded design
-note verbatim, in-package: **never per-value `clearTimeout`/`setTimeout`;
-`lastFrameAt` plus one periodic check-and-rearm timer, amortized O(1)**
-(`ROADMAP.md:1048-1050`). Stays parked on their side pending a standalone
-SSE consumer.
+    const w = entry.projWriter;
+    if (w !== null) { w.push(value); entry.streamDropped = w.droppedCount; }
+    else entry.data.set(value);
 
-**share/refcount -> NOWHERE. STRUCK.** No cell in F1-F7 produces
-one-iterator -> N-local-consumers: every cell is cross-tab, and fact 2
-forbids adoption, so a shared in-process iterator never exists. In-process
-sharing is already `shouldStartStream`. N-keys-over-one-socket is struck by
-OR-11.
+One null check replaces one string compare; droppedCount is a getter read
+(zero alloc, monomorphic). projectBuffer (Query.js:658-682) is DELETED --
+the third copy of the drop-oldest ring is gone, which is T4's whole point.
+Latest-mode projection stays `entry.data.set(value)`, core-only,
+stream-import-free: a plain-query or latest-mode follower tab is
+byte-identical to 2.0.0.
 
-## SEQUENCING RULING
+Release -- Query.js:579 releaseProjection, immediately BEFORE
+`entry.projWindow = null`:
+`if (entry.projWriter !== null) { try { entry.projWriter.end(); } catch {}
+entry.projWriter = null; }`
+end() is idempotent, never writes to target, and nulls the writer's
+internal win/tgt (Stream.js:764-765) -- which is what releases the shim
+closure's capture of the entry. streamDropped was already mirrored, so
+droppedCount() post-release is unaffected by the terminal freeze.
 
-**Q8 proceeds in PARALLEL with the parity pinned on our side, structured so
-no third copy is created.** Blocking on LS4 strands the last session of the
-ladder; a naive hand-roll earns the anti-third-copy objection. The
-resolution: the follower window lands behind exactly one internal seam,
-`projectFrame(entry, v)` (~15 lines, C5 below), and its semantics are pinned
-by a **differential test whose oracle is lite-stream's own `pipeToSignal`
-running live in our suite** -- not a re-description of the window in prose or
-in a second implementation. When LS4 ships `createSignalWriter`, the seam
-body is swapped for the writer in a 2.1 minor and **the parity test does not
-change**. The test is the contract and outlives both bodies. Admissible
-under OR-5's stranding clause; the same corpus is handed to LS4 before it
-codes so their s7 pins it verbatim.
+Peer floor: optional peerDependency @zakkster/lite-stream ^1.3.0 -> ^1.4.0,
+cited ERA-BOUND from lite-stream's own llms.txt line 118:
+`### createSignalWriter(target, opts?) -> { push, end, error, droppedCount }
+(since 1.4.0)`. Never from a session number. devDependency ^1.4.0 per
+OR-10 (lockfile rung, not a version site).
 
-Version floors, when they exist, get cited from lite-stream's own llms.txt
-consumer lines (`llms.txt:191` today reads `^1.3.0`), never from session
-numbers.
+G8 unaffected: Query.js still imports lite-signal only; createSignalWriter
+is imported unconditionally by StreamQuery.js alone.
 
-## Parity assertion handed to lite-stream (EXACT text for LS4 s7)
+### (b) OR-6 crash boundary: AT-LEAST-ONCE.
 
-> For any finite value sequence `V = [v0..vn-1]` and any integer `m >= 1`: a
-> target signal driven by `createSignalWriter(target, { mode: "buffer",
-> maxBuffer: m })` with `writer.push(v)` called once per element of `V` in
-> order must leave `target()` element-for-element reference-identical to the
-> array left by `pipeToSignal(asyncIterableOf(V), target2, { mode: "buffer",
-> maxBuffer: m })` after its `onDone`, and `writer.droppedCount` must `===`
-> that pipe's stop-fn `droppedCount`. Required for every `m` in
-> `{1, 2, 3, 7, 64}` crossed with every `|V|` in `{0, 1, m-1, m, m+1, 4m}`.
-> The window is drop-oldest, newest-last; each `push` publishes a FRESH
-> snapshot array (`target()` after push i is never the same reference as
-> after push i+1). In `mode: "latest"` a push is one signal write and
-> allocates zero bytes. Element identity is by reference -- values are never
-> copied, compared, or serialized.
+Removal from the durable queue happens AFTER the item's terminal per-item
+result is recorded AND the queue has been handed to queueSave. A crash
+between dispatch and that persisted removal replays the item on the next
+replayQueue. Rationale: at-most-once destroys durable user intent silently
+and unsurfaced -- the exact fail-open shape OR-3 forbids; a double-fire is
+caller-addressable via the record's stable id.
 
-## Frame-shape corpus outline (12 cases, hand to LS4 with the above)
+Required verbatim llms.txt sentence: SUPERSEDED BY ON-2 (use the ON-2
+text).
 
-1. empty sequence then `end()` -> target unwritten, `droppedCount` 0.
-2. `|V| < m` -> no drop, full array.
-3. `|V| === m` -> no drop, exact window.
-4. `|V| === m + 1` -> `droppedCount` 1, oldest element absent.
-5. `|V| === 4m` -> `droppedCount === 3m`.
-6. `m === 1` -> `droppedCount === |V| - 1`.
-7. `push` after `end()` -> ignored, `droppedCount` frozen (fail closed).
-8. `error(e)` then `push` -> ignored, error state terminal.
-9. `undefined` and `null` are legal frame values (a frame value is opaque).
-10. same-reference value pushed twice -> two distinct window slots (no
-    `Object.is` dedup in buffer mode).
-11. 100k pushes, `mode: "latest"` -> `maxMajor 0`, `< 1.0 B/op`.
-12. the returned handle stays call-compatible with LS3's stop-fn shape
-    (`LiteStream/ROADMAP.md:499-501` compat constraint) -- additive
-    properties only.
+Named crash-window test (G9): test/queue-crash.test.js ->
+"queue: a crash between dispatch and the persisted removal replays the
+item (at-least-once, G9)" -- a queueSave thunk that throws on the removal
+write, followed by a fresh client + queueLoad of the last durable payload,
+asserting the item is present and dispatches a second time with the SAME
+id.
 
----
+### (c) RECOMMENDED SCOPE -- full spec
 
-# (b) STOP-DECISION-1
+1. Opt-in flag + dispatch semantics (T1, OR-3, OR-4).
+Two mutOpts fields, both required for any queueing to occur:
+- `queue: true` -- strict identity check. [Validation timing and
+  malformed-value handling per ON-3.]
+- `offline: () => boolean` -- the caller's oracle (the isLeader
+  precedent). The library never reads navigator.onLine, never listens,
+  never polls (OR-4).
+- `queueKey: <query key array>` -- REQUIRED when queue: true (it is what
+  T3's "entry no longer exists" drop is resolved against). [TypeError at
+  construction per ON-3.]
+- `name` -- REQUIRED string when queue: true (what a reloaded tab
+  resolves the handler by). [Construction-validated per ON-3.]
 
-**RECOMMENDATION: split. 2.0.0 = shared streams. 2.1.0 = offline mutation
-queue, deferral recorded explicitly (not implied).**
+Dispatch ladder in mutate(vars), evaluated once, before onMutate and
+before fn:
+1. queue not opted in -> unchanged 2.0.0 path, byte-identical.
+2. [construction-time validation per ON-3 -- no per-dispatch shape
+   checks survive here]
+3. Call offline() inside a try. A THROW or a NON-BOOLEAN return ->
+   mutate() rejects with a tagged error (err.code = "LQ_OFFLINE_ORACLE"),
+   status settles "error", nothing dispatched, nothing queued. An
+   unverified connectivity state must not silently pick either branch.
+4. offline() === false -> normal fetch path, unchanged.
+5. offline() === true -> enqueue. status settles the new value "queued";
+   mutate() RESOLVES the receipt `{ queued: true, id }` (ON-3; never a
+   silent limbo, never a throw); onMutate/fn/onSuccess/onError do NOT
+   run; onSettled DOES run with (undefined, undefined, vars, undefined)
+   (Phase-4 law: onSettled always runs).
+6. Enqueue against a full queue -> mutate() REJECTS err.code =
+   "LQ_QUEUE_FULL" (OR-3: surfaced rejection, never a silent drop).
 
-Rationale grounded in the matrix's real size against observable session
-history:
+status() gains one additional value "queued", reachable only under
+opt-in; loading() stays `status() === "pending"` (a queued mutation is
+not loading). reset() clears it to "idle"; it does NOT dequeue the
+durable item (the record outlives the handle by design -- documented).
 
-- **Q6 consumed a full session to ship ONE seam** (persist:
-  `dehydrate`/`hydrate`/adapter, `Query.js:1087-1264` + `1917-2061`).
-  **Q7 consumed a full session to ship ONE seam** (feed: one hook, one pool,
-  36 emit sites, `Query.js:126-445`). Shared streams is strictly larger than
-  either: it is a **new wire protocol** (4 message types), a **new state
-  machine** (project / promote / abdicate), a **watchdog**, a **window
-  implementation**, plus **7 named failover cells**.
-- The test substrate does not exist yet and must be built inside the
-  session. `harness.js` has no leader oracle, no connection counter, and no
-  N-tab helper. `bench/torture/cache-fuzzer.mjs` is **hard-wired to exactly
-  two tabs** -- `:44`, `:180 const tabs = [tabA, tabB]`, `:244
-  tabs[randInt(2)]`, `:398 tabs.length - 1`. G4's 5-tab soak requires
-  generalizing it to N, which is a rung of its own.
-- The queue is a **third independent seam**: durability over the Q6 persist
-  substrate, per-key replay ordering, per-item result surfacing,
-  drop-on-missing-entry, plus G6's airplane-mode script. It has no
-  dependency on the failover matrix, so deferring it costs nothing
-  architecturally.
-- The charter's own lean is decisive and I concur without qualification:
-  **"Do not let the queue ride an unfinished failover story."** A queue that
-  replays through a leader whose promotion semantics are still being
-  debugged is exactly the fail-open surface OR-6 exists to prevent.
+REJECTED from scope: queueOnFailure. See (f).
 
-`tests_min: 354` and `skip_max: 0` stay unchanged -- shared streams alone
-reaches +40 (see the test plan). The `[2.0.0]` BREAKING section states
-truthfully that the major rides the new cross-tab stream semantics; the
-queue's deferral is recorded in ROADMAP section 5 as a named Q9/2.1 brief,
-with G6 moved with it.
+2. Monomorphic queue record (T2) -- exactly 7 own keys, one order, built
+at one site:
 
----
+    { id: string, name: string, key: array, keyHash: string,
+      vars: any, at: number, tries: number }
 
-# (c) FULL SPEC -- 2.0.0 shared streams
+id = `clientId + ":" + (++queueSeq)` (stable across persist; the
+at-least-once idempotency key). name = mutOpts.name. key/keyHash from
+queueKey. tries starts 0, increments per dispatch attempt.
 
-## V-findings (numbered, file:line)
+3. Store. qc holds queueStore = null until the first enqueue (null is
+not zero: no queue is not an empty queue). Backing array + a queueSeq
+counter. Client option maxQueue (default 100; validated positive
+integer, else TypeError at client construction). Read-only
+introspection: `qc.queueSize() -> number` (0 when queueStore === null)
+-- used by the retention assertions.
 
-**V1 (BLOCKING, the highest-value spike output).** `startStream` is
-destructive on entry and therefore **cannot serve promotion**.
-`StreamQuery.js:107-111` resets `streamCount = 0`, `streamDropped = 0`,
-clears `error`, and calls `setStatus(entry, "pending")`. A follower promoted
-mid-buffer (cell F4) that routes through `startStream` **wipes its
-already-projected window and flips a `streaming` entry back to `pending`** --
-visible frame loss beyond what OR-4 permits, plus a status regression. Fix:
-`startStream(entry, { adopt })`; when `adopt` is true, preserve
-`streamCount`/`streamDropped`/`data`, skip the `pending` transition, and keep
-`error` untouched. Every counter reset stays on the non-adopt path so the
-existing 24 stream tests are unaffected.
+4. Replay surface (T3, OR-4).
 
-**V2 (BLOCKING).** `broadcast` returns early while `processingRemote` is
-true (`Query.js:459-460`). Any Q8 control message emitted from **inside**
-`onRemoteMessage` (`:466-493`) is silently swallowed. The promotion announce
-in cells F2/F3/F5 is triggered by a received message in at least one path.
-Fix: promotion announces are deferred out of the handler (one
-`queueMicrotask`, cold, once per promotion -- never per frame), or a named
-`broadcastControl` that bypasses the echo guard with its own loop-safety
-argument. Do **not** weaken the `processingRemote` guard itself; it is what
-stops the echo storm the fuzzer asserts at `cache-fuzzer.mjs:397-398`.
+    qc.replayQueue(resolve) -> Promise<QueueReplayResult>
 
-**V3.** `sharedFetchActive` is computed once (`Query.js:454-455`) and
-exported through `_internal` as a **value** (`Query.js:1301`);
-`StreamQuery.js:90` destructures only `{ ensureEntry, attach, detach, opts,
-feed, setStatus, emitStream }`. The `/stream` subpath currently cannot see
-leader state at all. `_internal` must grow `sharedStreamActive`, `broadcast`,
-and the frame-projection entry points. Additive, no existing key changes.
+- resolve(record) -> fn | null -- caller-supplied handler resolver keyed
+  off record.name. Not a function -> synchronous TypeError.
+- Strictly sequential FIFO (await each) -- order preserved globally and
+  therefore per key.
+- Single-flight: a re-entrant call while one is running REJECTS
+  err.code = "LQ_REPLAY_BUSY" (G6 in-run exactly-once by construction,
+  not by test).
+- No queue (queueStore === null) -> resolves
+  { status: "empty", total: 0, replayed: 0, failed: 0, dropped: 0,
+    items: [] }.
 
-**V4 (favourable).** `droppedCount()` already has exactly the two-branch
-fallback a follower needs: `StreamQuery.js:302-310` reads
-`s.raw.droppedCount` while a pump is live and falls through to
-`e.streamDropped` otherwise. A follower has no pump (`streamStop === null`),
-so it reads `e.streamDropped` -- **the public accessor needs no change**, the
-projection path just maintains that field. Pin this as a test so a future
-refactor cannot quietly break it.
+Per-item result, 5 keys, one order:
+`{ id, key, status: "ok" | "error" | "dropped", value, reason }`.
+- Entry for record.keyHash absent from the cache -> DROPPED, never
+  dispatched, never silently retried: status "dropped", reason
+  "entry-missing".
+- resolve() returns null/non-function -> status "dropped", reason
+  "handler-unresolved".
+- resolve() itself throws -> status "dropped", reason "resolver-threw".
+- Handler rejects -> status "error", value = the rejection VERBATIM,
+  tracked by CONTROL FLOW (rejected boolean), never truthiness -- a
+  falsy rejection settles "error" (ON-3-of-Q8 governs replay, T1). An
+  errored item STAYS in the queue for the next call; tries increments.
+- Handler resolves -> status "ok", value verbatim; removal per the
+  at-least-once ordering in (b).
 
-**V5.** `detach` (`Query.js:684-690`) and `disposeEntry` (`Query.js:579-583`)
-tear down via `entry.streamStop`. A follower has none, so **projection state
-would survive detach and GC-schedule** with its window and epoch cursors
-intact. New per-entry projection slots must be released at both sites, or
-the OR-10 attempt-E retention class is created by construction rather than
-discovered.
+Return shape:
+`{ status: "done" | "empty", total, replayed, failed, dropped, items }`
+(6 keys).
 
-**V6.** `disposeEntry` releases stream slots but the entry-shape comment at
-`Query.js:513-517` promises uniform monomorphic slots. All new projection
-state must be declared in `createEntry` (`Query.js:497-544`) at null/false/0
-defaults, exactly as the stream and infinite slots were, or plain query
-entries get a second hidden class at the hot attach/detach/GC sites.
+[ON-4 addition: `qc.dropQueued(id) -> boolean` -- the poison-item exit;
+found -> removed + persisted + one queue:drop feed event reason
+"caller-dropped", returns true; absent -> returns false, no throw.]
 
-**V7.** `dehydrate` skips stream entries (`Query.js:1091 if (e.isStream)
-continue;`). A projected follower entry is `isStream` (set at
-`StreamQuery.js:224`), so it is correctly excluded from persistence with no
-change. Confirm by test; do not "improve" it.
+5. Persist integration (T2, OR-5).
+Blocking fact from the real code: persistQueryClient enforces
+`Object.keys(envelope).length !== 2` (Query.js:2412) and
+validateHydrateState enforces `Object.keys(state).length !== 1`
+(Query.js:1524). Both are shipped contracts with tests. The queue
+therefore CANNOT ride inside the existing envelope or state without
+editing frozen tests (OR-2/G5 forbid it).
 
-## The failover matrix -- 7 named cells, per-cell mechanism
+Ruling: the queue rides the SAME adapter, same version stamp, SIBLING
+thunks -- additive options on persistQueryClient:
+- queueSave(envelope), queueLoad() -- both optional; supplying one
+  without the other -> TypeError at install (fail closed, no
+  half-durable queue).
+- Envelope: `{ version, queue: [...] }` -- exactly 2 keys, the same
+  version value the cache envelope stamps, validated by a new
+  validateQueueEnvelope mirroring the frozen ladder verbatim in
+  discipline.
+- Written on every enqueue and on every replay removal, through the
+  SAME throttle window as doSave (a queue write arms the same
+  trailing-edge timer); stop() flushes it; flush() forces it.
+- Restore, on install, before the cache restore arms its hook:
+  handle.queueRestored -- a promise that ALWAYS resolves, never
+  rejects: `{ status: "restored" | "empty" | "dropped", count, reason }`.
+  - queueLoad() returns null/undefined ->
+    { status: "empty", count: 0, reason: null } -- an absent queue
+    section is "no queue", NEVER an error (OR-3).
+  - load-threw | malformed-envelope | version-mismatch (strict ===, no
+    coercion) | malformed-queue | malformed-record ->
+    { status: "dropped", count: 0, reason }. The WHOLE queue drops --
+    never a partial restore -- and the drop is surfaced twice: on
+    queueRestored AND as a queue:drop feed event carrying the reason.
+- Record validation: all 7 keys present, correct primitive types, key an
+  array, no own symbols, one contained pass -- a single bad record drops
+  the whole queue (fail closed).
+- OR-5: only ENQUEUED records are ever persisted. A pending in-flight
+  mutation has no record and cannot be captured.
 
-| # | Named test | Mechanism against real machinery |
-|---|---|---|
-| **F1** | `failover: leader closes gracefully -- exactly one follower promotes, connections stay 1` | Leader `qc.dispose()` (`Query.js:1271-1279`) -> `clear()` -> `disposeEntry` -> `streamStop` (`:579-583`). Add a `stream-end{reason:"closing"}` broadcast **before** `streamStop`, emitted from the dispose path (not from a remote handler, so V2 does not bite). Followers run the promotion race on receipt. |
-| **F2** | `failover: leader tab killed -- watchdog promotes within streamIdleTimeout, no dup` | Simulate via `MockBC.close()` (`harness.js:181-187`) with no `stream-end`. No message ever arrives; the **only** detector is the watchdog. Followers' `lastFrameAt` goes stale, the periodic rearm timer fires, promotion race runs. Frame gap counted, zero duplicates. |
-| **F3** | `failover: leader hung -- follower self-connects, old leader abdicates on higher epoch` | Leader stops yielding, channel alive. Same watchdog path as F2, but two iterators would briefly exist. The promoter broadcasts `stream-open{epochSeq}` strictly greater than the one it last saw; a tab that owns the key at a **lower** epochSeq calls `streamStop` and reverts to projecting. If the hung leader never processes the message, correctness is untouched -- it just wastes one connection, and the connection-count assertion is scoped to "after messages drain". **This is the cell that proves OR-3.** |
-| **F4** | `failover: follower promoted mid-buffer -- window and counters survive` | Buffer mode, `k < maxBuffer` projected values, then promote. Requires **V1's adopt path**. Asserts `data()` array unchanged across the promotion instant, `count()` continues from k (never resets to 0), `droppedCount()` monotonic, status never returns to `pending`. |
-| **F5** | `failover: two tabs racing promotion -- exactly one connection survives` | Both watchdogs fire in one drain. Tiebreak is **election-state-independent**: highest `(epochSeq, clientId)` lexicographic pair wins; a loser that already opened aborts via `streamStop` and reverts to projecting. Followers gate on `(epochSeq, clientId)`, not on arrival order, so the loser's in-flight frames are discarded rather than interleaved. Asserts connection count `=== 1`, zero duplicated frames in all 5 tabs. |
-| **F6** | `failover: stream completes during failover -- success in every tab, no dup` | Leader `onDone` (`StreamQuery.js:161-168`) races a promotion. `stream-end{ok:true, epochSeq}` is terminal for that key at that epoch **or higher**; a promoter receiving it after opening calls `streamStop` and settles `success`. A `stream-end` for a strictly lower epochSeq is ignored. Asserts final status `success` in all 5 tabs, `<= 1` connection opened after promotion. |
-| **F7** | `failover: stream errors during failover -- error surfaces then recovery, no inherited wedge` | Leader `onError` (`StreamQuery.js:142-151`) broadcasts `stream-end{ok:false, error}`. Followers project the error into `entry.error` and status `error` **and simultaneously arm the watchdog** -- a follower must never be wedged by a dead leader's failure, because correctness cannot depend on election state. If the promoter's fresh connect succeeds, status returns to `streaming`. Asserts the error is observable, then recovery, with no duplicated frames across the transition. |
+6. Feed vocabulary (T3, OR-7). Five additive domain:verb types on the
+frozen 10-key record; 26 -> 31:
+`"queue:enqueue"`, `"queue:restore"`, `"queue:replay"`, `"queue:settle"`,
+`"queue:drop"`.
+Field mapping: key/keyHash from the record; count = queue length after
+the transition (queue:restore: records restored); ok = !rejected
+(control flow, never truthiness); value = vars on enqueue, data-or-error
+verbatim on settle; reason = the drop/settle reason code. All emits
+behind the existing `feed.hook !== null` test. No second hook, no
+record-shape change.
 
-**OR-4 invariant asserted in every cell and in the soak:** duplication zero,
-reordering zero, loss permitted and *counted*.
+### (d) TASKS -- ladder order
 
-## Frame wire shape (additive; 4 new message types)
+C1 -- oracle upgrade (before the swap). package.json:devDependencies ->
+@zakkster/lite-stream "^1.4.0"; lockfile refreshed; lite-signal override
+pin untouched.
+Assertions: node_modules/@zakkster/lite-stream/package.json version
+1.4.0; test/shared-stream.test.js:325 (A6) passes UNEDITED against live
+1.4.0, 30 combinations; full suite 362 pass / 0 fail / 0 skip; Query.js
+unchanged in this commit (git diff --stat shows no Query.js).
 
-The `onRemoteMessage` switch (`Query.js:471-489`) grows four cases beside
-the existing five. All are inert unless `sharedStreamActive`.
+C2 -- queue core. Query.js:createQueryClient (queueStore/queueSeq/
+enqueue/queueSize), Query.js:FEED_TYPES (5 additive types),
+Query.js:buildEventPool (unchanged code, 31 pooled records).
+Assertions: FEED_TYPES.length === 31; every new type is domain:verb; a
+pooled queue record has exactly the 10 frozen own keys in the frozen
+order; qc.queueSize() === 0 on a fresh client and queueStore === null
+(not []); maxQueue non-integer/0/-1/NaN each throw TypeError at
+construction.
 
-- `{ type: "stream-open", key, epochSeq, clientId }` -- ownership claim.
-- `{ type: "stream-frame", key, epochSeq, clientId, seq, value }` -- one per
-  frame; the hot message.
-- `{ type: "stream-end", key, epochSeq, clientId, ok, error }` -- done or
-  error, terminal for `<= epochSeq`.
-- `{ type: "stream-req", key }` -- follower asks for an owner; mirrors
-  `fetch-req` (`Query.js:476-488`) including the `isLeader()` gate.
+C3 -- mutation opt-in. Query.js:mutation (construction validation per
+ON-3 + the dispatch ladder), Query.js:mutation.mutate.
+Assertions: queue absent -> the 2.0.0 body executes with ZERO added
+allocation (bench delta 0 B/op); `queue: 1` -> TypeError at mutation()
+construction (ON-3); queue: true without offline -> TypeError at
+construction; queue: true without a string name -> TypeError at
+construction; queue: true without an array queueKey -> TypeError at
+construction; a throwing offline() rejects mutate() with code ===
+"LQ_OFFLINE_ORACLE" and queueSize() stays 0; offline() returning 1
+(truthy non-boolean) rejects identically; offline() === true resolves
+`{ queued: true, id }`, status() === "queued", fn call count 0,
+onSettled call count 1; a full queue rejects code === "LQ_QUEUE_FULL"
+and queueSize() is unchanged.
 
-Ordering and dedup law (OR-4), enforced in `projectFrame` before any signal
-write:
-- `epochSeq < entry.projEpoch` -> **drop** (a dead leader's late frame).
-- `epochSeq === entry.projEpoch && seq <= entry.projSeq` -> **drop**
-  (duplicate).
-- `seq > entry.projSeq + 1` -> **accept and count the gap** (at-most-once
-  loss, documented).
-- `epochSeq > entry.projEpoch` -> adopt the new epoch, reset `projSeq`,
-  count the boundary as a gap.
+C4 -- replay surface + drop lever. Query.js:createQueryClient.replayQueue
++ dropQueued (ON-4).
+Assertions: 5 items enqueued across 2 keys replay in enqueue order
+(recorded dispatch order deep-equals enqueue order); each fn is called
+exactly once per replayQueue call; a second concurrent call rejects
+LQ_REPLAY_BUSY while the first is in flight; a handler rejecting with
+null yields status "error" with value === null and the item REMAINS
+queued with tries === 1; a removed cache entry yields status "dropped" /
+reason "entry-missing" with the handler call count 0; every per-item
+result object has exactly 5 own keys in the fixed order;
+dropQueued(knownId) === true, queueSize() decremented, one queue:drop
+event reason "caller-dropped"; dropQueued("nope") === false, no event.
 
-`epochSeq` is a plain monotonic integer carried forward as `max(seen) + 1`
-by whoever opens; `clientId` is one ASCII string built **once per client** at
-construction (cold). Neither is derived from `opts.now` -- a mock clock must
-never decide ownership.
+C5 -- persist seam. Query.js:persistQueryClient (queueSave/queueLoad/
+queueRestored), Query.js:validateQueueEnvelope.
+Assertions: queueSave without queueLoad throws TypeError at install;
+queueLoad() -> null resolves { status: "empty", count: 0, reason: null };
+a 3-key envelope resolves reason "malformed-envelope"; version "2"
+against version 2 resolves "version-mismatch" (strict), queueSize() ===
+0, and exactly one queue:drop event fires; one corrupt record among 4
+good ones drops all 4 (count 0); a pending non-queued mutation is absent
+from every queueSave payload; the existing 362 tests pass unedited (the
+cache envelope path is byte-identical).
 
-## New feed event types (23 -> 26; the 10-key record is frozen and unchanged)
+C6 -- crash boundary. Query.js:createQueryClient.replayQueue
+(removal-after-persist ordering).
+Assertions: dispatch order is fn -> record terminal -> queueSave ->
+splice (assert via a save-thunk call log); a queueSave that throws on
+the removal write leaves the item durable and it re-dispatches with the
+identical id on the next call; the ON-2 at-least-once sentence is
+present verbatim in llms.txt (surface guard); no code path removes a
+record before its terminal result exists.
 
-Appended to `FEED_TYPES` (`Query.js:143-152`) in vocabulary order;
-`buildEventPool` (`Query.js:158-168`) picks them up with no shape change.
+C7 -- the swap. Query.js:projectFrame, delete Query.js:projectBuffer,
+Query.js:releaseProjection, Query.js entry literal (projWriter),
+StreamQuery.js:registerFollower, package.json:peerDependencies.
+Assertions: `grep -c "function projectBuffer" Query.js` is 0;
+`grep -n "from ['\"]" Query.js` lists lite-signal only (G8); A6 passes
+UNEDITED, 30 combinations, element references identical and
+droppedCount parity exact; test/shared-stream.test.js:616 and :642
+(projWindow populated then null) pass unedited; after releaseProjection,
+entry.projWriter === null; latest-mode follower projection allocates
+0 B/frame over 10k frames; peerDependency reads ^1.4.0; the N-tab soak
+reports zero dup, zero reorder.
 
-| type | key/keyHash | from/to | reason | count | ok | value |
-|---|---|---|---|---|---|---|
-| `stream:project` | yes | - | - | seq applied | false | frame value |
-| `stream:promote` | yes | prior epoch / new epoch | `leader-closed` \| `leader-hung` \| `leader-killed` \| `race-won` \| `race-lost` \| `abdicate` | epochSeq | won | - |
-| `stream:gap` | yes | - | `gap` \| `epoch-change` | frames missed | false | - |
+C8 -- torture. test/torture.mjs.
+Assertions: the GATE window is byte-identical (git diff shows only
+additions strictly AFTER the frozen gate evaluation); all 5 existing
+controls still trip; the airplane-mode soak and attempt F print after
+the gate; INCONCLUSIVE.md records attempt F verbatim with its honest
+outcome.
 
-**No `stream:frame-send` type.** The leader's broadcast is already covered
-honestly by `tab:send` (`Query.js:463`, `reason = msg.type =
-"stream-frame"`) and its local set already emits `stream:value`
-(`StreamQuery.js:140`). Adding a fourth type would double per-frame feed
-work at 60Hz for zero new truth. This is a deliberate trim, recorded.
+C9 -- docs (last, one commit). README.md, Cookbook.md, llms.txt,
+Query.d.ts, CHANGELOG.md.
+Assertions: every feed-count site reads 31 and all move in this single
+commit (git show --stat lists README, Cookbook, llms.txt together --
+OR-7/QD-4); the ON-2 at-least-once sentence appears verbatim in
+llms.txt; CHANGELOG.md head is [2.1.0] with Added/Changed only, no
+Breaking section; package.json version and Query.js:VERSION both still
+read 2.0.0 (OR-1); ascii guard green; surface guard green;
+`npm pack --dry-run` lists 13 files with test/, bench/, INCONCLUSIVE.md,
+BRIEF.md, PLAN.md absent.
 
-## Leader-election reuse design (OR-3 extended verbatim)
+### (e) Test floors, torture, surface deltas
 
-- New options in `resolveOptions` (`Query.js:91-114`): `sharedStream`
-  (default `false`), `streamIdleTimeout` (default `opts.sharedFetchTimeout`,
-  i.e. 3000). No new oracle -- **the same `opts.isLeader`**.
-- `sharedStreamActive = opts.sharedStream && typeof opts.isLeader ===
-  "function" && !!channel`, computed once beside `sharedFetchActive`
-  (`Query.js:454-455`). Inert otherwise: every tab owns its connection,
-  which is exactly 1.1.0's shipped behaviour.
-- **Watchdog:** `entry.lastFrameAt` is a number write per frame (zero alloc,
-  no timer churn) plus **one periodic check-and-rearm timer per projected
-  entry**, unref-guarded like `Query.js:626-628` and `:747-749`. This is
-  lite-stream's own recorded `idleTimeout` design note
-  (`ROADMAP.md:1048-1050`) implemented in the domain that can actually see
-  the failure.
-- **OR-3's sentence must remain true verbatim.** `llms.txt:180` verified
-  today, byte-for-byte: *"Liveness: if no leader serves within
-  sharedFetchTimeout, the follower self-fetches. Correctness never depends
-  on election state."* Extended sentence to land in the docs rung:
-  *"Liveness: if no frame arrives within streamIdleTimeout, the follower
-  self-connects. Correctness never depends on election state."* Both
-  sentences ship; both are asserted by a test (F3 and the existing
-  shared-fetch tests respectively).
-- A design whose correctness depends on election state is rejected by
-  definition. Concretely: **no cell may assert "the leader is unique"** --
-  every cell asserts only "connection count converges to 1 after messages
-  drain", which is true even when the oracle lies.
+Base 362, additions +27 (ON-4 adjusted), floor 389 (>= 380).
+- test/queue.test.js -- enqueue/opt-in/dispatch ladder/caps/receipt/
+  status: +8
+- test/queue-replay.test.js -- order, per-item shape, drops,
+  single-flight, falsy-rejection: +7
+- test/queue-persist.test.js -- stamp, mismatch, malformed, whole-drop,
+  empty-is-not-error, in-flight exclusion: +5
+- test/queue-crash.test.js -- G9 at-least-once + removal ordering: +2
+- test/queue-feed.test.js -- 31-type count guard + 10-key record on the
+  5 new types: +2
+- test/shared-stream.test.js additive block -- projWriter installed in
+  buffer mode only, null after release, absent in latest mode: +1
+- dropQueued (ON-4): +2
+All additive; zero edits to the 362.
 
-## Slow-follower bound design (G5)
+Torture additions (strictly after the frozen GATE evaluation):
+airplane-mode soak -- 200 cycles of {enqueue N=25 offline, persist, drop
+client, restore, replay}, asserting qc.queueSize() returns to 0 every
+cycle and pool baseline unchanged, maxMajor budget held; attempt F
+(OR-9) -- replay teardown with in-flight replay handles (client disposed
+mid-replayQueue), recorded verbatim in INCONCLUSIVE.md whatever the
+outcome; a control that cannot trip is reported as decorative, never
+faked.
 
-The strong form, and it falls out of the existing machinery rather than
-being added: **the leader keeps exactly zero per-follower state.**
-`broadcast` is fire-and-forget `channel.postMessage` (`Query.js:462`) with
-no queue, no ack, no retry. The ruling is therefore a **prohibition, not a
-mechanism**: no replay buffer, no ack protocol, no per-follower cursor may
-be introduced. A slow follower bounds *itself* through its own `maxBuffer`
-window and counts its own drops -- which is precisely why follower and local
-windows must be parity-identical.
+Query.d.ts deltas (additive only): MutationOptions.queue?: true,
+.offline?: () => boolean, .queueKey?: QueryKey, .name?: string;
+MutationStatus gains "queued"; QueuedReceipt; QueueRecord;
+QueueItemResult; QueueReplayResult; QueryClient.replayQueue,
+.queueSize, .dropQueued (ON-4); QueryClientOptions.maxQueue?: number;
+PersistOptions.queueSave?/.queueLoad?; PersistHandle.queueRestored?.
 
-G5 asserts: leader retained bytes with **1 stalled follower** vs **4 stalled
-followers** differ by `< 1 KB` after 50k frames, and the leader's `entries`
-map size is identical in both runs.
+llms.txt deltas: the queue section (opt-in ladder, record shape, replay
+signature + result shapes, the verbatim ON-2 at-least-once sentence, the
+whole-drop rule); the 31-type feed table; the createSignalWriter seam
+note (writer slot + shim target rationale, "(since 1.4.0)" peer floor).
+Every liveness-adjacent sentence must be true the way OR-3/Q8 made the
+stream sentence true.
 
-## Offline mutation queue -- EXPLICIT DEFERRAL RECORD (OR-6)
+### (f) REJECTED
 
-Deferred to **2.1.0**, not implied. Recorded verbatim in ROADMAP section 5
-as its own brief and in the `[2.0.0]` CHANGELOG under a "Deferred" heading.
-Carried forward intact: explicit opt-in **per mutation** (a silent default
-is fail-open and forbidden); durability over the Q6 persist seam with the
-same version-stamp discipline; replay order-per-key, per-item observable,
-and **drops** items whose entries no longer exist (a drop is a surfaced
-result, never a silent retry); replay observable via the feed. **G6 moves
-with it.** `mutation()` (`Query.js:1771-1890`) is untouched in 2.0
-[operator note: except ON-3's falsy-rejection breaking fix].
+1. queueOnFailure (auto-enqueue on a rejected fetch). Rejected by OR-3
+   (fail-closed queueing) -- a rejection cannot be distinguished from a
+   semantic 4xx, so auto-queueing it is a silent retry of a mutation the
+   server refused. Parked with the reason recorded in ROADMAP; only the
+   explicit offline() oracle ships in 2.1.0.
+2. Queue inside the persist envelope or state. Rejected by OR-2/G5 --
+   Query.js:2412 (length !== 2) and Query.js:1524 (length !== 1) are
+   enforced by shipped tests; a third key would require editing them.
+   Sibling queueSave/queueLoad thunks on the same adapter, same version
+   stamp, instead.
+3. A queue:frame-style per-frame or per-tick emit, and any second hook.
+   Rejected by OR-7 (record-shape frozen, no second hook) and the
+   recorded Q8 trim precedent.
+4. Any connectivity detection, reconnect listener, or retry timer.
+   Rejected by OR-4.
+5. In-session version stamp. Rejected by OR-1 -- package.json and
+   Query.js:VERSION stay 2.0.0.
+6. Direct entry.data as the writer target (no shim). Rejected by OR-2 --
+   it silently breaks test/shared-stream.test.js:627.
 
-## C-ladder (atomic committable rungs; docs last)
-
-1. **C1** -- `Query.js:resolveOptions` + `sharedStreamActive` +
-   `createEntry` projection slots (null/false/0, V6) + `_internal` growth
-   (V3). No behaviour change; 314 green.
-2. **C2** -- `Query.js:onRemoteMessage` four new cases, inert behind
-   `sharedStreamActive`; the deferred-announce fix for **V2**.
-3. **C3** -- `StreamQuery.js:startStream` leader path: seq counter, frame
-   broadcast from the existing `onValue` tap (`:137-141`), `stream-open` /
-   `stream-end`.
-4. **C4** -- `Query.js:projectFrame` follower path, **latest mode only**:
-   epoch/seq gate, `entry.streamDropped` maintenance (V4), watchdog stamp.
-5. **C5** -- `Query.js:projectFrame` buffer window + the differential parity
-   test against a live `pipeToSignal` oracle.
-6. **C6** -- watchdog timer + self-connect. OR-3 extended to streams.
-7. **C7** -- promotion, race tiebreak, abdication, and
-   `startStream(entry, { adopt })` (**V1**).
-8. **C8** -- teardown release of projection slots at `detach` and
-   `disposeEntry` (**V5**).
-9. **C9** -- the 7 matrix cells as named tests (F1-F7).
-10. **C10** -- 3 feed types + `inspect` tests + zero-cost-off proof.
-11. **C10b (ON-3)** -- the falsy-rejection breaking fix in `mutation()`:
-    rejection tracked by control flow; >= 4 counted tests; BREAKING +
-    migration text staged for C13.
-12. **C11** -- torture: generalize `cache-fuzzer.mjs` from 2 tabs to N, add
-    the 5-tab soak and the leader-failover soak, **printing strictly after
-    the frozen GATE line** (Q7 ON-2 precedent, `torture.mjs:307-309`,
-    `:506-508`).
-13. **C12 -- the OR-10 attempt-E rung: `leader teardown with live follower
-    projection buffers`.** The honest control is a projection slot
-    deliberately retained past `disposeEntry`; if it cannot be made to trip,
-    it is recorded as inconclusive in `INCONCLUSIVE.md` in the
-    verbatim-attempt style. A control that cannot trip is decorative -- it
-    is never faked.
-14. **C13 (docs last)** -- `llms.txt` (extended liveness sentence, 26-type
-    table, new options, new semantics, stale-count reconciliation per
-    STOP-3), `StreamQuery.d.ts` + `Query.d.ts`, README, Cookbook,
-    `CHANGELOG [2.0.0]` with BREAKING + migration, LS4 verdict recorded in
-    **both** roadmaps, and the STOP-4 pack verification.
-
-## Numbered falsifiable assertions
-
-1. **A1 (OR-4 duplication).** Across the 5-tab soak, 50,000 frames, leader
-   killed every 500 ops: duplicated frames observed in any follower `=== 0`,
-   and reordered frames `=== 0`. Loss is permitted and reported as a number;
-   a run reporting loss `> 0` passes, a run reporting duplication `>= 1`
-   fails.
-2. **A2 (G4 connection count).** The mock source's live-connection counter
-   reads exactly `1` at every drain boundary and never exceeds `2`
-   transiently (the F3/F5 overlap window), across at least 100 leader kills.
-3. **A3 (GC budget, hot body).** Follower projection in latest mode over
-   100,000 frames: `maxMajor === 0`, `maxPauseMs <= 4`, and `< 1.00 B/op` --
-   the same profile the frozen GATE line reports (`torture.mjs:398-422`
-   provenance discipline). Buffer mode gets its own named budget of one
-   snapshot array per frame; the global `maxMajor: 0` rule never widens.
-4. **A4 (retention).** After 200 promote/abdicate cycles across 5 tabs, in
-   **every** tab: `lite-leak tracker.size() === 0`, `entries.size === 0`,
-   `clock.pendingCount === 0`, and the lite-signal pool is at baseline. Run
-   twice; both runs must return to 0, so a single-cycle-late release cannot
-   pass.
-5. **A5 (G5 slow-follower bound).** Leader retained bytes after 50,000
-   frames differ by `< 1024` between a 1-stalled-follower run and a
-   4-stalled-follower run; leader `entries.size` identical. Falsified by any
-   per-follower allocation.
-6. **A6 (parity).** For all `m` in `{1,2,3,7,64}` and all `|V|` in
-   `{0,1,m-1,m,m+1,4m}`, follower `data()` is element-for-element
-   reference-identical to a local `pipeToSignal` buffer stream's, and
-   follower `droppedCount() ===` the local stream's. 30 combinations, zero
-   tolerance.
-7. **A7 (zero-cost off).** With `sharedStream: false`, the byte-frozen GATE
-   line at `torture.mjs:140` is **byte-identical** to 1.5.0's, and the
-   existing 24 stream tests pass unmodified.
-8. **A8 (OR-3).** F3 passes with an `isLeader` oracle that returns `true` in
-   **every** tab, and again with one that returns `false` in every tab.
-   Correctness is invariant under a lying oracle; only connection count
-   degrades.
-9. **A9 (OR-1).** `package.json` and `Query.js:41 VERSION` read `"1.5.0"`
-   at pipeline close; `version-sync.test.js` green; the `[2.0.0]` CHANGELOG
-   head present.
-10. **A10 (feed shape).** All 26 pooled records carry exactly 10 own keys in
-    the frozen order; `inspect-shape.test.js` extended, not edited.
-11. **A11 (ON-3, operator-added).** A mutation rejecting with `null`, `0`,
-    `""`, or `undefined` settles status `"error"`, `error()` returns the
-    rejection reference-equal (or value-equal for primitives), the feed's
-    `mutation:settle` reports `ok: false`; a superseded falsy rejection
-    still reports `reason: "superseded"` with `ok: false`.
-
-## Test plan -- 314 -> 354 (floor exactly met; plan 44 for margin)
-
-| Group | New tests |
-|---|---|
-| F1-F7 failover cells (one named test each) | 7 |
-| Wire shape: 4 message types, epoch gate, seq dedup, gap counting, inert-when-off | 8 |
-| Projection: latest + buffer, parity, `droppedCount` fallback (V4), `dehydrate` exclusion (V7) | 7 |
-| Watchdog / liveness / self-connect / lying-oracle invariance (A8) | 6 |
-| Promotion: adopt path (V1), race tiebreak, abdication, deferred announce (V2) | 7 |
-| Feed: 3 new types x shape + zero-cost off + no-4th-type regression | 6 |
-| Teardown: projection slots released at detach and disposeEntry (V5) | 3 |
-| ON-3 falsy-rejection breaking fix (operator-added) | 4 |
-| **Total** | **48 -> suite 362, `skip_max: 0`** |
-
-Every addition is additive. **Zero of the 314 existing tests are retired**
-unless ON-3's sweep finds a quirk-pinning test, which is then retired BY
-NAME per OR-9 -- and the `[2.0.0]` BREAKING section carries ON-3's fix as
-its one true break, never an invented one (OR-7).
-
-## STOP items (falsified against the code -- operator rulings in the header)
-
-- **STOP-1.** "Followers receive frames as lite-channel MESSAGES" (BRIEF T0
-  / charter `ROADMAP.md:1016-1018`) is **wrong on the transport**. There is
-  no lite-channel dependency in `Query.js`; the channel is
-  `opts.broadcastChannel` (`:111-112`, `:447-450`), and lite-channel appears
-  only in a prose comment about wiring `isLeader` (`:103-106`). Ratify the
-  corrected wording before it is copied into both roadmaps and tempts an
-  import that breaks zero-runtime-deps. [ON-2: ratified.]
-- **STOP-2.** OR-7 asserts the ledger holds **no** accumulated
-  deferred-breaking nits. `llms.txt:66` records one: `mutation:settle`
-  reports `ok: true` for a **falsy** rejection reason -- "inherited 1.4.0
-  quirk, documented not changed". That is a deferred breaking nit sitting in
-  the shipped surface, and 2.0 is the only major on the ladder. **Ruling
-  needed: fix it in the BREAKING section, or record explicitly that it is
-  deliberately carried past the only major that could have fixed it.**
-  Silence here is the failure mode OR-7 exists to prevent. [ON-3: fixed at
-  the major.]
-- **STOP-3.** `llms.txt` contradicts itself on test counts. Line 3 says
-  **314** ("253 core"); line 207 says "**142** core deterministic tests";
-  line 219 says "test/query.test.js -- **106** deterministic tests". Lines
-  207 and 219 are stale and the surface guard does not catch prose.
-  Reconcile in C13, not mid-pipeline. [ON-4: ratified.]
-- **STOP-4.** G8 pins "13 today" files in `npm pack --dry-run`. I did not
-  read `package.json` (outside my read scope), so I cannot confirm 13. **The
-  coder must verify the count against the actual `files[]` before treating
-  13 as the baseline**, and any change is a named spec decision, not drift.
-  [ON-4: ratified.]
-- **STOP-5.** OR-8 is confirmed: the charter's `ASSERTIONS` line "Suite >=
-  230" at `ROADMAP.md:1074` is stale. 354 governs. Correct it in the
-  closeout docs commit only. [ON-4: ratified.]
-- **STOP-6 (scope guard).** OR-11 holds throughout: `stream-frame` carries
-  **one key per message**. No cell in F1-F7 requires multiplexing N keys
-  over one socket, so the NON-GOAL is not resurrected. If a coder proposes
-  batching frames across keys for throughput, that is a new spec decision
-  requiring operator ratification -- it is not an optimization. [ON-4:
-  binding.]
+RISK: if the shipped surface-drift guard (G6) enumerates client-method
+names in a hard-coded list, adding replayQueue/queueSize/dropQueued
+fails it and the fix would be a forbidden test edit -- the coder must
+STOP and escalate to the operator, not edit; mitigation already built in
+by keeping all three surfaces as client methods rather than new module
+exports.
