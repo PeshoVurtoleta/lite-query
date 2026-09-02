@@ -1,10 +1,17 @@
 # BRIEF -- Q4 -- lite-query v1.2.1 -- the suite-law torture harness (extend the seed)
 
+STATUS 2026-09-02: Q4 is COMPLETE and SHIPPED -- 1.2.1 published (operator
+commit e7f69bd), registry artifact verified (13 files, `[1.2.1]` head,
+VERSION string-sync). This file is now the Q4 record. Next contract to
+extract here: Q5 (v1.3.0, infiniteQuery + prefetch, ROADMAP section 5) --
+unblocked (depends_on Q3+Q4 both shipped) and carrying the findings-clause
+control from INCONCLUSIVE.md.
+
 Session Q4 of ROADMAP.md (section 5, incl. the 2026-09-02 preamble
 amendment). Q3 is SHIPPED: 1.2.0 published 2026-09-02 (operator commit
 c339c12) and artifact-verified from the registry tarball (13 files,
 `[1.2.0] -- 2026-09-02` head, `VERSION = "1.2.0"` string-equal to the
-manifest). The start condition is satisfied; Q4 is live.
+manifest).
 
 ---
 package: "@zakkster/lite-query"

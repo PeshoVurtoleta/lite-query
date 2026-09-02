@@ -36,7 +36,7 @@ Registry state, checked with `npm view <pkg> version`:
 
 | Package | Latest | Relevant fact |
 | --- | --- | --- |
-| `@zakkster/lite-query` | 1.2.0 | Q3 shipped (operator publish `c339c12`, 2026-09-02; registry `latest` = 1.2.0). Artifact verified same day from the registry tarball: 13 files, `[1.2.0] -- 2026-09-02` CHANGELOG head, `Query.js` `VERSION = "1.2.0"` string-equal to the manifest, llms.txt + CHANGELOG present, test/demo absent |
+| `@zakkster/lite-query` | 1.2.1 | Q4 shipped (operator publish `e7f69bd`, 2026-09-02; registry `latest` = 1.2.1). Artifact verified same day from the registry tarball: 13 files, `[1.2.1] -- 2026-09-02` CHANGELOG head, `Query.js` `VERSION = "1.2.1"` string-equal to the manifest. Harness-only release; runtime byte-identical to 1.2.0 (whose artifact was verified the same way at its own publish `c339c12`) |
 | `@zakkster/lite-await` | 1.3.0 | fully upgraded (V1 -> 1.2.1, C1 -> 1.3.0): **18 named exports** + VERSION. `createAwaitScope` shipped -- triggering consumer was lite-room 1.1.0 (`decisions/0007`), NOT our Q5; that gate resolved externally. `decisions/0009` verdict: **REJECT** (locked decision #4 closes). Q3's re-export target is now EIGHT (Q-07) |
 | `@zakkster/lite-stream` | 1.1.0 | published 2026-07-10; additive `toAsyncIterable` enrichments; `^1.0.0` peer admits it; suite green against it. Roadmap enriched 2026-09-01 (`../LiteStream/ROADMAP.md`, LS1..LS4): its LS-01 (dispose-mid-pump pulls forever; llms claim false since 1.0.0) verified NOT to bite us -- `streamStop` aborts before any teardown (`StreamQuery.js:156`); its LS3 v1.3.0 targets our hand-rolled ring (see parking ledger). UPDATE 2026-09-02: lite-stream is now **1.3.0** -- LS1..LS3 all shipped (their harness caught and fixed a real pump bug, LS-13, on the way); `pipeToSignal` gained `mode`/`maxBuffer`, `droppedCount`/`overflowCount` getters on the stop fn, an `onValue` tap, and `onAbort` (abort vocabulary pinned in their `decisions/0001`); their s7 conformance tier freezes OUR exact 1.1.x call shape and proves a rewrite-parity case. The collapse rider is folded into Q3. LS4 (1.4.0) stays GATED on Q8's spike; SPIKE INPUTS recorded in the Q8 brief |
 | `@zakkster/lite-signal` | 1.5.0 | stable; the `>=1.5.0-alpha` peer floor is now pointing below a released stable (Q-06) |
@@ -574,7 +574,7 @@ test/torture.mjs does not). A gate that cannot fail is decorative; Q4's
 ---
 package: "@zakkster/lite-query"
 version_target: 1.2.1
-status: pipeline-complete (2026-09-02; ladder 6f135b1..50f2662: C1-C8 + census true-up e56af54 + QA-findings fix 50f2662; reviewer APPROVED, QA PASS, all five PLAN assertions measured; awaiting /release 1.2.1 drill + operator publish -- PR-1: the version stamp belongs to the drill)
+status: shipped (2026-09-02; ladder 6f135b1..50f2662, reviewer APPROVED, QA PASS; drill sites=3/27 tests=181/0 GATE ok pack 54.2 kB; operator publish e7f69bd; registry artifact verified: 13 files, [1.2.1] head, VERSION sync)
 gc_maxMajor: 0
 gc_maxPauseMs: 4
 alloc_bytes_per_op: 0    # warm accessor reads + latest-mode pump
@@ -786,7 +786,8 @@ TASKS
     touches RangeReader, the abort floor (MQ1, published as 1.7.0 on
     2026-09-02).
     Both floors are published as ONE consumer-floor line in bake-stream's
-    llms.txt by its MQ2 session -- cite THAT line verbatim at Q6 coding
+    llms.txt (SHIPPED with MQ2/1.7.1 on 2026-09-02: the "Consumer floors:"
+    sentence, ~line 98) -- cite THAT line verbatim at Q6 coding
     time; do not restate numbers from this file. Rationale unchanged:
     BS-06 means an unpatched PreserveReader can hand back short bytes
     from corrupted storage instead of refusing at open, and a persistence
@@ -1120,9 +1121,16 @@ scripts; Q4 onward: the law harness). No gate output is a FAIL.
   UNLOCKED 2026-09-02: 1.7.0 IS published (registry verified; `R_ABORTED`
   + the additive `fetch(byteOffset, byteLength, signal?)` adapter contract
   are in its shipped llms.txt). Recipe (1) is now runnable and rides Q5 or
-  Q6's docs pass. MQ2 (1.7.1: conformance corpus, crossover number,
-  consumer-floor llms.txt line) is still pending -- the floor-citation
-  rule below stands until it ships. Recipe
+  Q6's docs pass. MQ2 SHIPPED same day: registry latest = 1.7.1;
+  bake-stream is FULLY DEVELOPED (operator, 2026-09-02). The consumer-floor
+  line EXISTS (its llms.txt "Consumer floors:" sentence, ~line 98, beside
+  the persistQueryClient recipe sketch, the corruption matrix pointer
+  `test/DehydratedCache.test.js`, and the crossover table's README home) --
+  Q6 cites that line verbatim at coding time; the do-not-restate rule
+  stands. Bake's next charter (MX1 both-repos soak / MX2 append-across-
+  saves / MX3 preserve-RangeReader-stays-refused) WAITS ON OUR Q6
+  (v1.4.0) -- MX1's tripwire is "lite-query Q6 ships", so Q6 now has a
+  downstream consumer counting on it. Recipe
   (1) requires MQ1 (abortable range reads: reader-level `{ signal }`,
   adapter `fetch(byteOffset, byteLength, signal?)`, `R_ABORTED`,
   no-partial-cache -- originally probed here: streamQuery's
