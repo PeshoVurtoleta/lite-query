@@ -481,6 +481,136 @@ test("shared-stream: streamIdleTimeout defaults to sharedFetchTimeout", () => {
     qc.dispose();
 });
 
+// -- C7: promotion / race tiebreak / abdication / adopt (V1) / V2 -----------
+
+test("shared-stream: a promoted follower adopts its window + counters, never regresses to pending (V1/F4)", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const leaderSrc = makeControllable();
+    const followerSrc = makeControllable();
+    const leader = makeTab(bc, clock, "AD", () => true, { streamIdleTimeout: 1000 });
+    const follower = makeTab(bc, clock, "AD", () => false, { streamIdleTimeout: 1000 });
+    const ls = streamQuery(leader, { key: ["k"], mode: "buffer", maxBuffer: 5, stream: () => leaderSrc.iterable });
+    const fs = streamQuery(follower, { key: ["k"], mode: "buffer", maxBuffer: 5, stream: () => followerSrc.iterable });
+    const dl = observe(ls); const df = observe(fs);
+    await drain();
+    leaderSrc.push("a"); await drain();
+    leaderSrc.push("b"); await drain();
+    leaderSrc.push("c"); await drain();
+    const fe = ent(follower, ["k"]);
+    assert.deepEqual(follower.getQueryData(["k"]), ["a", "b", "c"], "projected window");
+    assert.equal(fe.streamCount, 3);
+    const windowBefore = follower.getQueryData(["k"]);
+
+    // leader leaves gracefully -> follower promotes with adopt:true
+    ls.dispose();
+    await drain();
+    assert.equal(fe.streamOwner, true, "follower promoted itself");
+    assert.equal(fe.streamCount, 3, "count continues from k (never reset to 0)");
+    assert.notEqual(fe.status(), "pending", "no pending regression");
+    assert.equal(follower.getQueryData(["k"]), windowBefore, "window array unchanged across the promotion instant");
+    df(); fs.dispose(); leader.dispose(); follower.dispose();
+});
+
+test("shared-stream: two followers racing promotion -> exactly one owner (tiebreak)", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const a = makeTab(bc, clock, "RC", () => false, { streamIdleTimeout: 1000 });
+    const b = makeTab(bc, clock, "RC", () => false, { streamIdleTimeout: 1000 });
+    const ha = streamQuery(a, { key: ["k"], stream: () => makeControllable().iterable });
+    const hb = streamQuery(b, { key: ["k"], stream: () => makeControllable().iterable });
+    observe(ha); observe(hb);
+    await drain(10);
+    // both followers time out and self-connect in the same drain
+    clock.advance(1000); await drain(20);
+    assert.equal(owners([a, b], ["k"]), 1, "the (epochSeq, clientId) tiebreak leaves exactly one owner");
+    ha.dispose(); hb.dispose(); a.dispose(); b.dispose();
+});
+
+test("shared-stream: an owner abdicates on a higher-ranked stream-open and reverts to projecting", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const src = makeControllable();
+    const tab = makeTab(bc, clock, "AB", () => true, { streamIdleTimeout: 1000 });
+    const h = streamQuery(tab, { key: ["k"], stream: () => src.iterable });
+    observe(h);
+    await drain();
+    const e = ent(tab, ["k"]);
+    assert.equal(e.streamOwner, true, "opened as owner");
+    const myEpoch = e.streamEpoch;
+    // a strictly higher epoch claim arrives -> abdicate
+    const peer = new bc.BroadcastChannel("AB");
+    peer.postMessage({ type: "stream-open", key: ["k"], epochSeq: myEpoch + 5, clientId: "zzzzzzzz" });
+    await drain();
+    assert.equal(e.streamOwner, false, "abdicated to the higher-ranked leader");
+    assert.equal(e.streamStop, null, "own iterator aborted");
+    peer.postMessage({ type: "stream-frame", key: ["k"], epochSeq: myEpoch + 5, clientId: "zzzzzzzz", seq: 1, value: "remote" });
+    await drain();
+    assert.equal(tab.getQueryData(["k"]), "remote", "reverted to projecting the winner's frames");
+    h.dispose(); tab.dispose(); peer.close();
+});
+
+test("shared-stream: promotion announce is DEFERRED out of the handler, not swallowed (V2)", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const follower = makeTab(bc, clock, "V2", () => false, { streamIdleTimeout: 1000 });
+    const fs = streamQuery(follower, { key: ["k"], stream: () => makeControllable().iterable });
+    observe(fs);
+    await drain();
+    // establish a projected epoch, then a graceful close arrives from a handler
+    const peer = new bc.BroadcastChannel("V2");
+    const captured = [];
+    peer.addEventListener("message", (evt) => captured.push(evt.data));
+    peer.postMessage({ type: "stream-open", key: ["k"], epochSeq: 2, clientId: "leaderA" });
+    peer.postMessage({ type: "stream-frame", key: ["k"], epochSeq: 2, clientId: "leaderA", seq: 1, value: "v" });
+    await drain();
+    captured.length = 0;
+    // closing is received INSIDE onRemoteMessage; the promotion's stream-open
+    // must still leave (broadcast would swallow it -- broadcastControl/deferral does not).
+    peer.postMessage({ type: "stream-end", key: ["k"], epochSeq: 2, clientId: "leaderA", ok: false, error: undefined, reason: "closing" });
+    await drain();
+    const opens = captured.filter((m) => m.type === "stream-open");
+    assert.ok(opens.length >= 1, "the deferred promotion announce reached the channel (V2)");
+    assert.equal(ent(follower, ["k"]).streamOwner, true, "follower promoted after the graceful close");
+    fs.dispose(); follower.dispose(); peer.close();
+});
+
+test("shared-stream: a closing end is not a terminal outcome (no success/error settle)", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const follower = makeTab(bc, clock, "CL", () => false, { streamIdleTimeout: 1000 });
+    const fs = streamQuery(follower, { key: ["k"], stream: () => makeControllable().iterable });
+    observe(fs);
+    await drain();
+    const peer = new bc.BroadcastChannel("CL");
+    peer.postMessage({ type: "stream-open", key: ["k"], epochSeq: 1, clientId: "L" });
+    peer.postMessage({ type: "stream-frame", key: ["k"], epochSeq: 1, clientId: "L", seq: 1, value: "x" });
+    await drain();
+    peer.postMessage({ type: "stream-end", key: ["k"], epochSeq: 1, clientId: "L", ok: false, error: undefined, reason: "closing" });
+    await drain();
+    const st = ent(follower, ["k"]).status();
+    assert.notEqual(st, "error", "closing is not an error settle");
+    assert.notEqual(st, "success", "closing is not a success settle");
+    fs.dispose(); follower.dispose(); peer.close();
+});
+
+test("shared-stream: an owner abdicates on a higher-ranked frame even without a stream-open (frame-driven race)", async () => {
+    const clock = createMockClock();
+    const bc = createMockBroadcastChannel();
+    const src = makeControllable();
+    const tab = makeTab(bc, clock, "FD", () => true, { streamIdleTimeout: 1000 });
+    const h = streamQuery(tab, { key: ["k"], stream: () => src.iterable });
+    observe(h);
+    await drain();
+    const e = ent(tab, ["k"]);
+    const peer = new bc.BroadcastChannel("FD");
+    peer.postMessage({ type: "stream-frame", key: ["k"], epochSeq: e.streamEpoch + 9, clientId: "zzzz", seq: 1, value: "win" });
+    await drain();
+    assert.equal(e.streamOwner, false, "abdicated on the higher-ranked frame");
+    assert.equal(tab.getQueryData(["k"]), "win");
+    h.dispose(); tab.dispose(); peer.close();
+});
+
 test("shared-stream: sharedStreamActive requires opt-in + a leader oracle + a channel", async () => {
     const clock = createMockClock();
     const bc = createMockBroadcastChannel();

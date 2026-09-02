@@ -728,6 +728,18 @@ export function queryClient(options = {}) {
         const e = entries.get(hashKey(m.key));
         if (!e || !e.streamShared) return;
         if (m.epochSeq < e.projEpoch) return;
+        // A graceful close (F1) is NOT a terminal outcome for the key: the
+        // leader is leaving but the stream lives on. Followers run the promotion
+        // race on receipt; the winner's higher epoch makes the losers abdicate.
+        if (m.reason === "closing") {
+            if (e.streamOwner &&
+                !rankBelow(m.epochSeq, m.clientId, e.streamEpoch, clientId)) {
+                closeStream(e);
+            }
+            openStream(e, "leader-closed");
+            armWatchdog(e);                              // and stay live if the race stalls
+            return;
+        }
         if (e.streamOwner &&
             !rankBelow(m.epochSeq, m.clientId, e.streamEpoch, clientId)) {
             closeStream(e);
@@ -855,6 +867,17 @@ export function queryClient(options = {}) {
     // run -- eventually tripping the registry capacity cap. Called from the
     // three entry-removal sites: GC timer, removeQueries, clear.
     function disposeEntry(entry) {
+        // A shared-stream owner leaving gracefully tells the tab set BEFORE it
+        // stops its iterator (F1): a stream-end with reason "closing" is not a
+        // terminal outcome for the key -- followers run the promotion race on
+        // receipt so the stream continues on another tab. Emitted from the
+        // dispose path (never from a remote handler), so V2 does not bite. A
+        // KILLED tab (F2) never reaches here, so no close is sent and the
+        // watchdog is the only detector -- exactly as the matrix requires.
+        if (sharedStreamActive && entry.streamOwner && channel) {
+            broadcast({ type: "stream-end", key: entry.key, epochSeq: entry.streamEpoch, clientId, ok: false, error: undefined, reason: "closing" });
+        }
+        disarmWatchdog(entry);
         // Stop any live stream first (abort the iterator -> iterator.return(),
         // closing the underlying SSE/websocket) before releasing signal nodes.
         if (entry.streamStop) {
@@ -862,6 +885,8 @@ export function queryClient(options = {}) {
             entry.streamStop = null;
             entry.streamRestart = null;
         }
+        entry.streamOwner = false;
+        entry.streamShared = false;
         // Release the infinite-query accumulation so a destroyed entry does not
         // pin its pages/flat arrays until the next major GC. These are plain
         // arrays, not signal nodes -- nulling is the whole release.
@@ -963,9 +988,23 @@ export function queryClient(options = {}) {
             // stays cached (scheduleGc); a re-attach before GC re-establishes a
             // fresh stream via the watcher. Cached data() survives until GC.
             if (entry.streamStop) {
+                // A shared owner leaving gracefully hands the stream on (F1).
+                if (sharedStreamActive && entry.streamOwner && channel) {
+                    broadcast({ type: "stream-end", key: entry.key, epochSeq: entry.streamEpoch, clientId, ok: false, error: undefined, reason: "closing" });
+                }
                 try { entry.streamStop(); } catch {}
                 entry.streamStop = null;
                 entry.streamRestart = null;
+                const s = entry.status();
+                if (s === "pending" || s === "streaming") setStatus(entry, "idle");
+            }
+            // Shared-stream teardown (owner or follower): stop the watchdog and
+            // reset the projection state so a re-attach before GC re-registers
+            // cleanly. (V5's slot release lands in C8.)
+            if (entry.streamShared) {
+                disarmWatchdog(entry);
+                entry.streamShared = false;
+                entry.streamOwner = false;
                 const s = entry.status();
                 if (s === "pending" || s === "streaming") setStatus(entry, "idle");
             }
