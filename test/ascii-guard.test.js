@@ -73,6 +73,8 @@ function buildWalkList() {
   }
   // test/*.js -- includes the guards themselves, so they self-police.
   collectByExt(join(ROOT, 'test'), '.js', out);
+  // test/**/*.mjs -- the torture-law entry and its phase-C control fixtures.
+  collectByExt(join(ROOT, 'test'), '.mjs', out);
   // bench/**/*.mjs -- the whole bench tree, benchmark + torture harnesses.
   collectByExt(join(ROOT, 'bench'), '.mjs', out);
   return [...new Set(out)].sort();
