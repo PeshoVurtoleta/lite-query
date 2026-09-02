@@ -124,6 +124,57 @@ const ABORT_REASON = Object.freeze({
 });
 
 // -----------------------------------------------------------------------------
+// Devtools feed (qc.inspect) -- module-level cold scaffolding (Q7)
+// -----------------------------------------------------------------------------
+
+// The feed timestamp clock, resolved ONCE at module load: performance.now() when
+// available (monotonic, non-decreasing within a process), else Date.now(). NOT
+// opts.now -- a mock staleness clock must never stamp the feed. Read per emit,
+// AFTER the feed.hook null test (never before, A-2).
+const FEED_NOW = (typeof performance === "object" && performance !== null &&
+    typeof performance.now === "function")
+    ? () => performance.now()
+    : () => Date.now();
+
+// The 23 frozen event types, in vocabulary order. One preallocated record per
+// type is built at inspect() install and dropped at uninstall (T3 ratified): an
+// installed panel under a 60Hz stream allocates zero bytes per frame, and an app
+// that never calls inspect() retains zero feed objects.
+const FEED_TYPES = [
+    "entry:create", "entry:attach", "entry:detach", "entry:gc", "entry:remove",
+    "entry:status", "entry:stale",
+    "fetch:dispatch", "fetch:settle", "fetch:abort",
+    "tab:send", "tab:receive",
+    "shared:request", "shared:fallback", "shared:serve",
+    "stream:start", "stream:value", "stream:done", "stream:error",
+    "mutation:start", "mutation:settle",
+    "persist:hydrate", "persist:save",
+];
+
+// Build the per-type pooled record table (cold, once per install). Every record
+// carries exactly the 10 frozen own keys in one order -> one hidden class per
+// type, so a panel's property reads stay monomorphic. The hook MUST copy what it
+// keeps: the next event of the same type overwrites these fields in place.
+function buildEventPool() {
+    const pool = {};
+    for (let i = 0; i < FEED_TYPES.length; i++) {
+        const t = FEED_TYPES[i];
+        pool[t] = {
+            type: t, ts: 0, key: null, keyHash: null, from: null, to: null,
+            reason: null, count: 0, ok: false, value: null,
+        };
+    }
+    return pool;
+}
+
+// The status-funnel reader. Hoisted module-level (the same trick as
+// cleanupObserver) so setStatus reads an entry's prior status with ZERO per-call
+// allocation; the entry is parked in _se immediately before the untracked read,
+// and dispatch is synchronous so no interleave can occur before READ_STATUS runs.
+let _se = null;
+const READ_STATUS = () => _se.status();
+
+// -----------------------------------------------------------------------------
 // Infinite-query page accumulation (cold path)
 // -----------------------------------------------------------------------------
 
@@ -273,6 +324,94 @@ export function queryClient(options = {}) {
         persistHook = fn;
         return function uninstallPersistHook() {
             if (persistHook === fn) persistHook = null;
+        };
+    }
+
+    // Public single-slot devtools feed (Q7, OR-4). Independent of persistHook:
+    // installing/uninstalling either never touches the other. `hook` is null when
+    // no panel is attached -- the uninstalled branch is the product (OR-5), so
+    // every emit site is one `feed.hook !== null` test and nothing (no object, no
+    // array, no string, no ts read) is constructed before it passes (A-2). `pool`
+    // holds the 23 per-type records only while installed.
+    const feed = { hook: null, pool: null };
+
+    // Synchronous dispatch funnel (OR-7). A throwing hook is contained fail-closed
+    // TOWARD THE FEED: null the slot (an instant return to the zero-cost path),
+    // report once, and return so the in-progress cache write completes. Never
+    // re-thrown, never queued -- G4's state machine depends on emission order
+    // being the truth.
+    function fire(ev) {
+        const h = feed.hook;
+        try {
+            h(ev);
+        } catch (err) {
+            feed.hook = null;
+            feed.pool = null;
+            try {
+                console.error("lite-query: inspect hook threw; feed uninstalled", err);
+            } catch { /* a throwing console must not re-enter the funnel */ }
+        }
+    }
+
+    // Five cold emit closures (one per domain), each grabbing its pooled record,
+    // overwriting all 10 fields (never a partial write -- a stale field is a lie),
+    // and firing. Reached only from behind a feed.hook !== null test.
+    function emitEntry(type, entry, count, reason) {
+        const ev = feed.pool[type];
+        ev.type = type; ev.ts = FEED_NOW();
+        ev.key = entry.key; ev.keyHash = entry.keyHash;
+        ev.from = null; ev.to = null;
+        ev.reason = reason; ev.count = count; ev.ok = false; ev.value = null;
+        fire(ev);
+    }
+    function emitFetch(type, entry, count, ok, value, reason) {
+        const ev = feed.pool[type];
+        ev.type = type; ev.ts = FEED_NOW();
+        ev.key = entry.key; ev.keyHash = entry.keyHash;
+        ev.from = null; ev.to = null;
+        ev.reason = reason; ev.count = count; ev.ok = ok; ev.value = value;
+        fire(ev);
+    }
+    function emitStream(type, entry, count, ok, value, reason) {
+        const ev = feed.pool[type];
+        ev.type = type; ev.ts = FEED_NOW();
+        ev.key = entry.key; ev.keyHash = entry.keyHash;
+        ev.from = null; ev.to = null;
+        ev.reason = reason; ev.count = count; ev.ok = ok; ev.value = value;
+        fire(ev);
+    }
+    function emitTab(type, reason, ok) {
+        const ev = feed.pool[type];
+        ev.type = type; ev.ts = FEED_NOW();
+        ev.key = null; ev.keyHash = null;
+        ev.from = null; ev.to = null;
+        ev.reason = reason; ev.count = 0; ev.ok = ok; ev.value = null;
+        fire(ev);
+    }
+    function emitClient(type, count, ok, value, reason) {
+        const ev = feed.pool[type];
+        ev.type = type; ev.ts = FEED_NOW();
+        ev.key = null; ev.keyHash = null;
+        ev.from = null; ev.to = null;
+        ev.reason = reason; ev.count = count; ev.ok = ok; ev.value = value;
+        fire(ev);
+    }
+
+    // Install the single devtools feed hook (Q7). Mirrors installPersistHook's
+    // two throw shapes exactly (TypeError on a non-function -- a hook array lands
+    // here -- Error on double-install) and its === guarded idempotent uninstall.
+    // Installing/uninstalling inspect never reads or writes persistHook (OR-4).
+    function inspect(hook) {
+        if (typeof hook !== "function") {
+            throw new TypeError("lite-query: inspect requires a function");
+        }
+        if (feed.hook !== null) {
+            throw new Error("lite-query: an inspect hook is already installed on this client (single-slot seam)");
+        }
+        feed.pool = buildEventPool();      // cold: 23 records, once per install
+        feed.hook = hook;
+        return function uninstallInspect() {
+            if (feed.hook === hook) { feed.hook = null; feed.pool = null; }
         };
     }
 
@@ -1077,9 +1216,16 @@ export function queryClient(options = {}) {
         dehydrate,
         hydrate,
         dispose,
-        // Internal API consumed by query()/mutation(). Not part of the public
-        // surface; documented as such in llms.txt.
-        _internal: { entries, ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, opts, installPersistHook },
+        // Install a devtools feed hook (Q7). One slot per client; observe-only,
+        // never throw, never mutate. The hook MUST copy what it keeps -- events
+        // are pooled per type and overwritten in place. Returns an idempotent
+        // uninstall thunk.
+        inspect,
+        // Internal API consumed by query()/mutation() and the /stream subpath.
+        // Not part of the public surface; documented as such in llms.txt. `feed`
+        // is the live per-client cell (V2: a `let` cannot cross the subpath
+        // boundary, so the subpath reads the same object through _internal).
+        _internal: { entries, ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, opts, installPersistHook, feed },
     };
 }
 
