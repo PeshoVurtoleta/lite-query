@@ -339,3 +339,136 @@ test("a streamQuery and a query coexist in one client without interference", asy
     assert.equal(qc.getQueryData(["s"]), "streamed");
     qStop(); sqStop(); q.dispose(); sq.dispose();
 });
+
+// ---------------------------------------------------------------------------
+// PARITY SUITE (C1 -- OR-2). These five record streamQuery's observable
+// semantics BEFORE the C4 collapse of the hand ring into pipeToSignal 1.3.0.
+// They are frozen the moment C1 lands: they must pass byte-for-byte unchanged
+// on BOTH sides of the collapse. Any edit to a test below after C1 is a
+// reviewer REJECT (OR-2). Do not touch them to make the new internals pass;
+// if one fails post-collapse, STOP and report.
+// ---------------------------------------------------------------------------
+
+test("parity: status ladder idle -> pending -> streaming -> success", async () => {
+    const qc = queryClient({ defaultStaleTime: 0 });
+    const c = makeController();
+    const sq = streamQuery(qc, { key: ["ladder"], stream: c.factory });
+
+    // idle: no observer has subscribed yet.
+    assert.equal(sq.status(), "idle");
+
+    const stop = effect(() => sq.data());
+    await tick();
+    assert.equal(sq.status(), "pending", "subscribed, zero values -> pending");
+
+    c.push(1); await tick();
+    assert.equal(sq.status(), "streaming", "first value -> streaming");
+
+    c.push(2); await tick();
+    assert.equal(sq.status(), "streaming", "further values stay streaming");
+
+    c.complete(); await tick();
+    assert.equal(sq.status(), "success", "iterator done -> success");
+    assert.equal(sq.done(), true);
+    stop(); sq.dispose();
+});
+
+test("parity: droppedCount ladder N=12/maxBuffer=4 -> 8, newest-last", async () => {
+    const qc = queryClient({ defaultStaleTime: 0 });
+    const c = makeController();
+    const sq = streamQuery(qc, { key: ["log"], stream: c.factory, mode: "buffer", maxBuffer: 4 });
+    let seen;
+    const stop = effect(() => { seen = sq.data(); });
+    await tick();
+
+    for (let i = 1; i <= 12; i = (i + 1) | 0) { c.push(i); await tick(); }
+
+    assert.deepEqual(seen, [9, 10, 11, 12], "window holds the newest maxBuffer values, newest last");
+    assert.equal(sq.count(), 12, "count is total values seen");
+    assert.equal(sq.droppedCount(), 8, "12 - 4 = 8 oldest dropped");
+    stop(); sq.dispose();
+});
+
+test("parity: restart resets count and droppedCount", async () => {
+    const qc = queryClient({ defaultStaleTime: 0 });
+    const controllers = [];
+    const sq = streamQuery(qc, {
+        key: ["feed"],
+        stream: () => { const c = makeController(); controllers.push(c); return c.factory(); },
+        mode: "buffer",
+        maxBuffer: 2,
+    });
+    const stop = effect(() => sq.data());
+    await tick();
+    for (const v of [1, 2, 3, 4, 5]) { controllers[0].push(v); await tick(); }
+    assert.equal(sq.count(), 5);
+    assert.equal(sq.droppedCount(), 3, "5 - 2 = 3 dropped before restart");
+
+    sq.restart();
+    await tick();
+    assert.equal(sq.count(), 0, "count reset on restart");
+    assert.equal(sq.droppedCount(), 0, "droppedCount reset on restart");
+
+    controllers[1].push(99); await tick();
+    assert.equal(sq.count(), 1);
+    assert.equal(sq.droppedCount(), 0);
+    stop(); sq.dispose();
+});
+
+test("parity: throwing iterator -> status error + error() surfaced", async () => {
+    const qc = queryClient({ defaultStaleTime: 0 });
+    const c = makeController();
+    const sq = streamQuery(qc, { key: ["feed"], stream: c.factory });
+    const stop = effect(() => sq.data());
+    await tick();
+    c.push(1); await tick();
+    const boom = new Error("iterator threw");
+    c.fail(boom); await tick();
+    assert.equal(sq.status(), "error", "a throwing iterator lands in error");
+    assert.equal(sq.error(), boom, "the thrown value is surfaced via error()");
+    stop(); sq.dispose();
+});
+
+test("parity: abort is not an error (detach/restart/removeQueries)", async () => {
+    // detach: last observer leaving aborts the iterator; status resets, no error.
+    const qc1 = queryClient({ defaultStaleTime: 60_000 });
+    const cd = makeController();
+    const sqd = streamQuery(qc1, { key: ["feed"], stream: cd.factory });
+    const stopD = effect(() => sqd.data());
+    await tick();
+    cd.push(1); await tick();
+    stopD(); await tick();
+    assert.equal(cd.closed, true, "detach aborted the iterator");
+    assert.notEqual(sqd.status(), "error", "detach abort is not an error");
+    assert.equal(sqd.error(), undefined, "detach leaves error() unset");
+    sqd.dispose();
+
+    // restart: aborting the old pump to start a new one is not an error.
+    const qc2 = queryClient({ defaultStaleTime: 0 });
+    const controllers = [];
+    const sqr = streamQuery(qc2, {
+        key: ["feed"],
+        stream: () => { const c = makeController(); controllers.push(c); return c.factory(); },
+    });
+    const stopR = effect(() => sqr.data());
+    await tick();
+    controllers[0].push(1); await tick();
+    sqr.restart(); await tick();
+    assert.equal(controllers[0].closed, true, "restart aborted the old iterator");
+    assert.notEqual(sqr.status(), "error", "restart abort is not an error");
+    assert.equal(sqr.error(), undefined, "restart leaves error() unset");
+    stopR(); sqr.dispose();
+
+    // removeQueries: dropping the entry aborts its stream; no error surfaces.
+    const qc3 = queryClient({ defaultStaleTime: 0 });
+    const cm = makeController();
+    const sqm = streamQuery(qc3, { key: ["feed"], stream: cm.factory });
+    const stopM = effect(() => sqm.data());
+    await tick();
+    cm.push(1); await tick();
+    qc3.removeQueries(["feed"]);
+    await tick();
+    assert.equal(cm.closed, true, "removeQueries aborted the iterator");
+    assert.notEqual(sqm.status(), "error", "removeQueries abort is not an error");
+    stopM(); sqm.dispose();
+});
