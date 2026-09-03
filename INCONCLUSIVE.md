@@ -211,6 +211,47 @@ resolve the cause, do not widen the budget.
   gate are the N-tab fuzzer generalization (echo/ledger laws over N) and the
   5-tab shared-stream soak (dup/reorder=0, one connection under churn, G5).
 
+  Q9 (OR-9) added the offline mutation queue -- durable enqueue + caller-driven
+  `replayQueue(resolve)` -- and re-attempted a legal trigger through the queue's
+  replay teardown with an IN-FLIGHT replay handle. The attempt was run this
+  session against the real entry points, as a section of phase H that executes
+  AFTER the frozen gate evaluation (ON-2), so it can never move the byte-frozen
+  GATE line:
+
+    Attempt F -- dispose the client WHILE a replayQueue() is in flight. 2048
+      cycles of: a `queryClient()` with a seeded entry `['f']` and one offline
+      mutation enqueued (`mutation(qc, { queue: true, offline: () => true, name:
+      "save", queueKey: ["f"] })` then `mutate()`); then start
+      `qc.replayQueue(() => async () => { await gate; return "ok" })` whose
+      handler BLOCKS on an unresolved gate promise, advance one microtask so the
+      replay loop is parked inside the `await handler(rec.vars)`, and
+      `tracker.track(replayPromise, NOOP_RELEASE, "replay-inflight", { audit:
+      true })` OUTSIDE any lite-signal owner (held-value contract preserved --
+      neither tag nor release closes over the tracked promise). Then `qc.dispose()`
+      is called mid-replay, the gate is released so the handler resolves after
+      disposal, and the replay promise is awaited to completion. Result (this
+      session): `tracker.size()` returned to its pre-attempt value (live-delta
+      `0`) and `tracker.audit().length === 0` after `gc()` + a settle tick. The
+      replay loop iterates a `queueStore.slice()` SNAPSHOT and settles each item
+      to completion; disposing the client does not sever the loop, but the loop is
+      finite, its per-item result objects are handed back through the resolved
+      promise, and nothing -- the promise, the handler closure, the record -- is
+      rooted past the settle. `mutation()` and `replayQueue()` allocate no
+      lite-signal owner the owner-cascade kernel watches, and the resolved promise
+      leaves nothing for the async-retention kernel. It cannot leave either
+      kernel's trip state.
+
+  OUTCOME: does NOT fire. Attempt F re-recorded verbatim above; the
+  findings-clause stays uncontrolled and is carried forward. Per ON-3/OR-9,
+  Attempt F is explicitly NOT a gate clause (a control that cannot trip is
+  decorative -- never faked). The live controls remain `alloc` / `detach` /
+  `fuzz` / `pages` / `feed` (`tripped=5/5` under `QUERY_TORTURE_BREAK=1`). The
+  lesson A/B/C/D/E/F keep teaching holds: a hand-run attempt that does not fire is
+  not proof of absence -- a keyed retention is found by an adversarial probe or a
+  reviewer, not by the churn loop. The honest Q9 gate addition that DOES gate is
+  the airplane-mode replay soak (200 reload cycles, every cycle restores N and
+  drains to 0, retention baseline flat).
+
 The census clause (`censusOk`) WAS uncontrolled between commit e56af54 and its
 fix: C-detach hardcoded `censusOk: true` (an undeclared drift from PLAN
 Assertion 3). It is now controlled -- C-detach builds a WeakRef census over its

@@ -44,7 +44,7 @@ import {
 import { createRoot, effect } from '@zakkster/lite-signal';
 
 // >>> WIRE 1: the package under test
-import { queryClient, query, infiniteQuery, persistQueryClient } from '../Query.js';
+import { queryClient, query, infiniteQuery, persistQueryClient, mutation } from '../Query.js';
 import { streamQuery } from '../StreamQuery.js';
 import { createMockClock, createMockBroadcastChannel } from './harness.js';
 
@@ -738,6 +738,118 @@ async function runAttemptE() {
     findingsE.length + ' -> ' + (fired ? 'FIRED' : 'DID NOT FIRE (carried; recorded verbatim in INCONCLUSIVE.md)'));
 }
 
+// ---- Q9 airplane-mode replay soak (T5/G3) ---------------------------------
+// The offline queue's headline scenario, run AFTER the frozen gate (ON-2): a tab
+// goes offline, enqueues N mutations, persists them, and closes; a FRESH client
+// then restores the durable queue and replays it on reconnect. 200 reload cycles.
+//
+// GATE (the soak's real contract, T5): the queue RESTORES N and drains to 0 every
+// cycle (nothing stranded across a reload) AND the retention baseline is flat
+// (tracker delta 0 -- no client, entry, or record outlives its cycle). enqueue and
+// replay are COLD paths that legitimately ALLOCATE their records/promises (the
+// planner's own words), so the transient GC profile is REPORTED here, not gated:
+// gating maxMajor 0 on 5000 cold record allocations would be a budget the path
+// never promised. The zero-alloc guarantee lives on the WARM projection/read path,
+// proven maxMajor 0 by the frozen phase-H gate above (byte-untouched). Prints its
+// own line; a stranded item or a retention leak fails the process, never the GATE.
+async function runAirplaneModeSoak() {
+  const AM_CYCLES = 200;
+  const N = 25;
+  const beforeSize = tracker.size();
+  const gc = new GcProfiler().start();
+  let allDrained = true;
+  let durable = null;
+  for (let c = 0; c < AM_CYCLES; c++) {
+    // The offline tab: seed entries, enqueue N mutations while offline, persist.
+    const A = queryClient();
+    const pa = persistQueryClient(A, {
+      save() {}, load: () => null, version: 'v1', throttle: 0,
+      queueSave: (env) => { durable = env; }, queueLoad: () => null,
+    });
+    await pa.queueRestored;
+    for (let i = 0; i < N; i++) {
+      A.setQueryData(['todo', i], { seeded: true });
+      const m = mutation(A, { fn: async () => 'x', queue: true, offline: () => true, name: 'save', queueKey: ['todo', i] });
+      await m.mutate({ i });
+      m.dispose();
+    }
+    pa.stop();
+    A.dispose();
+    // The reload: a fresh client restores the durable queue and replays on
+    // reconnect (offline() would now report false, but replay is caller-driven).
+    const B = queryClient();
+    const pb = persistQueryClient(B, {
+      save() {}, load: () => null, version: 'v1', throttle: 0,
+      queueSave: () => {}, queueLoad: () => durable,
+    });
+    const outcome = await pb.queueRestored;
+    for (let i = 0; i < N; i++) B.setQueryData(['todo', i], { seeded: true });
+    await B.replayQueue(() => async () => 'server-ok');
+    if (outcome.status !== 'restored' || outcome.count !== N || B.queueSize() !== 0) allDrained = false;
+    pb.stop();
+    B.dispose();
+    durable = null;
+    if ((c & 31) === 0) gc.sampleHeap(performance.now(), process.memoryUsage().heapUsed);
+  }
+  globalThis.gc?.();
+  await new Promise((r) => setTimeout(r, 50));
+  const s = gc.summary();
+  gc.stop();
+  const liveDelta = tracker.size() - beforeSize;
+  const findingsAM = tracker.audit();
+  const ok = allDrained && liveDelta === 0 && findingsAM.length === 0;
+  console.log('phase H Q9 airplane-mode replay soak (T5/G3; outside the frozen GATE window):');
+  console.log('  cycles=' + AM_CYCLES + ' enqueue-per-cycle=' + N + ' | queueSize->0 every cycle=' + allDrained +
+    ' pool-baseline-delta=' + liveDelta + ' audit-findings=' + findingsAM.length +
+    ' | gc(reported, cold) major=' + s.gc.major + ' minor=' + s.gc.minor + ' maxMs=' + s.gc.maxMs.toFixed(2));
+  console.log(ok
+    ? '  PASS: every reload cycle restores N and drains to 0; retention baseline flat (T5)'
+    : '  FAIL: a reload stranded an item or leaked a cycle -- see delta above');
+  if (!ok) process.exitCode = 1;
+}
+
+// ---- OR-9 attempt F: replay teardown with an in-flight replay handle -------
+// The carry_from_q8 findings-clause attempt (Q5 A/B, Q6 C, Q7 D, Q8 E; five
+// verbatim in INCONCLUSIVE.md), now riding the queue's replay teardown (OR-9).
+// The honest control: a replayQueue whose handler is still in flight when the
+// CLIENT is disposed. The in-flight replay promise + its handler closure are the
+// carried surface; if disposing the client mid-replay leaves them reachable, the
+// async-retention kernel trips. Runs AFTER the frozen gate; NOT a gate clause.
+// Honest pass-or-fail, recorded verbatim in INCONCLUSIVE.md as Attempt F.
+async function runAttemptF() {
+  const beforeSize = tracker.size();
+  const CYC = 2048;
+  let fSink = 0;
+  for (let i = 0; i < CYC; i++) {
+    const qc = queryClient();
+    qc.setQueryData(['f'], { seeded: true });
+    const m = mutation(qc, { fn: async () => 'x', queue: true, offline: () => true, name: 'save', queueKey: ['f'] });
+    await m.mutate({ i });
+    m.dispose();
+    // Start a replay whose handler blocks on a gate (in flight), then dispose the
+    // client BEFORE the handler resolves. Neither the tag nor the release closes
+    // over the tracked promise.
+    let releaseHandler;
+    const gate = new Promise((res) => { releaseHandler = res; });
+    const replayPromise = qc.replayQueue(() => async () => { await gate; return 'ok'; });
+    await Promise.resolve();
+    tracker.track(replayPromise, NOOP_RELEASE, 'replay-inflight', { audit: true });
+    qc.dispose();                 // teardown WHILE the replay is in flight
+    releaseHandler();             // handler resolves after disposal
+    await replayPromise.catch(() => {});
+    fSink += 1;
+  }
+  globalThis.gc?.();
+  await new Promise((r) => setTimeout(r, 50));
+  const liveF = tracker.size() - beforeSize;
+  const findingsF = tracker.audit();
+  const fired = liveF !== 0 || findingsF.length !== 0;
+  if (fSink === Number.MIN_SAFE_INTEGER) console.log('unreachable');
+  console.log('phase H OR-9 attempt F (replay teardown w/ in-flight replay handle; NOT a gate clause):');
+  console.log('  cycles=' + CYC + ' tracked-replay live-delta=' + liveF + ' audit-findings=' +
+    findingsF.length + ' -> ' + (fired ? 'FIRED' : 'DID NOT FIRE (carried; recorded verbatim in INCONCLUSIVE.md)'));
+}
+
 // ---- orchestration --------------------------------------------------------
 // Fail closed on a missing --expose-gc BEFORE any phase runs: without it the
 // census settle cycles cannot collect and phase H reports a leak-shaped
@@ -798,4 +910,8 @@ if (BREAK) {
   await runStreamConcurrencySoak();
   // C12 (OR-10): attempt E through the new follower-projection teardown surface.
   await runAttemptE();
+  // Q9 (C8): the airplane-mode replay soak (a gate clause, G3) + attempt F, both
+  // AFTER the frozen gate evaluation, printing their own lines (never the GATE).
+  await runAirplaneModeSoak();
+  await runAttemptF();
 }
