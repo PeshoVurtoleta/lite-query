@@ -25,8 +25,8 @@ was spiked and DEFERRED: forward-only refetch stores a single tail-derived curso
 and replays from page one, so a drop-oldest window would jump from tail to head on
 every refetch (ruling recorded in the ROADMAP parking ledger). Additive only --
 zero breaking changes, the shipped 2.1.0 tests pass unedited. Per OR-1 the version
-stamp lands only with the `/release 2.2.0` drill after the pipeline closes (no
-in-session stamp; the pipeline runs with `package.json` and the `VERSION` const at
+stamp landed only with the `/release 2.2.0` drill after the pipeline closed (no
+in-session stamp; the pipeline ran with `package.json` and the `VERSION` const at
 `2.1.0`).
 
 ### Added
