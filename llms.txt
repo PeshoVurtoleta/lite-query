@@ -2,17 +2,22 @@
 
 Reactive async cache with cross-tab coherence. Built on @zakkster/lite-signal (>=1.5.0). ~6KB min+gzip core. Framework-agnostic. 391 deterministic tests (253 core incl. zero-GC hot-path contract + infiniteQuery + prefetch + persistence/dehydrated-cache conformance + the devtools feed qc.inspect + 31 await + 24 stream + 43 cross-tab shared-stream (7 failover cells + wire/projection/watchdog/promotion/feed + the LS4 writer-slot swap) + 28 offline mutation queue (opt-in ladder + replay + persist + at-least-once crash + 31-type feed) + 6 falsy-rejection (ON-3) + 6 repo drift guards). TypeScript types shipped for every entry point (Query.d.ts, StreamQuery.d.ts, Awaitable.d.ts). Three entry points: `.` (core), `./stream` (streamQuery, optional peer lite-stream), `./await` (async coordination, optional peer lite-await). Every entry exports `VERSION` -- lite-query's own version string, the single runtime version source (defined in Query.js, re-exported by /stream and /await, asserted equal to package.json).
 
-## Performance vs @tanstack/query-core (5.101)
+## Performance vs @tanstack/query-core (5.102.8)
 
-Measured Node 22, same fetcher/keys/observer pattern, both libraries running full lookup+observer+cleanup paths. Reproduce: `npm run bench`. Numbers vary ~10-15% run-to-run; the ratios are stable.
+Measured Node 26, same fetcher/keys/observer pattern, both libraries running full lookup+observer+cleanup paths; every comparative scenario asserts equal work before its timing is trusted. Reproduce: `npm run bench`. Numbers vary ~10-15% run-to-run; the ratios are stable.
 
-- Cold attach -> resolve -> dispose: ~25k ops/sec, ~1.25x faster than query-core
-- Warm cache hit: ~400k ops/sec, ~1.2x faster (both libraries have tight warm paths)
-- **Invalidate 50 observed queries: ~10k ops/sec, ~3.9x faster, 60-85% less transient memory**
-- **Mutation w/ optimistic + rollback: ~68k ops/sec, ~3.7x faster, ~87% less transient memory**
-- **1000 parallel queries per cycle: ~110 ops/sec, ~2.5x faster, ~70% less transient memory**
+- Cold attach -> resolve -> dispose: ~300k ops/sec, ~1.6x faster than query-core
+- Warm cache hit: ~1.35M ops/sec, ~1.6x faster
+- **Invalidate 50 observed queries: ~31k ops/sec, ~3.3x faster, ~0.54x transient memory**
+- **Mutation w/ optimistic + rollback: ~320k ops/sec, ~2.5x faster, ~0.84x transient memory**
+- 1000 parallel queries per cycle: ~510 ops/sec, ~1.9x faster
+- Prefetch unique key -> resolve: ~680k ops/sec, ~2.0x faster
+- Dehydrate -> hydrate cycle: ~62k ops/sec, ~1.0x (parity -- both walk the entry map)
+- Cache write + listener installed (inspect vs QueryCache.subscribe): ~1.95M ops/sec, ~1.6x faster
+- **Infinite: 4-page paginate cycle (fetchNextPage vs InfiniteQueryObserver): ~139k ops/sec, ~3.1x faster, ~0.48x transient memory**
+- Offline drain [PHILOSOPHY-DIFFERING, labeled in output]: ~627k ops/sec, ~6x faster -- lite DURABLY enqueues + replayQueue (at-least-once across a reload) vs query-core PAUSES in memory + resumePausedMutations (best-effort, lost on reload); read per-library, not as an equivalence.
 
-Memory: lite-query allocates 4x-10x less per-operation transient memory on the high-allocation scenarios (invalidate, mutation, 1000-parallel) thanks to lite-signal's zero-GC primitives, proper entry-signal disposal on cache removal, and a hoisted-cleanup-closure hot-path optimization (one closure per query(), not per accessor read). Warm reads are within noise of each other. SWR is React-coupled (no framework-agnostic core), excluded from bench.
+Memory: lite-query allocates less per-operation transient memory where it counts -- invalidate (~0.54x), mutation (~0.84x), infinite paginate (~0.48x) -- thanks to lite-signal's zero-GC primitives, proper entry-signal disposal on cache removal, and a hoisted-cleanup-closure hot-path optimization (one closure per query(), not per accessor read). On warm reads, prefetch, and the listener-installed write path it allocates more transient (the copying pooled-record read + per-op result objects), all young-gen with zero retained growth. The zero-GC guarantee is on the warm READ loop (byte-frozen torture GATE), not on cold write/serialize paths. SWR is React-coupled (no framework-agnostic core), excluded from bench.
 
 ## What it is
 

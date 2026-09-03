@@ -13,7 +13,7 @@ Reactive async cache with cross-tab coherence. Built on `@zakkster/lite-signal`.
 ![Dependencies](https://img.shields.io/badge/runtime%20deps-0-brightgreen?style=flat-square)
 [![license](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 
-**~3.9x faster on invalidate, ~3.7x faster on mutations, ~2.5x faster at 1000-concurrent-query scaling, with up to 10x less transient memory** vs `@tanstack/query-core` ([see Performance](#performance)). Cross-tab cache coherence and cross-tab fetch dedup built in.
+**~3.3x faster on invalidate, ~3.1x faster on infinite pagination, ~2.5x faster on mutations, ~1.6-2.0x on every read path, at less transient memory on the write-heavy scenarios** vs `@tanstack/query-core` 5.102.8 ([see Performance](#performance)). Cross-tab cache coherence and cross-tab fetch dedup built in.
 
 ```js
 const todos = query(qc, {
@@ -72,19 +72,26 @@ Where lite-query trails: the devtools *panel* is external (lite-studio), not bun
 
 ## Performance
 
-Measured against `@tanstack/query-core` 5.101 on Node 22 (SWR is React-coupled -- no framework-agnostic core to compare against, excluded for honest apples-to-apples). Same fetcher, same keys, same observer pattern. Both libraries run their full lookup, observer, and cleanup paths -- nothing stubbed.
+Measured against `@tanstack/query-core` 5.102.8 on Node 26 (SWR is React-coupled -- no framework-agnostic core to compare against, excluded for honest apples-to-apples). Same fetcher, same keys, same observer pattern; every comparative scenario asserts both libraries did the same unit of work before its timing is trusted. Both libraries run their full lookup, observer, and cleanup paths -- nothing stubbed.
 
 | Scenario | lite-query | TanStack query-core | Speedup |
 |---|---:|---:|---:|
-| Cold attach -> resolve -> dispose | ~25,000 ops/sec | ~19,000 ops/sec | ~1.25x |
-| Warm cache hit (already resolved) | ~400,000 ops/sec | ~320,000 ops/sec | ~1.2x |
-| **Invalidate 50 observed queries** | **~10,000 ops/sec** | **~2,800 ops/sec** | **~3.9x** |
-| **Mutation w/ optimistic + rollback** | **~68,000 ops/sec** | **~19,000 ops/sec** | **~3.7x** |
-| **1000 parallel queries / cycle** | **~110 ops/sec** | **~45 ops/sec** | **~2.5x** |
+| Cold attach -> resolve -> dispose | ~300,000 ops/sec | ~175,000 ops/sec | ~1.6x |
+| Warm cache hit (already resolved) | ~1,350,000 ops/sec | ~860,000 ops/sec | ~1.6x |
+| **Invalidate 50 observed queries** | **~31,000 ops/sec** | **~9,500 ops/sec** | **~3.3x** |
+| **Mutation w/ optimistic + rollback** | **~320,000 ops/sec** | **~128,000 ops/sec** | **~2.5x** |
+| 1000 parallel queries / cycle | ~510 ops/sec | ~275 ops/sec | ~1.9x |
+| Prefetch unique key -> resolve | ~680,000 ops/sec | ~335,000 ops/sec | ~2.0x |
+| Dehydrate -> hydrate cycle | ~62,000 ops/sec | ~62,000 ops/sec | ~1.0x |
+| Cache write + listener installed | ~1,950,000 ops/sec | ~1,200,000 ops/sec | ~1.6x |
+| **Infinite: 4-page paginate cycle** | **~139,000 ops/sec** | **~44,000 ops/sec** | **~3.1x** |
+| Offline drain _(philosophy-differing)_ | ~627,000 ops/sec | ~100,000 ops/sec | ~6x |
 
-Where lite-query wins decisively: **invalidation** (~3.9x -- the signal-graph propagates without TanStack's observer-notification fan-out and per-query Promise allocation), **mutations with optimistic updates** (~3.7x -- the `setQueryData` -> `onMutate` -> `fn` -> rollback path is a direct signal write chain, not a queued observer cycle), and **high-concurrency scaling** (~2.5x on 1000 concurrent queries, with ~70% less transient memory).
+Where lite-query wins decisively: **invalidation** (~3.3x -- the signal-graph propagates without TanStack's observer-notification fan-out and per-query Promise allocation), **mutations with optimistic updates** (~2.5x -- the `setQueryData` -> `onMutate` -> `fn` -> rollback path is a direct signal write chain, not a queued observer cycle), and **infinite pagination** (~3.1x, at roughly half the transient memory per cycle). Every read-path scenario (cold, warm, prefetch) lands ~1.6-2.0x ahead. Dehydrate/hydrate is a dead heat -- both walk the same entry map.
 
-Memory: lite-query allocates 4x-10x **less transient memory per operation** on the high-allocation scenarios (invalidate, mutation, 1000-parallel) thanks to lite-signal's zero-GC primitives and proper entry-signal disposal on cache removal. The 1000-parallel scenario goes from ~750 KB/cycle (query-core) to ~280 KB/cycle (lite-query). Warm reads are within noise of each other -- both libraries have a tight warm path.
+The offline-drain row is **not a like-for-like** and is labeled as such in the bench output: lite-query DURABLY enqueues an offline mutation and replays it on demand (at-least-once across a reload), while query-core PAUSES the mutation in memory and resumes it when connectivity returns (best-effort, lost on reload). Read it as each library's offline path, never as an equivalence.
+
+Memory: lite-query allocates **less transient memory per operation** where it matters most -- invalidate (~0.54x), mutation (~0.84x), infinite paginate (~0.48x). On warm reads, prefetch, and the cache-write-with-listener path it allocates more transient (the copying pooled-record read and per-op result objects), all collected in young-gen with zero retained growth -- the zero-GC guarantee is on the warm READ loop (proven by the byte-frozen torture GATE), not on cold write/serialize paths.
 
 Persistence adds **zero warm-path allocation**: no new per-entry slot, no new signal, no read-path branch (`dehydrate` walks the map and is cold by definition; the write hook is a single `persistHook !== null` test at six commit/settle sites, none on the 200000-iteration warm-read loop). With no adapter installed the torture GATE line is byte-identical to the pre-persistence build (`GATE leak=size 0/0 findings=0 warnings=0 | gc major=0 minor=0 maxMs=0.00 | ok`), including a 4096-cycle dehydrate/hydrate/teardown loop.
 

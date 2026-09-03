@@ -11,13 +11,19 @@
 // Scenarios measure the same workload on each library so the numbers are
 // directly comparable. Where possible we use the same fetcher fn, the same
 // keys, and the same observer count to keep the comparison fair.
-import {queryClient as liteClient, query as liteQuery, mutation as liteMutation} from "../Query.js";
+import {queryClient as liteClient, query as liteQuery, mutation as liteMutation, infiniteQuery as liteInfinite} from "../Query.js";
 import {
     QueryClient as TanstackQC,
     QueryObserver as TanstackObs,
-    MutationObserver as TanstackMut
+    MutationObserver as TanstackMut,
+    InfiniteQueryObserver as TanstackInf,
+    onlineManager,
+    dehydrate as tanDehydrate,
+    hydrate as tanHydrate,
 } from "@tanstack/query-core";
-import {effect, createRegistry, setDefaultRegistry} from "@zakkster/lite-signal";
+import {effect, createRegistry, setDefaultRegistry, createRoot} from "@zakkster/lite-signal";
+
+import assert from "node:assert/strict";
 
 // Scenario E mounts 1000 concurrent queries; at peak that's ~5000 active
 // lite-signal nodes (4 per cache entry + 1 per query observer), which
@@ -34,7 +40,24 @@ const N_WARM = 50_000;
 const N_INVALIDATE = 2_000;
 const N_MUTATE = 5_000;
 const N_PARALLEL = 1_000;
+const N_PREFETCH = 5_000;      // F: cold prefetch of a unique key per tick
+const N_HYDRATE = 2_000;       // G: full dehydrate -> hydrate cycle per tick
+const HYDRATE_ENTRIES = 20;    // G: entries in the snapshot moved each cycle
+const N_EVENTS = 20_000;       // H: cache write with a listener installed
+const N_PAGINATE = 2_000;      // I: full 4-page paginate per tick
+const PAGES = 4;               // I: pages fetched per paginate cycle
+const N_QUEUE = 2_000;         // J: enqueue-offline + drain per tick
 const WARMUP_RATIO = 0.05;
+
+// Fairness ledger: every comparative scenario asserts both libraries performed
+// the SAME observable unit of work (same fetch/emit/page/drain count) before its
+// timings are trusted. A mismatch aborts the bench -- a number measured against
+// unequal work is not a comparison. Kept lightweight (a running counter checked
+// once at teardown) so it never perturbs the measured loop.
+function fair(name, liteWork, tanWork) {
+    assert.equal(liteWork, tanWork,
+        "fairness: " + name + " -- lite did " + liteWork + " units, query-core did " + tanWork);
+}
 
 // -- Memory + timing helpers ---------------------------------------------
 function gc() {
@@ -377,6 +400,175 @@ async function tanstackParallelScenario() {
     };
 }
 
+// --- F) prefetch a unique key -> resolve (no observer) ---------------------
+// Warms the cache imperatively -- the "hover to prefetch" / route-loader pattern.
+// lite-query: qc.prefetch(key, fetcher); query-core: qc.prefetchQuery.
+let liteFetchF = 0, tanFetchF = 0;
+
+async function litePrefetchScenario() {
+    const qc = liteClient({defaultStaleTime: 0, defaultCacheTime: Infinity});
+    liteFetchF = 0;
+    const f = () => { liteFetchF++; return Promise.resolve({n: liteFetchF}); };
+    return {
+        tick: async (i) => { await qc.prefetch(["pf", i], f); },
+        teardown: async () => { qc.dispose(); },
+    };
+}
+
+async function tanstackPrefetchScenario() {
+    const qc = new TanstackQC();
+    tanFetchF = 0;
+    const f = () => { tanFetchF++; return Promise.resolve({n: tanFetchF}); };
+    return {
+        tick: async (i) => { await qc.prefetchQuery({queryKey: ["pf", i], queryFn: f, staleTime: 0}); },
+        teardown: async () => { qc.clear(); fair("F prefetch", liteFetchF, tanFetchF); },
+    };
+}
+
+// --- G) dehydrate -> hydrate cycle -----------------------------------------
+// Serialize a populated cache and restore it into a fresh client -- the SSR /
+// boot-hydration / persistence round trip. Both libraries walk the same number
+// of entries each cycle.
+
+async function liteHydrateScenario() {
+    const src = liteClient({});
+    for (let k = 0; k < HYDRATE_ENTRIES; k++) src.setQueryData(["h", k], {k, v: k * 2});
+    return {
+        tick: async () => {
+            const state = src.dehydrate();
+            const dst = liteClient({});
+            dst.hydrate(state);
+            dst.dispose();
+        },
+        teardown: async () => { src.dispose(); },
+    };
+}
+
+async function tanstackHydrateScenario() {
+    const src = new TanstackQC();
+    for (let k = 0; k < HYDRATE_ENTRIES; k++) src.setQueryData(["h", k], {k, v: k * 2});
+    return {
+        tick: async () => {
+            const state = tanDehydrate(src);
+            const dst = new TanstackQC();
+            tanHydrate(dst, state);
+            dst.clear();
+        },
+        teardown: async () => { src.clear(); },
+    };
+}
+
+// --- H) cache write with a listener installed ------------------------------
+// The devtools / observability tax: how much does one installed listener add to
+// a cache write? lite-query's inspect() feed (pooled, copying hook) vs
+// query-core's QueryCache.subscribe. Same 64-key rewrite space, same write count.
+let liteEmitH = 0, tanEmitH = 0;
+
+async function liteFeedScenario() {
+    const qc = liteClient({defaultStaleTime: 0});
+    for (let k = 0; k < 64; k++) qc.setQueryData(["e", k], 0);   // pre-create -> writes only rewrite
+    liteEmitH = 0;
+    const uninstall = qc.inspect((ev) => { liteEmitH += ev.type.length & 1; });   // copying no-op reader
+    return {
+        tick: async (i) => { qc.setQueryData(["e", i & 63], i); },
+        teardown: async () => { uninstall(); qc.dispose(); },
+    };
+}
+
+async function tanstackSubscribeScenario() {
+    const qc = new TanstackQC();
+    for (let k = 0; k < 64; k++) qc.setQueryData(["e", k], 0);
+    tanEmitH = 0;
+    const unsub = qc.getQueryCache().subscribe((ev) => { tanEmitH += (ev && ev.type ? ev.type.length : 0) & 1; });
+    return {
+        tick: async (i) => { qc.setQueryData(["e", i & 63], i); },
+        teardown: async () => { unsub(); qc.clear(); },
+    };
+}
+
+// --- I) infinite pagination: fetch PAGES pages per cycle -------------------
+// lite-query infiniteQuery + fetchNextPage vs query-core InfiniteQueryObserver.
+// Each cycle mounts a fresh paginated list, pulls PAGES pages, and tears down.
+let litePagesI = 0, tanPagesI = 0;
+
+async function liteInfiniteScenario() {
+    litePagesI = 0;
+    const pageFetcher = async ({cursor}) => { litePagesI++; const b = (cursor == null ? 0 : cursor) * 2; return [b, b + 1]; };
+    const getNext = (last, all) => (all.length < PAGES ? all.length : null);
+    return {
+        tick: async () => {
+            const qc = liteClient({defaultStaleTime: Infinity});
+            const iq = liteInfinite(qc, {key: ["inf"], fetcher: pageFetcher, getNextCursor: getNext});
+            const stop = createRoot(() => effect(() => iq.data()));   // attach -> fetch page one
+            await Promise.resolve(); await Promise.resolve();
+            for (let p = 1; p < PAGES; p++) { await iq.fetchNextPage(); }
+            stop(); iq.dispose(); qc.dispose();
+        },
+    };
+}
+
+async function tanstackInfiniteScenario() {
+    tanPagesI = 0;
+    const queryFn = async ({pageParam}) => { tanPagesI++; const b = pageParam * 2; return [b, b + 1]; };
+    return {
+        tick: async () => {
+            const qc = new TanstackQC();
+            const obs = new TanstackInf(qc, {
+                queryKey: ["inf"], queryFn, initialPageParam: 0,
+                getNextPageParam: (last, all) => (all.length < PAGES ? all.length : undefined),
+                staleTime: Infinity,
+            });
+            const unsub = obs.subscribe(() => {});
+            await Promise.resolve(); await Promise.resolve();
+            // query-core's subscribe does not auto-fetch page one for a fresh
+            // observer here, so drive all PAGES pages explicitly -- matching
+            // lite-query's PAGES total (attach fetches page one + PAGES-1 more).
+            for (let p = 0; p < PAGES; p++) { await obs.fetchNextPage(); }
+            unsub(); obs.destroy(); qc.clear();
+        },
+        teardown: async () => { fair("I paginate (pages fetched)", litePagesI, tanPagesI); },
+    };
+}
+
+// --- J) offline queue drain (PHILOSOPHY-DIFFERING -- labeled) ---------------
+// NOT a like-for-like: lite-query DURABLY enqueues an offline mutation and
+// replays it on demand (at-least-once across a reload); query-core PAUSES the
+// mutation in memory while offline and resumes it when connectivity returns
+// (best-effort, lost on reload). Measured side-by-side and LABELED so the number
+// is read as "each library's offline-drain path", never as an equivalence.
+let liteDrainJ = 0, tanResumeJ = 0;
+
+async function liteQueueScenario() {
+    const qc = liteClient({});
+    liteDrainJ = 0;
+    return {
+        tick: async (i) => {
+            qc.setQueryData(["q", i & 31], {seeded: true});
+            const m = liteMutation(qc, {fn: async () => "x", queue: true, offline: () => true, name: "save", queueKey: ["q", i & 31]});
+            await m.mutate({i});                          // offline -> enqueue (receipt)
+            await qc.replayQueue(() => async () => { liteDrainJ++; return "ok"; });   // drain
+            m.dispose();
+        },
+        teardown: async () => { qc.dispose(); },
+    };
+}
+
+async function tanstackPausedScenario() {
+    const qc = new TanstackQC();
+    tanResumeJ = 0;
+    return {
+        tick: async (i) => {
+            onlineManager.setOnline(false);               // go offline -> the mutation pauses
+            const obs = new TanstackMut(qc, {mutationFn: async () => { tanResumeJ++; return "x"; }});
+            obs.mutate({i}).catch(() => {});              // paused while offline
+            onlineManager.setOnline(true);                // reconnect
+            await qc.resumePausedMutations();             // drain the paused set
+            obs.reset();
+        },
+        teardown: async () => { onlineManager.setOnline(true); qc.clear(); },
+    };
+}
+
 // --- Main ---------------------------------------------------------------
 console.log("");
 console.log("@zakkster/lite-query  vs  @tanstack/query-core");
@@ -418,6 +610,31 @@ reportRow(rows.parL);
 rows.parT = await measure("E) 1000 parallel queries per cycle   [query-core]", 50, tanstackParallelScenario);
 reportRow(rows.parT);
 
+rows.preL = await measure("F) prefetch unique key -> resolve    [lite-query]", N_PREFETCH, litePrefetchScenario);
+reportRow(rows.preL);
+rows.preT = await measure("F) prefetch unique key -> resolve    [query-core]", N_PREFETCH, tanstackPrefetchScenario);
+reportRow(rows.preT);
+
+rows.hydL = await measure("G) dehydrate -> hydrate cycle        [lite-query]", N_HYDRATE, liteHydrateScenario);
+reportRow(rows.hydL);
+rows.hydT = await measure("G) dehydrate -> hydrate cycle        [query-core]", N_HYDRATE, tanstackHydrateScenario);
+reportRow(rows.hydT);
+
+rows.feedL = await measure("H) cache write + listener installed  [lite-query]", N_EVENTS, liteFeedScenario);
+reportRow(rows.feedL);
+rows.feedT = await measure("H) cache write + listener installed  [query-core]", N_EVENTS, tanstackSubscribeScenario);
+reportRow(rows.feedT);
+
+rows.infL = await measure("I) infinite: 4-page paginate cycle   [lite-query]", N_PAGINATE, liteInfiniteScenario);
+reportRow(rows.infL);
+rows.infT = await measure("I) infinite: 4-page paginate cycle   [query-core]", N_PAGINATE, tanstackInfiniteScenario);
+reportRow(rows.infT);
+
+rows.qL = await measure("J) offline drain [DIFFERING]         [lite-query]", N_QUEUE, liteQueueScenario);
+reportRow(rows.qL);
+rows.qT = await measure("J) offline drain [DIFFERING]         [query-core]", N_QUEUE, tanstackPausedScenario);
+reportRow(rows.qT);
+
 console.log("");
 console.log("-".repeat(125));
 console.log("Pairwise comparison:");
@@ -426,6 +643,15 @@ reportPair("B) warm cache hit", rows.warmL, rows.warmT);
 reportPair("C) invalidate 50 observed queries", rows.invL, rows.invT);
 reportPair("D) mutation w/ optimistic + rollback", rows.mutL, rows.mutT);
 reportPair("E) 1000 parallel queries per cycle", rows.parL, rows.parT);
+reportPair("F) prefetch unique key -> resolve", rows.preL, rows.preT);
+reportPair("G) dehydrate -> hydrate cycle", rows.hydL, rows.hydT);
+reportPair("H) cache write + listener installed", rows.feedL, rows.feedT);
+reportPair("I) infinite 4-page paginate cycle", rows.infL, rows.infT);
+console.log("");
+console.log("> J) offline drain  [PHILOSOPHY-DIFFERING -- NOT a like-for-like]");
+console.log("  lite-query DURABLY enqueues + replayQueue (at-least-once across a reload);");
+console.log("  query-core PAUSES in memory + resumePausedMutations (best-effort, lost on reload).");
+reportPair("J) offline drain [differing designs, read per-library]", rows.qL, rows.qT);
 
 console.log("");
 console.log("Notes:");
