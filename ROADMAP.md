@@ -1146,13 +1146,45 @@ OBLIGATIONS, offline queue bullet) and carries forward INTACT:
   - the projectFrame seam swap to lite-stream's createSignalWriter (LS4)
     also rides 2.1 if LS4 has shipped by then (parity test unchanged --
     it is the contract).
-tests_min: set at session start from the then-shipped base (the Q8 rule:
-a floor below the shipped suite is decorative). carry_from_q8: the
-findings-clause control -- STILL uncontrolled after FIVE attempts (Q5 A/B,
-Q6 C, Q7 D, Q8 E; INCONCLUSIVE.md holds all five verbatim; Q8's attempt E
-DID NOT FIRE -- releaseProjection nulls every slot at both teardown
-sites); re-attempt via the queue's replay teardown or re-record and carry
-again.
+status: pipeline-complete (2026-09-03; brief c4ca7c5, plan e29bcad
+  ratified ON-1..ON-5 incl. STOP-DECISION-2 = seam swap APPROVED on
+  operator re-verified source evidence, the at-least-once crash law, and
+  the dropQueued poison-item lever. Ladder C1 53e9755 .. C9 97a2c77:
+  oracle-upgrade-before-swap held -- A6 passed UNEDITED against live
+  lite-stream 1.4.0 at C1 AND at C7, projectBuffer deleted, core imports
+  lite-signal only (G8), /stream peer floor ^1.4.0 cited era-bound from
+  their "(since 1.4.0)" llms.txt line; reviewer APPROVED (no code
+  defects: retention/alloc/fail-open all clean, the Q7 module-global
+  class not reproduced) with 3 docs findings -> QD-2 8535bd1 (boot-order
+  rule, throttle honesty, tries honesty); QA FAIL(1: dropQueued
+  mid-replay still dispatched from the stale run snapshot -- the poison
+  exit did not exit) -> QD-3 8ab0de3 (live-store re-check by reference
+  identity, "caller-dropped" per-item result, pinned additively; plus
+  count reconciliation and the pre-Q9 "13 recipes" file-map staleness
+  fixed in passing) -> QA re-verified PASS. Mid-ladder operator ruling
+  QD-1: the floor is a MINIMUM -- a test fold made for count vanity was
+  reverted; floors never trim named contracts. Suite 362 -> 391/0/0
+  (QA-frozen), GATE byte-identical, controls 5/5, pack 13 files;
+  awaiting /release 2.1.0 + operator publish per OR-1)
+tests_min: 380 at session start (ON-5 raised the working floor to 389;
+  the pipeline closed at 391 -- QA froze the final)
+rejections ledger: queueOnFailure (auto-enqueue on a rejected fetch)
+  REJECTED by OR-3 and parked here -- a rejection is indistinguishable
+  from a semantic 4xx, so auto-queueing would silently retry a mutation
+  the server refused; only the explicit offline() oracle shipped.
+LS4 gate: CLOSED both sides. lite-stream 1.4.0 registry-verified
+  2026-09-03 (latest=1.4.0, createSignalWriter at Stream.js:717) and
+  consumed at C7; their committed handoff ping (session litestream-aa)
+  ledgered here incl. the case-12 editorial note -- the drifted
+  LiteStream/ROADMAP.md:499-501 cite was dropped from their pinned
+  corpus text, the substantive constraint kept verbatim and tested. The
+  parity test never changed: it was the contract, and it held on both
+  sides of the swap.
+carry_to_next: the findings-clause control -- STILL uncontrolled after
+  SIX attempts (Q5 A/B, Q6 C, Q7 D, Q8 E, Q9 F; INCONCLUSIVE.md holds
+  all six verbatim; attempt F rode the replay teardown with an in-flight
+  handle, 2048 cycles, DID NOT FIRE); re-attempt at the next genuinely
+  new surface or re-record and carry again.
 
 ---
 
