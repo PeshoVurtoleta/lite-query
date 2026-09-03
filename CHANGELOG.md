@@ -5,6 +5,76 @@ All notable changes to `@zakkster/lite-query` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] -- 2026-09-03
+
+The OFFLINE MUTATION QUEUE + the LS4 seam swap -- the deferred half of the 2.0
+major, riding on a finished failover story exactly as the split's rationale
+demanded. A mutation opts in per call (`queue: true` + your own `offline` oracle);
+while the transport is down it lands in a durable, persistable queue with a
+surfaced `"queued"` outcome, and the caller replays it on reconnect -- at-least-
+once across a crash, every record idempotency-keyed by a stable id. The second
+body of work swaps the hand-rolled buffer-follower window for lite-stream 1.4.0's
+`createSignalWriter`, deleting the third copy of the drop-oldest ring; the
+differential parity test stays green on both sides of the swap. Additive only --
+zero breaking changes, the shipped 2.0.0 tests pass unedited. Per OR-1 the version
+stamp lands only with the `/release 2.1.0` drill after the pipeline closes (no
+in-session stamp; the pipeline runs with `package.json` and the `VERSION` const at
+`2.0.0`).
+
+### Added
+
+- **Offline mutation queue -- per-mutation opt-in (`queue: true`).** Validated at
+  construction (ON-3, validate-at-the-door): a present-but-non-boolean `queue`
+  throws `TypeError`; `queue: true` requires `offline` (a function -- your
+  connectivity oracle, the `isLeader` precedent), `name` (a string), and
+  `queueKey` (an array), each a `TypeError` on violation, nothing constructed. The
+  library never reads `navigator.onLine`, never listens, never polls (OR-4). The
+  dispatch ladder runs once before `onMutate`/`fn`: `offline()` throwing or
+  returning a non-boolean rejects `LQ_OFFLINE_ORACLE` (fail closed -- null is not
+  zero); `false` runs the unchanged path; `true` enqueues, settles status
+  `"queued"`, and resolves the receipt `{ queued: true, id }` (onSettled still
+  fires; a full queue rejects `LQ_QUEUE_FULL`). `MutationStatus` gains `"queued"`.
+- **`qc.replayQueue(resolve)`** -- caller-triggered replay (the library owns no
+  connectivity). Sequential FIFO, single-flight (a re-entrant call rejects
+  `LQ_REPLAY_BUSY`), per-item results surfaced (`{ id, key, status, value,
+  reason }`). Undispatchable records drop (`entry-missing` / `handler-unresolved`
+  / `resolver-threw`), a handler rejection keeps the item queued (`tries++`), a
+  resolution removes it. **At-least-once across a crash:** a record leaves the
+  durable queue only after its terminal result exists and the removal is handed to
+  `queueSave`, so a crash between dispatch and that write replays it on the next
+  call -- key your server writes on the record id.
+- **`qc.queueSize()`** and **`qc.dropQueued(id)`** -- the durable count (0 for an
+  untouched, `null` queue) and the poison-item exit (evict a permanently-rejected
+  record by id; returns `true`/`false`, never throws).
+- **`maxQueue`** client option (default 100; a positive integer, validated at
+  construction).
+- **Durable persistence via sibling thunks** on `persistQueryClient` --
+  `queueSave` / `queueLoad` (both or neither, else `TypeError` at install). The
+  queue rides the same version stamp and throttle window as the cache; the
+  envelope is exactly `{ version, queue }`. `handle.queueRestored` always resolves
+  (`{ status, count, reason }`); a mismatched or corrupt queue drops WHOLE and
+  surfaces the reason twice (the promise AND a `queue:drop` feed event). Only
+  enqueued records are ever persisted (OR-5).
+- **Five additive feed types (26 -> 31)** on the frozen 10-key record, no second
+  hook: `queue:enqueue`, `queue:restore`, `queue:replay`, `queue:settle`,
+  `queue:drop`.
+
+### Changed
+
+- **LS4 seam swap (OR-8).** A buffer-mode shared-stream follower now windows the
+  leader's frames through lite-stream 1.4.0's `createSignalWriter` instead of the
+  hand-rolled ring; the third copy of the drop-oldest discipline (`projectBuffer`)
+  is deleted. The writer owns its buffer privately, so its target is a
+  per-registration shim mirroring each snapshot into `projWindow` (non-reactive)
+  and `data` (reactive) -- one cold allocation per follower registration, ZERO per
+  frame. Core `Query.js` imports lite-signal ONLY (G8); `createSignalWriter` is
+  imported by the `/stream` subpath alone, so a plain-query or latest-mode
+  follower tab is byte-identical to 2.0.0. The differential parity test passes
+  UNEDITED against the live writer on both sides of the swap.
+- **Optional peer `@zakkster/lite-stream` floor `^1.3.0` -> `^1.4.0`** -- cited
+  era-bound from lite-stream's own `"(since 1.4.0)"` line for `createSignalWriter`,
+  never a session number. `/stream` only; core is unaffected.
+
 ## [2.0.0] -- 2026-09-02
 
 Cross-tab SHARED STREAMS -- the strategic sequel the 1.1.0 streaming work was

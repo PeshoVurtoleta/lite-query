@@ -26,7 +26,7 @@ export type AbortReason =
 // --- Status + lifecycle ------------------------------------------------------
 
 export type QueryStatus = "idle" | "pending" | "success" | "error";
-export type MutationStatus = "idle" | "pending" | "success" | "error";
+export type MutationStatus = "idle" | "pending" | "success" | "error" | "queued";
 
 // --- Reactive accessor (lite-signal shape -- function call, no `.value`) ------
 
@@ -57,6 +57,66 @@ export type RetryPolicy = number | ((attempt: number, error: unknown) => boolean
 /** Delay between retries -- receives the attempt number (1-indexed). */
 export type RetryDelay = (attempt: number) => number;
 
+// --- Offline mutation queue (Q9) ---------------------------------------------
+
+/** A durable offline-queue record -- monomorphic, exactly seven own keys. */
+export interface QueueRecord<TVars = unknown> {
+    /** Stable id (`clientId + ":" + seq`) -- the at-least-once idempotency key. */
+    id: string;
+    /** The mutation name a reloaded tab resolves the handler by. */
+    name: string;
+    /** The query key this mutation targets. */
+    key: readonly unknown[];
+    /** Stable hash of `key`. */
+    keyHash: string;
+    /** The mutation variables, verbatim. */
+    vars: TVars;
+    /** Enqueue timestamp (`opts.now()`). */
+    at: number;
+    /** Dispatch attempts so far (0 at enqueue, ++ per replay attempt). */
+    tries: number;
+}
+
+/** The receipt `mutate()` resolves when a mutation is enqueued -- two own keys. */
+export interface QueuedReceipt {
+    queued: true;
+    /** The enqueued record's stable id. */
+    id: string;
+}
+
+/** Per-item replay result -- exactly five own keys in a fixed order. */
+export interface QueueItemResult {
+    /** The record's stable id. */
+    id: string;
+    /** The record's query key. */
+    key: readonly unknown[];
+    /** `"ok"` (handler resolved), `"error"` (handler rejected), `"dropped"` (undispatchable). */
+    status: "ok" | "error" | "dropped";
+    /** Handler result on ok; the rejection value verbatim on error; undefined on dropped. */
+    value: unknown;
+    /** Drop reason (`"entry-missing"`/`"handler-unresolved"`/`"resolver-threw"`) or null. */
+    reason: string | null;
+}
+
+/** The aggregate result of a `replayQueue()` call -- six own keys. */
+export interface QueueReplayResult {
+    /** `"done"` when items were processed, `"empty"` when the queue was empty. */
+    status: "done" | "empty";
+    /** Total items processed. */
+    total: number;
+    /** Count resolved (removed). */
+    replayed: number;
+    /** Count that errored (kept, retried next call). */
+    failed: number;
+    /** Count dropped (undispatchable, removed). */
+    dropped: number;
+    /** The per-item results, in dispatch order. */
+    items: QueueItemResult[];
+}
+
+/** Resolver passed to `replayQueue` -- maps a record to its handler, or null. */
+export type QueueResolver = (record: QueueRecord) => ((vars: unknown) => unknown | Promise<unknown>) | null;
+
 // --- QueryClient -------------------------------------------------------------
 
 /** Options accepted by `queryClient(...)`. */
@@ -71,6 +131,13 @@ export interface QueryClientOptions {
     retry?: RetryPolicy;
     /** Default retry delay function (1-indexed attempt). Default exponential, capped at 30s. */
     retryDelay?: RetryDelay;
+
+    /**
+     * Cap on the durable offline mutation queue (Q9). A positive integer,
+     * validated at construction (a non-integer / 0 / negative / NaN throws
+     * TypeError). Enqueue against a full queue rejects `LQ_QUEUE_FULL`. Default 100.
+     */
+    maxQueue?: number;
 
     /**
      * Enable cross-tab cache coherence via BroadcastChannel. When true,
@@ -280,6 +347,30 @@ export interface QueryClient {
      */
     inspect(hook: FeedHook): () => void;
 
+    /**
+     * Count of durably-enqueued offline mutations (Q9). 0 when the queue was
+     * never touched (an untouched queue is null, not an empty array).
+     */
+    queueSize(): number;
+
+    /**
+     * Replay the durable offline queue (caller-triggered -- the library never
+     * watches connectivity). `resolve(record)` maps a record to the handler that
+     * re-runs it (keyed off `record.name`); a non-function is a synchronous
+     * TypeError. Sequential FIFO, single-flight (a re-entrant call rejects
+     * `LQ_REPLAY_BUSY`); at-least-once across a crash. Records whose entry no
+     * longer exists, or whose handler cannot be resolved, are DROPPED; a handler
+     * rejection keeps the item queued (tries++); a resolution removes it.
+     */
+    replayQueue(resolve: QueueResolver): Promise<QueueReplayResult>;
+
+    /**
+     * Evict one queued record by id (ON-4 poison-item exit). Returns true if
+     * found + removed (persisted through the same save path, one `queue:drop`
+     * feed event), false if absent (including an untouched queue) -- never throws.
+     */
+    dropQueued(id: string): boolean;
+
     /** Clear the cache and close the BroadcastChannel listener. */
     dispose(): void;
 }
@@ -336,6 +427,14 @@ export interface PersistOptions {
     version: string | number;
     /** Trailing-edge coalescing window in ms. Default 1000. Must be finite and >= 0. */
     throttle?: number;
+    /**
+     * Persist the offline-queue envelope (Q9, OR-5). Optional SIBLING thunk to
+     * `queueSave`/`queueLoad`; supplying one without the other throws at install.
+     * The envelope is exactly `{ version, queue }` (the same version stamp).
+     */
+    queueSave?: (envelope: { version: string | number; queue: QueueRecord[] }) => void | Promise<void>;
+    /** Load the stored queue envelope (or null/undefined for no queue). May be async. */
+    queueLoad?: () => unknown | Promise<unknown>;
 }
 
 /** The status of a restore attempt. */
@@ -358,10 +457,32 @@ export interface RestoreOutcome {
     reason: RestoreReason;
 }
 
+/** The reason a queue restore resolved as it did (Q9). */
+export type QueueRestoreReason =
+    | null
+    | "load-threw"
+    | "malformed-envelope"
+    | "version-mismatch"
+    | "malformed-queue"
+    | "malformed-record";
+
+/** The settled queue-restore outcome (the `queueRestored` promise always RESOLVES). */
+export interface QueueRestoreOutcome {
+    status: RestoreStatus;
+    count: number;
+    reason: QueueRestoreReason;
+}
+
 /** The handle returned by `persistQueryClient`. */
 export interface PersistHandle {
     /** Resolves (never rejects) with the restore outcome, observable before any observer attaches. */
     restored: Promise<RestoreOutcome>;
+    /**
+     * Resolves (never rejects) with the offline-queue restore outcome. Present
+     * only when the `queueSave`/`queueLoad` seam is wired (Q9). A defect drops the
+     * WHOLE queue and surfaces the reason here AND as a `queue:drop` feed event.
+     */
+    queueRestored?: Promise<QueueRestoreOutcome>;
     /** Force the pending save now. */
     flush: () => void;
     /** Idempotent. Flushes any pending save, uninstalls the write hook, clears the timer. */
@@ -549,6 +670,23 @@ export interface MutationOptions<TData = unknown, TVars = unknown, TCtx = unknow
         vars: TVars,
         ctx: TCtx,
     ) => void | Promise<void>;
+
+    /**
+     * Opt in to the durable offline queue (Q9, per-mutation). `true` requires
+     * `offline`, `name`, and `queueKey` at construction (each validated -- a
+     * malformed opt-in throws TypeError, nothing constructed). A present-but-
+     * non-boolean `queue` also throws. When opted in, `mutate()` calls `offline()`
+     * before `fn`: `true` enqueues (resolves `{ queued, id }`, status "queued",
+     * `fn`/callbacks except onSettled skipped), `false` runs the normal path, a
+     * throw or non-boolean rejects `LQ_OFFLINE_ORACLE`.
+     */
+    queue?: true;
+    /** REQUIRED with `queue: true`. The caller's connectivity oracle (the library never polls). */
+    offline?: () => boolean;
+    /** REQUIRED with `queue: true`. The query key this mutation targets (dropped-entry resolution). */
+    queueKey?: readonly unknown[];
+    /** REQUIRED with `queue: true`. The name a reloaded tab resolves the replay handler by. */
+    name?: string;
 }
 
 export interface Mutation<TData = unknown, TVars = unknown> {

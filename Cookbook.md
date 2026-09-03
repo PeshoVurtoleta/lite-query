@@ -705,15 +705,61 @@ const stop = qc.inspect((e) => {
   else if (e.type === 'fetch:settle') console.log(`[lq] ${id} fetch ${e.ok ? 'ok' : 'error'} gen=${e.count}`);
   else if (e.type === 'fetch:abort') console.log(`[lq] ${id} abort ${e.reason}`);
   else if (e.type === 'stream:value') console.log(`[lq] ${id} frame #${e.count}`);
-  else console.log(`[lq] ${e.type} ${id}`);            // the other 19 types
+  else console.log(`[lq] ${e.type} ${id}`);            // every other type (incl. queue:*)
 });
 // ... later, on teardown:
 stop();
 ```
 
-The full 26-type vocabulary and the 10-key record shape are in `llms.txt`. The
+The full 31-type vocabulary and the 10-key record shape are in `llms.txt`. The
 rendering **panel** is lite-studio's job -- this feed is what it renders; nothing
 is imported in either direction.
+
+## 22. Airplane mode -- queue mutations offline, replay on reconnect
+
+Opt a mutation into the durable queue with `queue: true` and your own `offline`
+oracle. While offline `mutate()` enqueues (status `"queued"`, a `{ queued, id }`
+receipt) instead of dispatching; a fresh boot restores the queue from persistence
+and the caller replays it on reconnect. Replay is **at-least-once across a crash**
+-- every record carries a stable `id`, so key your server writes on it.
+
+```ts
+// 1. Persist the queue alongside the cache (sibling thunks, both or neither).
+const persist = persistQueryClient(qc, {
+  version: 'v1',
+  save:      (env) => localStorage.setItem('lq:cache', JSON.stringify(env)),
+  load:      ()    => JSON.parse(localStorage.getItem('lq:cache') || 'null'),
+  queueSave: (env) => localStorage.setItem('lq:queue', JSON.stringify(env)),
+  queueLoad: ()    => JSON.parse(localStorage.getItem('lq:queue') || 'null'),
+});
+await persist.queueRestored;      // { status: 'restored' | 'empty' | 'dropped', count, reason }
+
+// 2. A mutation that queues while offline.
+const saveTodo = mutation(qc, {
+  fn: (todo) => fetch('/api/todos', { method: 'POST', body: JSON.stringify(todo) }),
+  queue: true,
+  offline: () => !navigator.onLine,   // your oracle -- the library never polls
+  name: 'saveTodo',
+  queueKey: ['todos'],
+});
+await saveTodo.mutate({ id: 1, title: 'buy milk' });   // offline -> { queued: true, id }
+
+// 3. On reconnect, YOU trigger replay (FIFO, single-flight, per-item results).
+window.addEventListener('online', async () => {
+  const result = await qc.replayQueue((record) =>
+    record.name === 'saveTodo'
+      ? ((vars) => fetch('/api/todos', { method: 'POST', body: JSON.stringify(vars) }))
+      : null
+  );
+  // A rejected item stays queued (tries++) for the next replay; a resolved item
+  // is removed; an undispatchable one is dropped with a surfaced reason.
+  console.log(`replayed ${result.replayed}, failed ${result.failed}, dropped ${result.dropped}`);
+});
+```
+
+A record whose cache entry no longer exists drops (`reason: "entry-missing"`),
+never a silent retry; `qc.dropQueued(id)` is the explicit exit for a
+permanently-rejected item; `qc.queueSize()` reports the durable count.
 
 ---
 

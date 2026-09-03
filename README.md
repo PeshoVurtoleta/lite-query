@@ -63,9 +63,9 @@ The honest comparison. Numbers are min+gzip, current as of writing.
 | Cache persistence + boot hydration | **`persistQueryClient` + `qc.dehydrate`/`hydrate` (built-in)** | Plugin (`@tanstack/query-persist-client`) | Manual |
 | Abort reason vocabulary | Yes (`signal.reason`) | No | No |
 | Per-query timeout | Yes | No (manual via fetcher) | No (manual via fetcher) |
-| Devtools feed | **`qc.inspect` (26-type push feed)** | Feed + bundled UI | Feed + UI |
+| Devtools feed | **`qc.inspect` (31-type push feed)** | Feed + bundled UI | Feed + UI |
 | Devtools UI | External (lite-studio) | Yes (mature) | Yes |
-| Tests | 362 | ~hundreds | ~hundreds |
+| Tests | 390 | ~hundreds | ~hundreds |
 | Foundation | Signals (lite-signal) | Observer pattern | SWR algo + hooks |
 
 Where lite-query trails: the devtools *panel* is external (lite-studio), not bundled. What lite-query ships is the FEED a panel renders (`qc.inspect`, zero-cost when off). Where it leads: cross-tab, cursor pagination, and the signal-native composition story.
@@ -227,6 +227,35 @@ mutation(qc, {
 
 > **2.0 BREAKING (ON-3):** a mutation that rejects with a **falsy** value (`null`, `0`, `""`, `undefined`) now settles `status() === "error"` with the value held verbatim in `error()` -- previously a falsy rejection was mis-read as success. **Branch on `status()`, never on `error()` truthiness.** A mutation that *resolves* with a falsy value is unaffected.
 
+### Offline mutation queue -- `queue: true`
+
+Opt in **per mutation** to a durable queue that holds a mutation while the transport is down and replays it on reconnect. You own the connectivity oracle (`offline`); the library never reads `navigator.onLine`, never polls, never watches a socket. Replay is **caller-triggered** and **at-least-once across a crash** -- every record carries a stable `id`, so use it as your server-side idempotency key.
+
+```ts
+const save = mutation(qc, {
+  fn: async (todo) => api.saveTodo(todo),
+  queue: true,                     // opt in (validated at construction)
+  offline: () => !navigator.onLine, // YOUR oracle -- the isLeader precedent
+  name: "saveTodo",                // what a reloaded tab resolves the handler by
+  queueKey: ["todos"],             // the query key this mutation targets
+});
+
+// While offline, mutate() enqueues instead of dispatching:
+const receipt = await save.mutate({ id: 1, title: "buy milk" });
+// -> { queued: true, id: "c1a2b3:1" };  save.status() === "queued"
+
+// On reconnect, the CALLER replays (order preserved, single-flight, per-item results):
+const result = await qc.replayQueue((record) =>
+  record.name === "saveTodo" ? ((vars) => api.saveTodo(vars)) : null
+);
+// result: { status, total, replayed, failed, dropped, items:[{ id, key, status, value, reason }] }
+```
+
+- **Fail closed.** A present-but-non-boolean `queue`, or `queue: true` without a function `offline` / string `name` / array `queueKey`, throws `TypeError` at construction (nothing built). An `offline()` that throws or returns a non-boolean rejects `mutate()` with `err.code === "LQ_OFFLINE_ORACLE"` -- an unverified connectivity state never silently picks a branch. A full queue (`maxQueue`, default 100) rejects `LQ_QUEUE_FULL`, never a silent drop.
+- **Durable.** Wire `queueSave` / `queueLoad` sibling thunks on `persistQueryClient` (both or neither); the queue rides the same version stamp and throttle window as the cache. On boot `handle.queueRestored` resolves the restore outcome; a mismatched or corrupt queue drops **whole** and says so (on the promise **and** a `queue:drop` feed event).
+- **Replay dispositions.** A record whose cache entry no longer exists, or whose handler cannot be resolved, is **dropped** with a surfaced reason (never silently retried); a handler rejection keeps the item queued (`tries++`); a resolution removes it. `qc.dropQueued(id)` is the explicit exit for a permanently-rejected item.
+- **`qc.queueSize()`** reports the durable count (0 when the queue was never touched -- `null` is not an empty array).
+
 ### `streamQuery(qc, opts)` -- subpath `@zakkster/lite-query/stream`
 
 The multi-shot sibling of `query()`: subscribe a cache key to an async iterable -- SSE frames, websocket messages, a paginated cursor, a pubsub topic -- instead of a one-shot fetch. Values are pumped through [`@zakkster/lite-stream`](https://www.npmjs.com/package/@zakkster/lite-stream) into the **same cache entry** a query would use, so `getQueryData`, `invalidate`, and `removeQueries` operate on a stream uniformly. Requires `@zakkster/lite-stream`.
@@ -286,7 +315,7 @@ const stop = qc.inspect((e) => {
 stop();   // idempotent
 ```
 
-Every event is one **monomorphic record -- exactly 10 own keys, always present**: `{ type, ts, key, keyHash, from, to, reason, count, ok, value }` (a field that does not apply is `null`; `count` is `0`, `ok` is `false`). The 26 `domain:verb` types cover the whole lifecycle: `entry:create|attach|detach|gc|remove|status|stale`, `fetch:dispatch|settle|abort`, `tab:send|receive`, `shared:request|fallback|serve`, `stream:start|value|done|error`, `mutation:start|settle`, `persist:hydrate|save`, and the shared-stream trio `stream:project|promote|gap`. Full field table in `llms.txt`.
+Every event is one **monomorphic record -- exactly 10 own keys, always present**: `{ type, ts, key, keyHash, from, to, reason, count, ok, value }` (a field that does not apply is `null`; `count` is `0`, `ok` is `false`). The 31 `domain:verb` types cover the whole lifecycle: `entry:create|attach|detach|gc|remove|status|stale`, `fetch:dispatch|settle|abort`, `tab:send|receive`, `shared:request|fallback|serve`, `stream:start|value|done|error`, `mutation:start|settle`, `persist:hydrate|save`, the shared-stream trio `stream:project|promote|gap`, and the offline-queue quintet `queue:enqueue|restore|replay|settle|drop`. Full field table in `llms.txt`.
 
 Three contracts to keep straight:
 
@@ -407,16 +436,16 @@ If you're new to the family, start with lite-signal -- every other library here 
 npm test
 ```
 
-362 deterministic tests. Run output:
+390 deterministic tests. Run output:
 
 ```
-# tests 362
-# pass 362
+# tests 390
+# pass 390
 # fail 0
 # skipped 0
 ```
 
-The core suite (253) uses a controlled fetcher, mock clock, and mock `BroadcastChannel` so every test is deterministic -- no real timers, no real network, and it covers `infiniteQuery` cursor pagination, `qc.prefetch`, the persistence primitive + adapter (with a dependency-free dehydrated-cache corruption matrix), and the devtools feed `qc.inspect` (all 26 event types, the 10-key monomorphic shape + pooled-reuse identity, two-seam independence, and throwing-hook containment). The optional entry points add 31 (`/await`) and 24 (`/stream`) tests, the latter driving a manually-pumped async iterator through every termination path; the 2.0 shared-streams work adds 42 cross-tab shared-stream tests (the 7 named failover cells F1-F7, the epoch/clientId/seq projection gate, latest + buffer projection with differential parity against `pipeToSignal`, the watchdog under a lying oracle, promotion/adopt/abdication, and the 3 new feed types) and 6 falsy-rejection tests (the ON-3 breaking fix); and 6 repo drift guards keep the shipped files ASCII-clean, the documented surface in sync with the real exports, and the runtime `VERSION` const equal to `package.json`. See `test/harness.js` for the mocks.
+The core suite (253) uses a controlled fetcher, mock clock, and mock `BroadcastChannel` so every test is deterministic -- no real timers, no real network, and it covers `infiniteQuery` cursor pagination, `qc.prefetch`, the persistence primitive + adapter (with a dependency-free dehydrated-cache corruption matrix), and the devtools feed `qc.inspect` (all 31 event types, the 10-key monomorphic shape + pooled-reuse identity, two-seam independence, and throwing-hook containment). The optional entry points add 31 (`/await`) and 24 (`/stream`) tests, the latter driving a manually-pumped async iterator through every termination path; the 2.0 shared-streams work adds 43 cross-tab shared-stream tests (the 7 named failover cells F1-F7, the epoch/clientId/seq projection gate, latest + buffer projection with differential parity against `pipeToSignal`, the watchdog under a lying oracle, promotion/adopt/abdication, the 3 new feed types, and the LS4 writer-slot swap) and 27 offline mutation queue tests (the opt-in dispatch ladder, replay ordering + per-item results + single-flight + `dropQueued`, the persistence seam with whole-queue drop, and the at-least-once crash boundary) and 6 falsy-rejection tests (the ON-3 breaking fix); and 6 repo drift guards keep the shipped files ASCII-clean, the documented surface in sync with the real exports, and the runtime `VERSION` const equal to `package.json`. See `test/harness.js` for the mocks.
 
 Every entry point exports `VERSION` -- lite-query's own version string, the single runtime version source. It lives in `Query.js`, is re-exported by `/stream` and `/await`, and `test/version-sync.test.js` asserts it equals `package.json`.
 
