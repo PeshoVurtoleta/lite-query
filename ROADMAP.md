@@ -1190,6 +1190,53 @@ carry_to_next: the findings-clause control -- STILL uncontrolled after
 
 ---
 
+===============================================================================
+# Q10 -- lite-query v2.2.0 -- freshness + polish (the gap session)
+===============================================================================
+
+Not a pre-planned rung: commissioned 2026-09-03 from the operator's deep
+gap assessment vs @tanstack/query-core 5.102.8 (installed comparator) after
+the nine-rung ladder closed. Charter: BRIEF.md 1e04b88; ratified plan
+43856af (ON-1..ON-5).
+
+```markdown
+---
+package: "@zakkster/lite-query"
+version_target: 2.2.0
+status: pipeline-complete (2026-09-03; brief 1e04b88, plan 43856af with
+  ON-1..ON-5 incl. the maxPages DEFER ruling (parking ledger below holds
+  the sentence). Ladder C1 3d5cfbc .. C9 bd7134c: refetchInterval as ONE
+  client-wide check-and-rearm scanner dispatching maybeFetch's tail (so
+  dedup/retry/abort/sharedFetch/liveness apply by construction -- G4
+  proven: leader-only upstream across 20 ticks, leaderless follower
+  self-fetches within the bound); keepPreviousData as a handle-level hold
+  + isPlaceholder() (the cache never lies; error-settle hold documented
+  non-lying); bench scenarios F-J vs query-core 5.102.8 with EVERY
+  headline number regenerated same-commit (OR-7; J labeled
+  philosophy-differing); C8 torture-driven fix: qc.dispose() disarms the
+  scanner. Reviewer REJECTED (the dispose-fix class left unfixed on the
+  clear/removeQueries sibling paths -- pollList pinned dead entries, the
+  scanner re-armed forever, latent recycled-node corruption) -> QD-1
+  185fd70 (count-agnostic dropPoll + clear mirrors the scanner teardown +
+  3 pins incl. post-clear resurrection + the soak rotates all teardown
+  paths) -> DELTA APPROVED. QA FAIL(1: re-entrant clear/dispose from
+  inside a poll-dispatched fetcher crashed pollTick mid-scan) + two
+  fail-open doors (refetchInterval/keepPreviousData silently ignored on
+  infiniteQuery) -> QD-2 8aed881 (null-guarded scan + re-arm, door
+  TypeErrors, 4 pins, ghost-wakeup honesty clause) -> QA re-verified
+  PASS. Suite 391 -> 437/0/0 (QA-frozen), GATE byte-identical, controls
+  5/5, pack 13 files; attempt G DID NOT FIRE; awaiting /release 2.2.0 +
+  operator publish per OR-1)
+tests_min: 410 at session start (the pipeline closed at 437 -- QA froze
+  the final; floors are minimums, the Q9 QD-1 ruling stands)
+standing_carry: the findings-clause control -- STILL uncontrolled after
+  SEVEN attempts (Q5 A/B, Q6 C, Q7 D, Q8 E, Q9 F, Q10 G; INCONCLUSIVE.md
+  holds all seven verbatim; attempt G rode the interval teardown with
+  live armed recurring timers, 8-round GC settle, DID NOT FIRE). This is
+  the last planned session: the carry stands recorded here for whichever
+  future surface reopens the ladder.
+```
+
 ## 6. How to run it
 
 In order: Q1, then Q2/Q4 in either order (Q2 first recommended), Q3, then

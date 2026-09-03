@@ -11,7 +11,7 @@ absent from bench/). This file wins over memory; the ROADMAP parking ledger
 ---
 package: "@zakkster/lite-query"
 session: Q10
-status: in-pipeline (2026-09-03)
+status: pipeline-complete (2026-09-03; ladder C1 3d5cfbc .. C9 bd7134c; maxPages DEFERRED per plan ON-2; C8 torture-driven dispose-disarm; reviewer REJECTED (clear/removeQueries poll pinning) -> QD-1 185fd70 -> DELTA APPROVED; QA FAIL(1 crash: re-entrant teardown mid-scan) + 2 fail-open infiniteQuery doors -> QD-2 8aed881 -> QA re-verified PASS; suite 391 -> 437/0/0 QA-frozen, GATE byte-identical, controls 5/5, bench A-J regenerated same-commit, attempt G DID NOT FIRE (seven attempts carried standing); awaiting /release 2.2.0 + operator publish per OR-1)
 version_target: 2.2.0       # stamped by the /release drill, NOT in-session (OR-1)
 tests_min: 410              # floor; suite is 391 (shipped 2.1.0) at session start
 skip_max: 0
