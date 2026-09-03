@@ -1234,6 +1234,11 @@ scripts; Q4 onward: the law harness). No gate output is a FAIL.
   was lite-room 1.1.0 (`awaitRoomSignal`, per their decisions/0007).
   Re-export moved into Q3's task list; this entry retires.
 - **fetchPreviousPage / bidirectional infinite**: no consumer yet (Q5).
+- **maxPages page bound: DEFERRED (Q10 spike)** -- forward-only refetch
+  stores a single tail-derived cursor and replays from page one, so a
+  drop-oldest window jumps from tail to head on every refetch; revisit
+  only with bidirectional cursors (themselves still consumer-gated per
+  the Q5 ruling).
 - **StreamQuery hand-ring collapse** (added 2026-09-01): MOVED into Q3
   2026-09-02 -- lite-stream 1.3.0 shipped the enriched pipeToSignal
   (mode/maxBuffer, droppedCount getters, onValue, onAbort per their

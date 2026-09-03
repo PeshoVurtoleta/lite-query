@@ -536,6 +536,27 @@ export interface QueryOptions<
      * data.
      */
     equals?: (a: T | undefined, b: T) => boolean;
+    /**
+     * Poll interval in ms. Absent/null disables polling. Must be a finite
+     * number > 0 -- 0, negative, NaN, Infinity, or a non-number throws
+     * `TypeError` at construction (null is not zero). A single client-wide
+     * scanner (never a timer per query) refetches the observed entry through
+     * the normal fetch path, so dedup/retry/abort/sharedFetch all apply; under
+     * sharedFetch a follower asks the leader rather than hitting the network.
+     * Only polls while there is at least one observer and `enabled` is not
+     * false. Polls fire on-or-after their due time, never early.
+     */
+    refetchInterval?: number | null;
+    /**
+     * Keep the previous key's data visible across a reactive key swap. Strictly
+     * `true` to enable; absent/false is off; any other value throws `TypeError`.
+     * While the new key loads, `data()` returns the previous data and
+     * `isPlaceholder()` is `true`, clearing on the first real value. This is a
+     * HANDLE-level presentation only -- the cache never lies: `status()`,
+     * `loading()`, `getQueryData`, `dehydrate`, and the feed reflect the new
+     * entry's truth throughout.
+     */
+    keepPreviousData?: boolean;
 }
 
 /** Returned by `query(...)`. All accessors are functions -- call to read. */
@@ -550,6 +571,12 @@ export interface Query<T = unknown> {
     fetching: ReadAccessor<boolean>;
     /** Coarse status. */
     status: ReadAccessor<QueryStatus>;
+    /**
+     * Reactive `true` while `data()` is showing the previous key's data held
+     * across a swap under `keepPreviousData: true`; `false` once the new key's
+     * real data arrives (and always `false` when the option is off).
+     */
+    isPlaceholder: ReadAccessor<boolean>;
     /** Force a refetch. Resolves to the new data (or rejects on error). */
     refetch: () => Promise<T | undefined>;
     /** Drop the observer this Query holds. Idempotent. */

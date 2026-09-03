@@ -5,6 +5,69 @@ All notable changes to `@zakkster/lite-query` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] -- 2026-09-03
+
+FRESHNESS + POLISH -- the gap session. Two competitive gaps close, both opt-in and
+both with OFF paths byte-identical to 2.1.0. `refetchInterval` adds time-based
+polling driven by ONE client-wide scanner (the watchdog precedent -- never a timer
+per query): it refetches the observed entry through the normal fetch path, so
+dedup/retry/abort/`sharedFetch` and the leaderless self-fetch all apply by
+construction, and the interval fetch reuses `fetch:dispatch` with reason
+`"interval"` (no new event type). `keepPreviousData` holds the previous key's data
+across a reactive key swap as a HANDLE-level presentation, with a reactive
+`isPlaceholder()` -- the cache never lies: `status()`/`loading()`/`getQueryData`/
+`dehydrate`/the feed reflect entry truth throughout. The comparative benchmark is
+refreshed against `@tanstack/query-core` 5.102.8 with five new scenarios (prefetch,
+dehydrate/hydrate, listener overhead, infinite pagination, and a labeled
+philosophy-differing offline-drain pair), and every headline number in
+`README`/`llms.txt` is regenerated from the measured run. A page bound (`maxPages`)
+was spiked and DEFERRED: forward-only refetch stores a single tail-derived cursor
+and replays from page one, so a drop-oldest window would jump from tail to head on
+every refetch (ruling recorded in the ROADMAP parking ledger). Additive only --
+zero breaking changes, the shipped 2.1.0 tests pass unedited. Per OR-1 the version
+stamp lands only with the `/release 2.2.0` drill after the pipeline closes (no
+in-session stamp; the pipeline runs with `package.json` and the `VERSION` const at
+`2.1.0`).
+
+### Added
+
+- **`refetchInterval` -- opt-in polling per query.** A finite number > 0 (ms), or
+  `null`/omitted to disable; `0`, negative, `NaN`, `Infinity`, or a non-number
+  throw `TypeError` at construction (fail closed -- null is not zero). ONE
+  client-wide scanner arms a single check-and-rearm timer at the smallest
+  registered interval and dispatches due polls through `maybeFetch`'s tail, so
+  dedup/retry/abort/`sharedFetch` all apply unchanged; under `sharedFetch` a
+  follower asks the leader (upstream fetches equal the leader's alone) and a
+  leaderless follower self-fetches within `sharedFetchTimeout` (the liveness law).
+  The interval fetch reuses `fetch:dispatch` with reason `"interval"` -- a reason
+  VALUE, not a new event type (the 31-type feed vocabulary is unchanged). Refcount-
+  gated lifecycle: no polling while `enabled` is false or there are zero observers;
+  registers on attach, unregisters on detach/disable/dispose. `qc.dispose()`
+  disarms the scanner -- a disposed client leaves zero dangling timers.
+- **`keepPreviousData` -- hold the previous key's data across a reactive key swap.**
+  Strictly `true` to enable; absent/false is off; any other value throws
+  `TypeError`. While the new key loads, `data()` returns the previous data and the
+  new `isPlaceholder()` accessor is reactive-`true`, clearing on the first real
+  value. HANDLE-level presentation only -- entry state, `getQueryData`,
+  `dehydrate`, persistence, and the feed never see the hold. `query()`-only this
+  session (`infiniteQuery` keeps its accumulated pages live already).
+- **`Query.isPlaceholder()`** -- reactive placeholder flag on the `query()` handle
+  (constant `false` when `keepPreviousData` is off).
+
+### Changed
+
+- **Benchmark refreshed against `@tanstack/query-core` 5.102.8** (Node 26) with
+  scenarios F-J (prefetch vs `prefetchQuery`; `dehydrate`->`hydrate`; `inspect` vs
+  `QueryCache.subscribe`; `fetchNextPage` vs `InfiniteQueryObserver`; durable queue
+  drain vs paused-mutations `resumePausedMutations`, labeled philosophy-differing).
+  Every comparative scenario asserts equal work before its timing is trusted; every
+  headline number in `README`/`llms.txt` is regenerated from the measured run (the
+  same-commit bench-honesty law, OR-7). `bench/` stays out of the published pack.
+- **`maxPages` DEFERRED** (spike ruling, recorded in the ROADMAP parking ledger):
+  forward-only refetch stores a single tail-derived cursor and replays from page
+  one, so a drop-oldest window would silently jump from the tail of the list to the
+  head on every refetch -- the bound corrupts refetch and is not shipped.
+
 ## [2.1.0] -- 2026-09-03
 
 The OFFLINE MUTATION QUEUE + the LS4 seam swap -- the deferred half of the 2.0

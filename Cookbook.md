@@ -31,6 +31,21 @@ effect(() => {
 
 When the effect is disposed (component unmounts), `clearInterval` fires and the polling stops. The query's `onCleanup` integration with lite-signal does the right thing automatically.
 
+**Or just set `refetchInterval`** (Q10) and skip the manual timer entirely:
+
+```js
+const buildStatus = query(qc, {
+  key: ['build', 'status'],
+  fetcher: async ({ signal }) =>
+    fetch('/api/build/status', { signal }).then(r => r.json()),
+  refetchInterval: 5_000,                            // poll every 5s while observed
+});
+
+effect(() => buildStatus.data());                    // attach -> polling starts
+```
+
+The in-library option is driven by ONE client-wide scanner (never a timer per query), refetches through the normal fetch path (so dedup/retry/abort/`sharedFetch` all apply), and is refcount-gated: it polls only while there is at least one observer and `enabled` is not false, and disposes cleanly with the query. `refetchInterval` must be a finite number > 0 (ms) or `null`/omitted -- `0`, negative, `NaN`, `Infinity`, or a non-number throw `TypeError` at construction (fail closed -- null is not zero). Under `sharedFetch`, only the leader tab actually hits the network; N polling followers stay fresh off its one fetch (and a leaderless follower still self-fetches within `sharedFetchTimeout`).
+
 ---
 
 ## 2. Debounced reactive keys -- search-as-you-type without spam
@@ -764,6 +779,37 @@ window.addEventListener('online', async () => {
 A record whose cache entry no longer exists drops (`reason: "entry-missing"`),
 never a silent retry; `qc.dropQueued(id)` is the explicit exit for a
 permanently-rejected item; `qc.queueSize()` reports the durable count.
+
+---
+
+## 23. Keep the previous page on screen while the next loads -- `keepPreviousData`
+
+A paginated table that blanks to a spinner on every page change feels janky. With `keepPreviousData: true`, the handle keeps showing the current page's rows while the next page fetches, then swaps in one paint -- and `isPlaceholder()` tells you to dim the table (or show a subtle top-bar loader) so the user knows fresh data is coming.
+
+```js
+import { signal, effect } from '@zakkster/lite-signal';
+import { query } from '@zakkster/lite-query';
+
+const page = signal(1);
+
+const rows = query(qc, {
+  key: () => ['users', 'page', page()],              // reactive key -- swaps on page change
+  fetcher: async ({ key, signal }) =>
+    fetch(`/api/users?page=${key[2]}`, { signal }).then(r => r.json()),
+  keepPreviousData: true,                            // hold the old page across the swap
+});
+
+effect(() => {
+  const table = renderRows(rows.data());             // previous page stays visible during load
+  table.classList.toggle('is-stale', rows.isPlaceholder());   // dim while the next page loads
+});
+
+// Next / Prev just move the signal:
+nextButton.onclick = () => page.set(p => p + 1);
+prevButton.onclick = () => page.set(p => Math.max(1, p - 1));
+```
+
+`isPlaceholder()` is reactive: it flips `true` the instant the key changes (previous rows held) and back to `false` the moment the new page's real data lands. The hold is a HANDLE-level presentation only -- the cache never lies: `status()`/`loading()` report the new entry's truth (`pending`/`true` while it loads), and `getQueryData(['users','page', n])`, `dehydrate`, and the devtools feed only ever see real entry data, never the held placeholder. Swapping back to an already-cached page shows its data immediately with no placeholder flash. (`keepPreviousData` is `query()`-only this session; `infiniteQuery` already keeps its accumulated pages live.)
 
 ---
 
