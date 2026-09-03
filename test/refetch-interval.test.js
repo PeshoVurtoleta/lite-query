@@ -174,3 +174,77 @@ test("scanner: period = min registered interval (coarser poll served on-or-after
     stop();
     qa.dispose(); qb.dispose();
 });
+
+// -----------------------------------------------------------------------------
+// C4 -- dispatch through the normal fetch path; fetch:dispatch reason "interval".
+// -----------------------------------------------------------------------------
+
+test("dispatch: an interval fetch emits fetch:dispatch with reason 'interval' (no new event type)", async () => {
+    const { clock, qc, fetcher } = mkPollEnv();
+    const events = [];
+    const stop = qc.inspect((e) => { if (e.type === "fetch:dispatch") events.push({ reason: e.reason }); });
+    const q = query(qc, { key: ["a"], fetcher });
+    const d = createRoot(() => effect(() => q.status()));
+    await tick();
+    assert.equal(events.length, 1, "attach dispatch");
+    assert.equal(events[0].reason, null, "the attach fetch carries no interval reason");
+    const entry = qc._internal.entries.get(JSON.stringify(["a"]));
+    qc._internal.registerPoll(entry, 1000);
+    clock.advance(1000); await tick();
+    assert.equal(events.length, 2, "interval dispatch fired");
+    assert.equal(events[1].reason, "interval", "the interval fetch is tagged reason 'interval'");
+    d(); stop(); q.dispose();
+});
+
+test("dispatch: 'interval' is a reason VALUE only -- the 31 event types are unchanged", async () => {
+    const { clock, qc, fetcher } = mkPollEnv();
+    const types = new Set();
+    const stop = qc.inspect((e) => types.add(e.type));
+    const q = query(qc, { key: ["a"], fetcher });
+    const d = createRoot(() => effect(() => q.status()));
+    await tick();
+    const entry = qc._internal.entries.get(JSON.stringify(["a"]));
+    qc._internal.registerPoll(entry, 1000);
+    clock.advance(1000); await tick();
+    assert.ok(types.has("fetch:dispatch"), "interval fetch reuses fetch:dispatch");
+    assert.ok(!types.has("fetch:interval") && !types.has("poll:tick"), "no new event type minted");
+    d(); stop(); q.dispose();
+});
+
+test("dispatch: an interval poll dedups against an in-flight fetch (normal path)", async () => {
+    // A slow fetcher stays in flight across a tick; maybeFetch's `entry.promise`
+    // guard must swallow the interval dispatch rather than starting a second fetch.
+    const clock = createMockClock();
+    let calls = 0;
+    let release;
+    const qc = queryClient({ now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, defaultStaleTime: 0 });
+    const fetcher = () => { calls++; return new Promise((r) => { release = r; }); };
+    const q = query(qc, { key: ["a"], fetcher });
+    const d = createRoot(() => effect(() => q.status()));
+    await tick();
+    assert.equal(calls, 1, "attach fetch in flight");
+    const entry = qc._internal.entries.get(JSON.stringify(["a"]));
+    qc._internal.registerPoll(entry, 1000);
+    clock.advance(1000); await tick();
+    assert.equal(calls, 1, "interval dispatch deduped against the in-flight fetch");
+    release(42); await tick();
+    d(); q.dispose();
+});
+
+test("dispatch: a poll does not fetch once the entry has no observers (refcount-gated)", async () => {
+    const { clock, calls, qc, fetcher } = mkPollEnv();
+    const q = query(qc, { key: ["a"], fetcher });
+    const d = createRoot(() => effect(() => q.status()));
+    await tick();
+    const entry = qc._internal.entries.get(JSON.stringify(["a"]));
+    qc._internal.registerPoll(entry, 1000);
+    // Drop the observer WITHOUT unregistering the poll (simulate the scan racing
+    // teardown): pollDispatch's observerCount>0 guard must keep it from fetching.
+    d();
+    await tick();
+    assert.equal(entry.observerCount, 0, "no observers left");
+    clock.advance(1000); await tick();
+    assert.equal(calls.length, 1, "an observerless entry is never polled");
+    qc._internal.unregisterPoll(entry);
+    q.dispose();
+});

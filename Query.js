@@ -1380,12 +1380,13 @@ export function queryClient(options = {}) {
         armPoll();
     }
 
-    // Dispatch one due poll through the NORMAL fetch path. C4 gives this the
-    // "interval" feed reason; here it is the maybeFetch tail, refcount-gated so a
-    // record whose observers have all left (before its unregister runs) never
-    // fetches.
+    // Dispatch one due poll through the NORMAL fetch path (the maybeFetch tail),
+    // so dedup / retry / abort / sharedFetch and the leaderless self-fetch all
+    // apply BY CONSTRUCTION. The "interval" reason rides fetch:dispatch (OR-10, no
+    // new event type). Refcount-gated: a record whose observers have all left
+    // (before its unregister runs) never fetches.
     function pollDispatch(entry) {
-        if (entry.observerCount > 0) maybeFetch(entry);
+        if (entry.observerCount > 0) maybeFetch(entry, "interval");
     }
 
     // -- attach / detach --
@@ -1474,7 +1475,7 @@ export function queryClient(options = {}) {
         return false;
     }
 
-    function maybeFetch(entry) {
+    function maybeFetch(entry, reason) {
         if (!entry.fetcher) return;
         if (entry.promise) return;                       // already fetching locally
         if (entry.sharedFallbackTimer !== null) return;  // already awaiting a shared fetch
@@ -1483,7 +1484,11 @@ export function queryClient(options = {}) {
         if (sharedFetchActive && !opts.isLeader()) {
             requestSharedFetch(entry);                   // follower: ask the leader
         } else {
-            runFetch(entry).catch(noop);                 // leader or single-tab: fetch
+            // reason undefined (every non-interval caller) -> runFetch(entry,
+            // undefined), byte-identical to the 2.1.0 runFetch(entry) call. The
+            // interval scanner passes "interval" so fetch:dispatch carries it
+            // (OR-10: a reason VALUE, not a new event type).
+            runFetch(entry, reason === undefined ? undefined : { reason }).catch(noop);
         }
     }
 
@@ -1515,7 +1520,7 @@ export function queryClient(options = {}) {
         }
     }
 
-    function runFetch(entry, { force = false } = {}) {
+    function runFetch(entry, { force = false, reason = null } = {}) {
         if (!force && entry.promise) return entry.promise;
         if (!entry.fetcher) return Promise.resolve(undefined);
         // Infinite entries only auto-fetch when a next page is due: hasNext is
@@ -1543,7 +1548,7 @@ export function queryClient(options = {}) {
         const ac = new AbortController();
         entry.abortController = ac;
         if (feed.hook !== null) emitFetch("fetch:dispatch", entry, gen, false,   // site 8
-            entry.isInfinite ? startCursor : null, force ? "force" : null);
+            entry.isInfinite ? startCursor : null, reason ?? (force ? "force" : null));
         entry.fetching.set(true);
         if (entry.data() === undefined && entry.status() !== "error") {
             setStatus(entry, "pending");
