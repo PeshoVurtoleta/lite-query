@@ -1,6 +1,6 @@
 {
   "name": "@zakkster/lite-query",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Reactive async cache with cross-tab coherence, streaming queries, and async coordination. Built on lite-signal.",
   "type": "module",
   "main": "./Query.js",

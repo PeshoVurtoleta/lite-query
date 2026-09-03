@@ -17,8 +17,8 @@ body of work swaps the hand-rolled buffer-follower window for lite-stream 1.4.0'
 `createSignalWriter`, deleting the third copy of the drop-oldest ring; the
 differential parity test stays green on both sides of the swap. Additive only --
 zero breaking changes, the shipped 2.0.0 tests pass unedited. Per OR-1 the version
-stamp lands only with the `/release 2.1.0` drill after the pipeline closes (no
-in-session stamp; the pipeline runs with `package.json` and the `VERSION` const at
+stamp landed only with the `/release 2.1.0` drill after the pipeline closed (no
+in-session stamp; the pipeline ran with `package.json` and the `VERSION` const at
 `2.0.0`).
 
 ### Added
