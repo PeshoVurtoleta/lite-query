@@ -179,3 +179,42 @@ test("queue-replay: dropQueued of an unknown id (or empty queue) returns false, 
     stop();
     qc.dispose();
 });
+
+// -- QD-3: dropQueued mid-replay makes the poison-item exit actually exit ----
+
+test("queue-replay: dropQueued fired mid-replay evicts a not-yet-dispatched item (QD-3)", async () => {
+    const qc = queryClient();
+    const ids = [];
+    ids.push((await enqueueOffline(qc, "a", ["k1"], { n: 1 })).id);
+    ids.push((await enqueueOffline(qc, "a", ["k1"], { n: 2 })).id);
+    ids.push((await enqueueOffline(qc, "a", ["k1"], { n: 3 })).id);  // the poison item
+    assert.equal(qc.queueSize(), 3);
+
+    const drops = [];
+    const stop = qc.inspect((e) => { if (e.type === "queue:drop") drops.push({ ...e }); });
+
+    // The 2nd item's handler drops the 3rd (still queued, not yet dispatched).
+    const dispatched = [];
+    const result = await qc.replayQueue((rec) => (vars) => {
+        dispatched.push(rec.id);
+        if (rec.id === ids[1]) qc.dropQueued(ids[2]);   // poison-item exit mid-run
+        return "server-ok";
+    });
+
+    // The 3rd handler is NEVER called; the item exits as dropped/caller-dropped.
+    assert.deepEqual(dispatched, [ids[0], ids[1]], "the dropped item never dispatched");
+    const third = result.items.find((r) => r.id === ids[2]);
+    assert.equal(third.status, "dropped", "the mid-run eviction is a dropped result");
+    assert.equal(third.reason, "caller-dropped");
+    assert.equal(result.replayed, 2);
+    assert.equal(result.dropped, 1);
+    assert.equal(result.failed, 0);
+    assert.equal(result.total, 3, "counts are coherent with the 3 snapshot records");
+    assert.equal(qc.queueSize(), 0, "nothing stranded");
+    // Exactly ONE queue:drop for that id -- from the dropQueued call, not a second
+    // emit from the replay loop.
+    assert.equal(drops.length, 1, "exactly one queue:drop total");
+    assert.equal(drops[0].reason, "caller-dropped");
+    stop();
+    qc.dispose();
+});

@@ -659,6 +659,17 @@ export function queryClient(options = {}) {
         let replayed = 0, failed = 0, dropped = 0;
         for (let i = 0; i < snapshot.length; i++) {
             const rec = snapshot[i];
+            // A record evicted from the LIVE store mid-run -- dropQueued() fired
+            // from an earlier item's handler -- must NOT dispatch: the poison-item
+            // exit must exit (ON-4). Re-check presence by reference identity in the
+            // live store (which the snapshot cannot see). dropQueued already emitted
+            // the single queue:drop when it removed the record, so record the
+            // dropped result WITHOUT a second feed emit and WITHOUT re-removing.
+            if (queueStore === null || queueStore.indexOf(rec) === -1) {
+                items.push(queueItemResult(rec, "dropped", undefined, "caller-dropped"));
+                dropped++;
+                continue;
+            }
             // An entry that no longer exists -> DROPPED, never dispatched, never
             // silently retried (OR-3). Resolver failures drop identically.
             if (entries.get(rec.keyHash) === undefined) {
