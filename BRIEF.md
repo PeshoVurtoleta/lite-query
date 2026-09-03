@@ -1,178 +1,176 @@
-# BRIEF -- Q9 -- lite-query v2.1.0 -- offline mutation queue + LS4 seam swap
+# BRIEF -- Q10 -- lite-query v2.2.0 -- freshness + polish (the gap session)
 
-Operator contract for the Q9 pipeline (planner -> coder -> reviewer -> qa).
-Source charter: ROADMAP.md Q9 stub (lines ~1131-1155) + the Q8 charter's
-offline-queue bullet (lines ~1013-1018), both carried forward INTACT by
-STOP-DECISION-1. This file wins over memory; the ROADMAP wins over this
-file only where this file is silent.
+Operator contract for the Q10 pipeline (planner -> coder -> reviewer -> qa).
+Source charter: the 2026-09-03 gap assessment vs @tanstack/query-core
+5.102.8 (installed) -- the three highest-value absences that fit the house
+law, plus the comparative bench refresh the assessment proved stale (bench/
+bench.mjs untouched since the initial commit; 8 of 11 post-1.2 surfaces
+absent from bench/). This file wins over memory; the ROADMAP parking ledger
+(~:1225-1240) wins over this file only where this file is silent.
 
 ---
 package: "@zakkster/lite-query"
-session: Q9
-status: pipeline-complete (2026-09-03; ladder C1 53e9755 .. C9 97a2c77; STOP-DECISION-2 swap APPROVED and shipped at C7 with A6 unedited on both sides; reviewer APPROVED w/3 docs findings -> QD-2 8535bd1; QA FAIL(1: dropQueued mid-replay snapshot defect) -> QD-3 8ab0de3 -> QA PASS; QD-1 ruling: floors are minimums; suite 362 -> 391/0/0 QA-frozen, GATE byte-identical, controls 5/5, attempt F DID NOT FIRE (six attempts carried); drill sites=3/30 tests=391/0 GATE ok pack 13 files 125.5 kB; operator publish 051b9ed; registry artifact verified: 13 files, [2.1.0] head, VERSION sync, latest=2.1.0)
-version_target: 2.1.0       # stamped by the /release drill, NOT in-session (OR-1)
-tests_min: 380              # floor; suite is 362 (shipped 2.0.0) at session start
+session: Q10
+status: in-pipeline (2026-09-03)
+version_target: 2.2.0       # stamped by the /release drill, NOT in-session (OR-1)
+tests_min: 410              # floor; suite is 391 (shipped 2.1.0) at session start
 skip_max: 0
-torture: "law harness ok + airplane-mode replay soak + attempt F on queue teardown"
-depends_on: [Q8 (shipped 2.0.0, operator publish da8b377),
-  lite-stream 1.4.0 (registry-verified 2026-09-03: latest=1.4.0, 7-file
-  tarball, createSignalWriter at Stream.js:717, CHANGELOG head
-  "1.4.0 -- 2026-09-03")]
-downstream: none gated (the ladder's final rung)
-carry_from_q8: "findings-clause torture control STILL uncontrolled after
-  FIVE attempts (Q5 A/B, Q6 C, Q7 D, Q8 E; INCONCLUSIVE.md holds all five
-  verbatim); attempt F rides the queue's replay teardown with in-flight
-  handles (OR-9)"
+torture: "law harness ok + interval-churn and placeholder-swap soaks +
+  attempt G on interval teardown with live timers"
+depends_on: [Q9 (shipped 2.1.0, operator publish 051b9ed)]
+downstream: none gated (the last session)
+carry_from_q9: "findings-clause torture control STILL uncontrolled after
+  SIX attempts (Q5 A/B, Q6 C, Q7 D, Q8 E, Q9 F; INCONCLUSIVE.md holds all
+  six verbatim); attempt G rides the interval surface -- recurring armed
+  timers + refcount-gated teardown is a genuinely NEW retention shape
+  (OR-9)"
 ---
 
 ## PURPOSE
 
-The deferred half of the 2.0 major, riding on a FINISHED failover story --
-exactly as the split's own rationale demanded. Two bodies of work, one
-minor: (1) the offline mutation queue with durable replay-on-reconnect,
-carried intact from the Q8 charter; (2) the projectFrame seam swap to
-lite-stream 1.4.0's createSignalWriter, deleting the hand-rolled third
-copy of the windowed-view discipline -- the swap the parity test was built
-to make mechanical.
+Close the three competitive gaps that are real, valuable, and compatible
+with the law -- polling, previous-data hold, a page bound -- and bring the
+comparative benchmark up to the 2.1.0 surface so every headline claim is
+re-measured, not inherited. Everything opt-in, everything additive; the
+OFF path is byte-identical to 2.1.0 on all three features.
 
 ## TASKS
 
-- T1 -- Queue surface. Explicit opt-in PER MUTATION (a default that queues
-  silently is fail-open and forbidden -- OR-3); the planner names the flag
-  and the dispatch semantics. When the fetcher cannot run (caller says
-  offline / queue-on-failure per spec), the mutation lands in the durable
-  queue with a surfaced "queued" outcome -- never a silent limbo. The ON-3
-  status law governs replay results too: control-flow tracking, falsy
-  rejections settle "error".
-- T2 -- Durability. The queue rides the Q6 persistence seam
-  (persistQueryClient's save/load thunks) with the SAME version-stamp
-  discipline: the adapter stamps, mismatch or corruption drops the WHOLE
-  queue fail-closed -- and the drop is surfaced/observable, never silent
-  (OR-5). Monomorphic queue records; the planner specs the shape.
-- T3 -- Replay. Explicitly triggered by the caller (OR-4 -- no
-  connectivity ownership). Order preserved per key; per-item results
-  surfaced; items whose entries no longer exist are DROPPED with a
-  surfaced result (never silently retried); everything observable via the
-  Q7 feed (vocabulary grows additively, 10-key record frozen -- OR-7).
-  The crash-boundary semantics are RULED, not implied (OR-6).
-- T4 -- LS4 seam swap. projectFrame/projectBuffer's hand-rolled follower
-  window is replaced by lite-stream 1.4.0's createSignalWriter UNDER the
-  core-import constraint (OR-8): Query.js imports lite-signal ONLY. Their
-  llms.txt consumer paragraph is the fit contract: "The follower frames
-  arrive by callback and feed writer.push(frame) -- the writer needs ZERO
-  channel / epoch awareness." The differential parity test
-  (shared-stream.test.js C5 block, A6) is the CONTRACT and does not
-  change: it must pass against the live 1.4.0 oracle BEFORE the swap
-  (oracle upgrade first, as its own rung) and AFTER (the swap body).
-  STOP-DECISION-2 rules the mechanism (see OR-8).
-- T5 -- Torture. Airplane-mode replay soak (queue churn + reload cycles,
-  pool baseline); attempt F per OR-9; the frozen GATE window stays
-  byte-identical -- new prints strictly AFTER the frozen gate evaluation
-  (ON-2 precedent).
-- T6 -- Docs. README queue section; llms.txt full new surface (any new
-  liveness-adjacent sentence must be TRUE the way OR-3/Q8 made the stream
-  sentence true); d.ts; Cookbook airplane-mode recipe; CHANGELOG [2.1.0]
-  head in-session (Added/Changed only -- zero breaking budget, OR-2);
-  every feed-count site (README/Cookbook/llms.txt) reconciled in the SAME
-  commit that grows the vocabulary (OR-7, the QD-4 lesson).
+- T0 -- THE SPIKE, before any spec (OR-2). Three design rulings against
+  the REAL code, then STOP-DECISION-1 (ship all three, or defer any whose
+  ruling is unsafe -- a named ruling in the ledger, never a doc warning):
+  (a) interval timer discipline -- the ratified watchdog design note
+      governs (ROADMAP ~:1059-1062: never per-value clearTimeout/
+      setTimeout churn; lastX + one periodic check-and-rearm timer,
+      amortized O(1)). Rule the lifecycle: refcount-gated (zero observers
+      = zero polling), enabled:false = no polling, dispose leaves no
+      dangling timer (mock-clock-provable), and the interval fires
+      through the NORMAL fetch path so dedup/retry/abort/sharedFetch all
+      apply unchanged.
+  (b) placeholder semantics -- where held data lives. The CACHE never
+      lies (OR-5): previous data held across a reactive key swap is a
+      HANDLE-level presentation with an explicit isPlaceholder() flag;
+      entry state, dehydrate, persist, and the feed reflect truth. Rule
+      what status()/loading() read during the hold, the equals
+      interaction, and whether infiniteQuery is in scope this session.
+  (c) maxPages -- the refetch hazard decides it. Our generation-guarded
+      refetch replays the cursor chain; rule whether a drop-oldest page
+      window retains provably-correct refetch (what exactly does refetch
+      replay, from which page, with which cursor). If the bound can
+      corrupt refetch, DEFER maxPages by named ruling (OR-6).
+- T1 -- refetchInterval per ruling (a). Opt-in per query (client-default
+  admissible if the planner rules it); OFF path byte-identical, zero
+  added allocation.
+- T2 -- keepPreviousData per ruling (b). Opt-in flag; isPlaceholder() on
+  the handle; scope (query only vs + infinite) per spike.
+- T3 -- maxPages per ruling (c), IF it survives the spike.
+- T4 -- bench refresh. New comparative scenarios vs @tanstack/query-core
+  where a true counterpart exists: prefetch vs prefetchQuery; full
+  dehydrate -> hydrate cycle; persister save/load; feed-installed
+  overhead vs QueryCache.subscribe listener; infiniteQuery fetchNextPage;
+  queue enqueue + replayQueue vs paused mutations + resumePausedMutations
+  (philosophy-differing -- labeled as such in the output, OR-7). Keep the
+  existing fairness asserts (same fetcher/keys/observer pattern, both
+  libraries run full paths, runtime version print). Solo-only surfaces
+  (sharedStream, projectFrame) stay in torture -- no fake comparisons.
+- T5 -- Torture. Interval-churn soak (arm/disarm across observer
+  refcount churn; teardown with live armed timers; zero dangling timers
+  at drain) + placeholder-swap churn; both strictly AFTER the frozen
+  GATE evaluation (ON-2 precedent). Attempt G per OR-9.
+- T6 -- Docs. README/llms.txt/Query.d.ts/Cookbook (polling recipe gains
+  the in-library option; a keepPreviousData paginated-table recipe);
+  CHANGELOG `[2.2.0]` head in-session, Added/Changed only; fix the
+  llms.txt:245 staleness ("deferred to 1.x" while shipped is 2.1.0);
+  every headline bench number in llms.txt/README regenerated from the T4
+  run's measured output IN THE SAME COMMIT as the bench change (OR-7).
 
 ## OPERATOR RULINGS
 
-- OR-1 (standing PR-1). No in-session version stamp. package.json and the
-  Query.js VERSION const stay 2.0.0; the CHANGELOG `[2.1.0]` head lands
-  in-session; the /release 2.1.0 drill performs the stamp after the
-  pipeline closes.
-- OR-2 minor discipline. Everything additive; zero breaking budget; the
-  shipped 362 tests are contracts -- none edited, none retired. The
-  no-opt-in path is byte-identical in behavior to 2.0.0 (the existing
-  suite proves it by passing unedited); OFF-path allocation stays zero.
-- OR-3 fail-closed queueing. Queueing is explicit opt-in per mutation;
-  queue-full and storage-failure are surfaced rejections, never silent
-  drops or silent retries; a restored queue that fails validation drops
-  whole and surfaces the drop. null is not zero: an absent queue section
-  in persisted state is "no queue", never an error.
-- OR-4 transport non-goal (1.1.0/OR-11 carry). No navigator.onLine, no
-  reconnect listeners, no connectivity polling, no timers watching the
-  network. Replay fires when the CALLER calls the replay surface. The
-  library coordinates mutations and frames; sockets and connectivity
-  belong to the caller.
-- OR-5 durability discipline. Version REQUIRED on the seam (Q6 law);
-  the adapter stamps, the primitive validates; a version mismatch, a
-  corrupt record, or a record for an unknown shape drops the whole queue
-  fail-closed with a surfaced/observable reason. Queue persistence never
-  captures non-queued in-flight mutations.
-- OR-6 crash-boundary ruling. In-run replay is exactly-once per item
-  (G6). Across a crash mid-replay the planner RULES one of: at-most-once
-  (item removed from the durable queue before dispatch; a crash may lose
-  it) or at-least-once (removed after its terminal per-item result; a
-  crash may double-fire, caller idempotency documented). Either is
-  admissible ONLY with the choice stated in llms.txt and pinned by a
-  named test simulating the crash window. The undocumented middle is
-  forbidden.
-- OR-7 feed growth. New queue events are additive `domain:verb` types on
-  the frozen 10-key record; the planner names them and the final count;
-  README/Cookbook/llms.txt count sites move in the same commit. No second
-  hook, no record-shape change.
-- OR-8 the seam swap, STOP-DECISION-2. Constraint (grep-gated, G8): core
-  Query.js imports lite-signal ONLY -- no lite-stream import, static or
-  dynamic, ever. Admissible outcomes, ruled by the planner against the
-  real code: (a) the windowed projection body moves behind an
-  entry-carried writer slot installed from StreamQuery.js (which MAY
-  import createSignalWriter unconditionally -- the /stream optional peer
-  floor then bumps ^1.3.0 -> ^1.4.0, cited era-bound from lite-stream's
-  own llms.txt "(since 1.4.0)" line, never from session numbers), with
-  core's latest-mode projection remaining stream-import-free so a
-  plain-query follower tab is unaffected; or (b) the swap is REJECTED by
-  a named ruling (e.g. the window provably serves followers with no
-  /stream module loaded in buffer mode) -- the hand-roll stays, the
-  parity oracle still upgrades to live 1.4.0, and the deletion is parked
-  with the reason recorded in the ROADMAP. TWO live window bodies
-  selected by load-state luck is fail-open and forbidden -- whichever
-  body ships, it is the ONLY body on that path.
-- OR-9 (carry_from_q8). One honest findings-clause attempt F through the
-  queue's replay teardown with in-flight replay handles. Outcome recorded
-  in INCONCLUSIVE.md in the verbatim-attempt style; a control that cannot
-  trip is decorative -- never fake one.
-- OR-10 devDependency bump. @zakkster/lite-stream devDep moves to ^1.4.0
-  (the parity oracle needs the live writer); the lite-signal override pin
-  stays. This is a lockfile rung, not a version site.
+- OR-1 (standing PR-1). No in-session version stamp. package.json and
+  the Query.js VERSION const stay 2.1.0; the CHANGELOG `[2.2.0]` head
+  lands in-session; the /release 2.2.0 drill performs the stamp.
+- OR-2 spike-first. The planner returns, in ONE message: the three T0
+  rulings with named code evidence, STOP-DECISION-1, and the FULL spec
+  for the recommended scope (any deferral recorded explicitly).
+- OR-3 timer law. No per-value or per-tick timer churn on any recurring
+  path; one periodic check-and-rearm timer amortized O(1) (the watchdog
+  precedent); every timer refcount-gated and provably torn down (the
+  soak asserts zero dangling mock-clock timers at drain).
+- OR-4 the shared-polling story must be TRUE. "The leader polls once and
+  N tabs stay fresh" ships as documentation ONLY if the mechanism
+  guarantees it under sharedFetch -- and the Q8 liveness law still
+  governs verbatim: a follower with no live leader MUST still self-fetch
+  within the bound. Correctness never depends on election state.
+- OR-5 placeholder truthfulness. The cache never lies: held previous
+  data is handle-level presentation with an explicit isPlaceholder()
+  flag; dehydrate/persist never capture placeholder state; feed events
+  reflect entry truth, not the hold.
+- OR-6 maxPages fail-closed. A page bound that can corrupt refetch is
+  REJECTED by named ruling and deferred -- never shipped behind a doc
+  warning. If shipped, the spike's hazard is pinned as a named test.
+- OR-7 bench honesty. Comparative numbers only where a true counterpart
+  exists; philosophy-differing pairs labeled in the printed output; no
+  cherry-picked N; every published headline number regenerated from
+  measured output in the same commit that changes the bench (the QD-4
+  same-commit law extended to bench claims). bench/ stays out of the
+  pack (13 files unchanged).
+- OR-8 additive minor. The shipped 391 tests are frozen contracts --
+  none edited, none retired; zero breaking budget; all three features
+  strictly opt-in with OFF paths byte-identical in behavior AND
+  allocation to 2.1.0.
+- OR-9 (carry_from_q9). One honest findings-clause attempt G through the
+  interval surface: teardown with live armed recurring timers under
+  observer churn. Verbatim outcome in INCONCLUSIVE.md; a control that
+  cannot trip is decorative -- never fake one.
+- OR-10 feed discipline. No new event types unless the spec forces them
+  (an interval-triggered fetch SHOULD reuse the existing fetch:*
+  vocabulary -- a new `reason` VALUE is additive data, not vocabulary);
+  the 10-key record stays frozen; any enumerated-values doc site moves
+  same-commit (QD-4 law).
 
 ## GATES
 
-- G1 suite >= 380 pass, 0 fail, 0 skip, under the default `npm test`.
-- G2 law harness: the byte-frozen GATE line then `ok`; every live control
-  still trips (5 + any honest attempt-F addition per OR-9).
-- G3 airplane-mode script (the stub's G6, verbatim): dispatch offline ->
-  reload -> reconnect -> replays in order, exactly once each,
-  feed-observable, per-item results surfaced.
-- G4 parity across the swap: the A6 differential test green against live
-  lite-stream 1.4.0 BEFORE the swap rung and AFTER it, unchanged; the
-  N-tab soak's zero-dup/zero-reorder unchanged.
-- G5 OFF-path: no queue opt-in anywhere -> behavior byte-identical to
-  2.0.0; the 362 shipped tests pass unedited (OR-2).
-- G6 drift guards green (ascii, surface guard over llms.txt + d.ts).
-- G7 `npm pack --dry-run`: 13 files (any change is a named spec decision,
-  not drift); test/ bench/ INCONCLUSIVE.md BRIEF.md PLAN.md absent.
-- G8 core import discipline: `grep -n "from ['\"]" Query.js` shows
-  lite-signal only (OR-8's constraint, held as a gate).
-- G9 crash-boundary test named and green, matching the OR-6 ruling as
-  documented in llms.txt.
+- G1 suite >= 410 pass, 0 fail, 0 skip, under the default `npm test`.
+- G2 law harness: the byte-frozen GATE line then `ok`; every control
+  still trips (5 + any honest attempt-G addition).
+- G3 interval contract, named tests: zero observers -> no timer armed;
+  enabled:false -> none; dispose -> zero dangling mock-clock timers;
+  the interval dispatch runs the normal fetch path (dedup/retry/abort
+  provably apply).
+- G4 shared-polling truthfulness: leader + followers under sharedFetch
+  with intervals -- upstream fetch count === the leader's alone while
+  the leader serves within the bound; a follower with no leader
+  self-fetches (the liveness law, asserted).
+- G5 placeholder: a reactive key swap holds previous data with
+  isPlaceholder() true until settle; entry/dehydrate/feed reflect truth
+  throughout; OFF path byte-identical.
+- G6 maxPages (if shipped): pages provably bounded, drops counted and
+  documented, refetch of a bounded list pinned correct by the spike's
+  hazard test.
+- G7 bench: the refreshed suite runs green against the installed
+  query-core; fairness asserts present in output; the new scenarios
+  exist; llms.txt/README headline numbers match THIS run's output in
+  the same commit.
+- G8 drift guards green; `npm pack --dry-run` = 13 files; core import
+  discipline unchanged (Query.js imports lite-signal only).
+- G9 docs: llms.txt:245 fixed; every count/claim site reconciled per
+  QD-4; ascii law holds.
 
 ## NON-GOALS
 
-- No silent queueing default (OR-3). No connectivity ownership (OR-4).
-- No breaking changes, no test retirements (OR-2).
-- No feed record-shape change, no second hook (OR-7).
-- No version stamp in-session (OR-1).
-- No new subpath, no new entry point -- the queue rides the existing
-  mutation + persist surfaces.
+- Focus/reconnect revalidation -- stays PARKED per the ledger (consumer-
+  driven rider, not this session).
+- Bidirectional fetchPreviousPage -- only the bound (if safe), never the
+  API without a consumer (the Q5 ruling stands).
+- No select/data transforms (lite-signal computed() is the answer), no
+  networkMode, no connectivity ownership (Q9 OR-4 carries), no new
+  subpath, no feed record-shape change, no version stamp in-session.
 
 ## DONE WHEN
 
-The airplane-mode script replays in order exactly once, observably; a
-version-mismatched queue drops whole and says so; the A6 parity test is
-green against live 1.4.0 on both sides of the swap (or the swap is
-rejected by named ruling with the oracle still upgraded); suite >= 380
-with the GATE byte-identical; `[2.1.0]` head landed. Then: awaiting
-/release 2.1.0 + operator publish per OR-1 -- the queue ships on a
-finished failover story, and the ladder is done.
+The spike-ratified feature set is green with OFF paths byte-identical;
+the shared-polling story is mechanically true and asserted; the bench
+compares the 2.1.0 surface honestly with regenerated headline numbers;
+suite >= 410 with the GATE byte-identical; `[2.2.0]` head landed;
+llms.txt:245 truthful. Then: awaiting /release 2.2.0 + operator publish
+per OR-1 -- and the ladder rests.
