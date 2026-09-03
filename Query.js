@@ -122,6 +122,21 @@ function resolveOptions(o) {
     };
 }
 
+// refetchInterval validation (ON-4, fail closed at the door). Absent or null =
+// off (returns null -- null is not zero, so the scanner can tell "never asked to
+// poll" from "poll every 0ms"). Otherwise it MUST be a finite number > 0 (ms);
+// 0, negative, NaN, Infinity, or a non-number each throw synchronously at query
+// construction. The interval scanner (registerPoll) therefore never sees an
+// invalid period -- the door rejects it, not the hot path.
+function validateRefetchInterval(v) {
+    if (v == null) return null;
+    if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) {
+        throw new TypeError(
+            "lite-query: refetchInterval must be a finite number > 0 (ms), or null/omitted to disable");
+    }
+    return v;
+}
+
 // Abort reasons exposed on AbortSignal.reason. Users' fetchers can inspect
 // these to decide whether to retry -- e.g., a user-initiated detach (component
 // unmounting) is non-retryable, but a timeout might be.
@@ -1986,6 +2001,11 @@ export function queryClient(options = {}) {
  */
 export function query(qc, queryOpts) {
     const { ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, opts } = qc._internal;
+
+    // Fail closed at the door (ON-4): an invalid refetchInterval throws here, at
+    // construction, so the scanner and every hot path downstream only ever see a
+    // finite period > 0 or null (off). null is not zero.
+    const refetchInterval = validateRefetchInterval(queryOpts.refetchInterval);
 
     // currentEntry is itself a signal -- accessors subscribe to it so they
     // refire when the key changes (reactive key) or attach/detach flips.
