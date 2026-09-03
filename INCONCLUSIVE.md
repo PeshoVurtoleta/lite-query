@@ -252,6 +252,49 @@ resolve the cause, do not widen the budget.
   the airplane-mode replay soak (200 reload cycles, every cycle restores N and
   drains to 0, retention baseline flat).
 
+  Q10 (OR-9) added NEW public surface (`refetchInterval` -- a client-wide poll
+  scanner driving one recurring, refcount-gated, check-and-rearm timer) and
+  re-attempted a legal trigger through its teardown path. Recurring armed timers
+  + refcount-gated teardown is a genuinely NEW retention shape (a global timer
+  holding a closure that could pin the client's entry map). The attempt was run
+  this session against the real entry points, AFTER the frozen gate evaluation
+  (ON-2), so it can never move the byte-frozen GATE line:
+
+    Attempt G -- dispose the CLIENT while a recurring poll timer is still ARMED.
+      2048 cycles of: a `queryClient()` on an injected mock clock with a polling
+      query (`query(qc, { key: ["g"], fetcher, refetchInterval: 1000 })`) whose
+      accessor is read inside a `createRoot(effect)` so the watcher attaches,
+      registers the poll, and ARMS the single scanner timer on the mock clock (a
+      live recurring timer, never fired or cleared). Then
+      `tracker.track(entry, NOOP_RELEASE, "poll-entry", { audit: true })` on the
+      client's live entry, OUTSIDE any lite-signal owner (held-value contract
+      preserved -- neither tag nor release closes over the entry). Then the
+      adversarial ordering: `qc.dispose()` is called WHILE the poll timer is
+      armed and BEFORE the effect/query are torn down (`stop()` and `q.dispose()`
+      run after). Result (this session, over 8 GC settle rounds): `tracker.size()`
+      returned to its pre-attempt value (live-delta `0`) and
+      `tracker.audit().length === 0`. `qc.dispose()` now definitively disarms the
+      scanner -- it `clearTimeout`s the single `pollTimerId` and nulls `pollList`
+      -- so the mock clock releases the `pollTick` closure, `pollList` no longer
+      references the entry, and `clear()` has already disposed the entry's signal
+      nodes; nothing roots the entry past disposal. A single settle round left a
+      phantom `+1` (the last cycle's FinalizationRegistry callback still pending);
+      the multi-round settle resolves it to `0`, which is the true value. The poll
+      scanner allocates no lite-signal owner the owner-cascade kernel watches, so
+      it cannot leave either kernel's trip state.
+
+  OUTCOME: does NOT fire. Attempt G re-recorded verbatim above; the
+  findings-clause stays uncontrolled and is carried forward. Per ON-3/OR-9,
+  Attempt G is explicitly NOT a gate clause (a control that cannot trip is
+  decorative -- never faked). The live controls remain `alloc` / `detach` /
+  `fuzz` / `pages` / `feed` (`tripped=5/5` under `QUERY_TORTURE_BREAK=1`). The
+  lesson A/B/C/D/E/F/G keep teaching holds: a hand-run attempt that does not fire
+  is not proof of absence -- a keyed retention is found by an adversarial probe or
+  a reviewer, not by the churn loop. The honest Q10 gate additions that DO gate
+  are the refetchInterval churn soak (10000 arm/disarm cycles, zero dangling
+  mock-clock timers at drain, warm read byte-identical) and the keepPreviousData
+  placeholder-swap churn (10000 swaps, retention baseline flat).
+
 The census clause (`censusOk`) WAS uncontrolled between commit e56af54 and its
 fix: C-detach hardcoded `censusOk: true` (an undeclared drift from PLAN
 Assertion 3). It is now controlled -- C-detach builds a WeakRef census over its

@@ -2054,6 +2054,14 @@ export function queryClient(options = {}) {
     // no-ops (cache is cleared, channel is closed).
     function dispose() {
         clear();
+        // Definitive teardown of the interval scanner: disarm the single timer
+        // and drop the record list so a disposed client leaves NO dangling poll
+        // timer (G3) and pins nothing through the timer's closure (attempt G).
+        if (pollTimerId !== null) {
+            opts.clearTimeout(pollTimerId);
+            pollTimerId = null;
+        }
+        pollList = null;
         if (channel) {
             try { channel.removeEventListener("message", onRemoteMessage); }
             catch { /* some mock channels don't implement removeEventListener */ }

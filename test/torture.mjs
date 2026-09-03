@@ -41,7 +41,7 @@ import {
   createObserverOrphanKernel,
   createAsyncRetentionKernel,
 } from '@zakkster/lite-leak';
-import { createRoot, effect } from '@zakkster/lite-signal';
+import { createRoot, effect, signal } from '@zakkster/lite-signal';
 
 // >>> WIRE 1: the package under test
 import { queryClient, query, infiniteQuery, persistQueryClient, mutation } from '../Query.js';
@@ -850,6 +850,168 @@ async function runAttemptF() {
     findingsF.length + ' -> ' + (fired ? 'FIRED' : 'DID NOT FIRE (carried; recorded verbatim in INCONCLUSIVE.md)'));
 }
 
+// ---- Q10 (C8): refetchInterval churn soak (T5/G3) --------------------------
+// The interval scanner's headline retention gate, run AFTER the frozen gate
+// (ON-2/ON-3): 10000 arm/disarm cycles under observer churn on the mock clock
+// (no real sleeps), then a WARM-read window with a poll registered but not
+// firing. The soak's real contract: ZERO dangling mock-clock timers at drain
+// (every armed poll torn down), the retention baseline flat (tracker delta 0),
+// AND the warm read path byte-identical to a non-polling query (maxMajor 0,
+// < 8 B/op -- a registered interval never touches the read path). Prints its own
+// line; a dangling timer / retained cycle / warm-path regression fails the
+// process, never the GATE.
+async function runIntervalSoak() {
+  const beforeSize = tracker.size();
+  const CYC = 10000;
+  // Phase A: arm/disarm churn. defaultCacheTime Infinity -> no GC timer armed,
+  // so the ONLY mock-clock timers are poll timers; pendingCount at drain is the
+  // dangling-poll-timer count directly.
+  const clock = createMockClock();
+  const qc = queryClient({ now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, defaultStaleTime: 0, defaultCacheTime: Infinity });
+  for (let i = 0; i < CYC; i++) {
+    const q = query(qc, { key: ['iv', i & 7], fetcher: FETCHER, refetchInterval: 1000 });
+    const stop = createRoot(() => effect(() => q.status()));   // attach -> register + arm
+    clock.advance(1000);                                        // fire one poll tick
+    await Promise.resolve();
+    stop();                                                     // detach -> unregister
+    q.dispose();
+    qc.removeQueries(['iv', i & 7], { exact: true });
+    await Promise.resolve();
+  }
+  const pendingAtDrain = clock.pendingCount;                    // must be 0: nothing armed
+  const pollCountAtDrain = qc._internal.pollCount;              // 0 (list drained) -- not -1 (never used)
+  qc.dispose();
+
+  // Phase B: warm-read B/op with a poll registered but never firing. The read
+  // path is the OFF-path data() (placeholderSig null), so this must match the
+  // frozen phase-H warm read: maxMajor 0, ~0 B/op.
+  const clock2 = createMockClock();
+  const qc2 = queryClient({ now: clock2.now, setTimeout: clock2.setTimeout, clearTimeout: clock2.clearTimeout, defaultStaleTime: Infinity, defaultCacheTime: Infinity });
+  const warm = query(qc2, { key: ['warm'], fetcher: FETCHER, refetchInterval: 1e9 });
+  const stopW = createRoot(() => effect(() => warm.data()));
+  await tick();
+  let sink = 0;
+  globalThis.gc?.();
+  await new Promise((r) => setTimeout(r, 20));
+  const before = process.memoryUsage().heapUsed;
+  const gc = new GcProfiler().start();
+  for (let i = 0; i < HOT; i++) {
+    sink += (warm.data() | 0);
+    if ((i & 8191) === 0) gc.sampleHeap(performance.now(), process.memoryUsage().heapUsed);
+  }
+  await new Promise((r) => setTimeout(r, 50));
+  const s = gc.summary();
+  gc.stop();
+  globalThis.gc?.();
+  await new Promise((r) => setTimeout(r, 20));
+  const bpop = (process.memoryUsage().heapUsed - before) / HOT;
+  stopW(); warm.dispose(); qc2.dispose();
+  if (sink === Number.MIN_SAFE_INTEGER) console.log('unreachable');
+
+  globalThis.gc?.();
+  await new Promise((r) => setTimeout(r, 50));
+  const liveDelta = tracker.size() - beforeSize;
+  const findings = tracker.audit();
+  const ok = pendingAtDrain === 0 && pollCountAtDrain === 0 && liveDelta === 0 &&
+    findings.length === 0 && s.gc.major === 0 && Math.abs(bpop) < 8;
+  console.log('phase H Q10 refetchInterval churn soak (C8 T5/G3; outside the frozen GATE window):');
+  console.log('  cycles=' + CYC + ' | dangling-timers@drain=' + pendingAtDrain + ' pollCount@drain=' + pollCountAtDrain +
+    ' retain-delta=' + liveDelta + ' audit=' + findings.length +
+    ' | warm gc major=' + s.gc.major + ' minor=' + s.gc.minor + ' B/op=' + bpop.toFixed(2));
+  console.log(ok
+    ? '  PASS: every armed poll torn down (zero dangling), retention flat, warm read byte-identical (< 8 B/op, maxMajor 0)'
+    : '  FAIL: a poll timer dangled, a cycle leaked, or the warm read regressed');
+  if (!ok) process.exitCode = 1;
+}
+
+// ---- Q10 (C8): keepPreviousData placeholder-swap churn ---------------------
+// 10000 reactive key swaps on a keepPreviousData query: each swap captures the
+// previous entry's data into the handle-level hold, presents it while the new
+// entry loads, then clears on the new value. Retention contract: dispose returns
+// the placeholder signal node to the pool and drops heldData -- tracker delta 0
+// across the churn (no per-swap accumulation of held payloads or signal nodes).
+async function runPlaceholderSoak() {
+  const beforeSize = tracker.size();
+  const CYC = 10000;
+  let sink = 0;
+  // ONE key signal, reused across cycles (a fresh signal per cycle would never be
+  // disposed and would exhaust the node pool -- the churn subject is the per-cycle
+  // query + placeholder hold, not the driving signal). Three distinct key values
+  // per cycle force two real entry swaps.
+  const id = signal(0);
+  for (let i = 0; i < CYC; i++) {
+    const base = i * 3;
+    id.set(base);
+    const qc = queryClient({ defaultStaleTime: Infinity, defaultCacheTime: Infinity });
+    const q = query(qc, { key: () => ['pp', id()], fetcher: FETCHER, keepPreviousData: true });
+    const stop = createRoot(() => effect(() => { sink += (q.data() | 0) + (q.isPlaceholder() ? 1 : 0); }));
+    await Promise.resolve();
+    id.set(base + 1); await Promise.resolve();                  // swap -> hold previous
+    id.set(base + 2); await Promise.resolve();                  // swap again -> hold, then clear
+    stop();
+    q.dispose();
+    qc.clear();
+    qc.dispose();
+  }
+  globalThis.gc?.();
+  await new Promise((r) => setTimeout(r, 50));
+  const liveDelta = tracker.size() - beforeSize;
+  const findings = tracker.audit();
+  if (sink === Number.MIN_SAFE_INTEGER) console.log('unreachable');
+  const ok = liveDelta === 0 && findings.length === 0;
+  console.log('phase H Q10 keepPreviousData placeholder-swap churn (C8 T5/G5; outside the frozen GATE window):');
+  console.log('  cycles=' + CYC + ' swaps-per-cycle=2 | retain-delta=' + liveDelta + ' audit=' + findings.length);
+  console.log(ok
+    ? '  PASS: the placeholder hold and its signal node are released on dispose; retention baseline flat'
+    : '  FAIL: a placeholder hold or its signal node outlived its query');
+  if (!ok) process.exitCode = 1;
+}
+
+// ---- OR-9 attempt G: teardown with a live armed recurring poll timer -------
+// The carry_from_q8 findings-clause attempt (Q5 A/B, Q6 C, Q7 D, Q8 E, Q9 F; six
+// verbatim in INCONCLUSIVE.md), now riding the NEW Q10 interval surface (OR-9):
+// a recurring poll timer left ARMED at teardown. The honest control: mount a
+// polling query, let it arm its scanner timer, track the live entry with
+// { audit: true }, then dispose the CLIENT while the timer is still armed and
+// drop every local reference. If disposing the client failed to disarm the timer,
+// the mock clock's pending closure would pin pollList -> the entry, and the
+// owner-cascade / async-retention kernels would trip. Runs AFTER the frozen gate;
+// NOT a gate clause (ON-3). Honest pass-or-fail, recorded verbatim in
+// INCONCLUSIVE.md as Attempt G.
+async function runAttemptG() {
+  const beforeSize = tracker.size();
+  const CYC = 2048;
+  let gSink = 0;
+  for (let i = 0; i < CYC; i++) {
+    const clock = createMockClock();
+    const qc = queryClient({ now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, defaultStaleTime: 0, defaultCacheTime: Infinity });
+    const q = query(qc, { key: ['g'], fetcher: FETCHER, refetchInterval: 1000 });
+    const stop = createRoot(() => effect(() => { gSink += q.status().length; }));
+    await Promise.resolve();
+    // The poll scanner is now armed on the mock clock (a live recurring timer).
+    // Track the entry OUTSIDE any lite-signal owner; neither the tag nor the
+    // release closes over it.
+    const entry = qc._internal.entries.get(JSON.stringify(['g']));
+    if (entry) tracker.track(entry, NOOP_RELEASE, 'poll-entry', { audit: true });
+    // Tear down the CLIENT while the poll timer is still armed (no q.dispose /
+    // stop first) -- the adversarial ordering.
+    qc.dispose();
+    stop();
+    q.dispose();
+  }
+  // Multiple settle cycles (as the census does): FinalizationRegistry callbacks
+  // arrive across GC rounds, so a single round can leave the last registration
+  // pending and read a phantom +1.
+  for (let s = 0; s < 8; s++) { globalThis.gc?.(); await new Promise((r) => setTimeout(r, 10)); }
+  const liveG = tracker.size() - beforeSize;
+  const findingsG = tracker.audit();
+  const fired = liveG !== 0 || findingsG.length !== 0;
+  if (gSink === Number.MIN_SAFE_INTEGER) console.log('unreachable');
+  console.log('phase H OR-9 attempt G (client teardown w/ a live armed recurring poll timer; NOT a gate clause):');
+  console.log('  cycles=' + CYC + ' tracked-entry live-delta=' + liveG + ' audit-findings=' +
+    findingsG.length + ' -> ' + (fired ? 'FIRED' : 'DID NOT FIRE (carried; recorded verbatim in INCONCLUSIVE.md)'));
+}
+
 // ---- orchestration --------------------------------------------------------
 // Fail closed on a missing --expose-gc BEFORE any phase runs: without it the
 // census settle cycles cannot collect and phase H reports a leak-shaped
@@ -914,4 +1076,10 @@ if (BREAK) {
   // AFTER the frozen gate evaluation, printing their own lines (never the GATE).
   await runAirplaneModeSoak();
   await runAttemptF();
+  // Q10 (C8): the refetchInterval churn soak + keepPreviousData placeholder-swap
+  // churn (gate clauses, T5/G3/G5) + attempt G, all AFTER the frozen gate
+  // evaluation, printing their own lines (never the GATE).
+  await runIntervalSoak();
+  await runPlaceholderSoak();
+  await runAttemptG();
 }
