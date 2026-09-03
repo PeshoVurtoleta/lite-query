@@ -337,6 +337,18 @@ export function queryClient(options = {}) {
     let channel = null;
     let processingRemote = false;
 
+    // -- refetchInterval scanner state (Q10) --
+    // ONE client-wide poll scanner (the watchdog precedent, ROADMAP ~:1059-1062):
+    // never a timer per entry. pollList is null until the first registerPoll --
+    // null is not zero, so an app that never polls pays nothing and the OFF-path
+    // assertion `pollList === null` distinguishes "never registered" from "empty".
+    // Each record is { entry, interval, nextPollAt, count }; count is the observer
+    // refcount so N watchers polling one entry share one record (first interval
+    // wins, mirroring attach()'s first-observer-configures rule). pollTimerId holds
+    // the single armed check-and-rearm timer (C3).
+    let pollList = null;
+    let pollTimerId = null;
+
     // Private single-slot cache-write hook (OR-5). The persistence adapter
     // installs one thunk here; notifyWrite() calls it after every committed
     // cache write at the six V4 sites. null when no adapter is installed, so an
@@ -1282,6 +1294,46 @@ export function queryClient(options = {}) {
         if (entry.gcTimerId !== null) {
             opts.clearTimeout(entry.gcTimerId);
             entry.gcTimerId = null;
+        }
+    }
+
+    // -- refetchInterval scanner: register / unregister (C2) --
+
+    // Register a poll for `entry` at `interval` ms. Refcount-gated: if the entry
+    // already has a record, bump its count (first interval wins) rather than
+    // adding a second record, so N observers of one key share one scanner slot.
+    // The first registration lazily creates pollList (null -> []) and arms the
+    // scanner (C3). nextPollAt is stamped from opts.now() so the first tick is
+    // due one full interval out, never early.
+    function registerPoll(entry, interval) {
+        if (pollList === null) pollList = [];
+        for (let i = 0; i < pollList.length; i++) {
+            if (pollList[i].entry === entry) { pollList[i].count++; return; }
+        }
+        pollList.push({ entry, interval, nextPollAt: opts.now() + interval, count: 1 });
+        armPoll();
+    }
+
+    // Unregister a poll for `entry`. Refcount-gated: decrement, and only when the
+    // count reaches zero swap-remove the record (O(1), order-agnostic) and, if the
+    // list is now empty, disarm the scanner timer. A missing entry is a silent
+    // no-op (idempotent teardown -- detach may fire after a disable already pulled
+    // the record).
+    function unregisterPoll(entry) {
+        if (pollList === null) return;
+        for (let i = 0; i < pollList.length; i++) {
+            if (pollList[i].entry === entry) {
+                if (--pollList[i].count <= 0) {
+                    const last = pollList.length - 1;
+                    pollList[i] = pollList[last];
+                    pollList.pop();
+                    if (pollList.length === 0 && pollTimerId !== null) {
+                        opts.clearTimeout(pollTimerId);
+                        pollTimerId = null;
+                    }
+                }
+                return;
+            }
         }
     }
 
