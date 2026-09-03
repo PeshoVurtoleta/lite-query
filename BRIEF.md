@@ -9,7 +9,7 @@ file only where this file is silent.
 ---
 package: "@zakkster/lite-query"
 session: Q9
-status: pipeline-complete (2026-09-03; ladder C1 53e9755 .. C9 97a2c77; STOP-DECISION-2 swap APPROVED and shipped at C7 with A6 unedited on both sides; reviewer APPROVED w/3 docs findings -> QD-2 8535bd1; QA FAIL(1: dropQueued mid-replay snapshot defect) -> QD-3 8ab0de3 -> QA PASS; QD-1 ruling: floors are minimums; suite 362 -> 391/0/0 QA-frozen, GATE byte-identical, controls 5/5, attempt F DID NOT FIRE (six attempts carried); awaiting /release 2.1.0 + operator publish per OR-1)
+status: pipeline-complete (2026-09-03; ladder C1 53e9755 .. C9 97a2c77; STOP-DECISION-2 swap APPROVED and shipped at C7 with A6 unedited on both sides; reviewer APPROVED w/3 docs findings -> QD-2 8535bd1; QA FAIL(1: dropQueued mid-replay snapshot defect) -> QD-3 8ab0de3 -> QA PASS; QD-1 ruling: floors are minimums; suite 362 -> 391/0/0 QA-frozen, GATE byte-identical, controls 5/5, attempt F DID NOT FIRE (six attempts carried); drill sites=3/30 tests=391/0 GATE ok pack 13 files 125.5 kB; operator publish 051b9ed; registry artifact verified: 13 files, [2.1.0] head, VERSION sync, latest=2.1.0)
 version_target: 2.1.0       # stamped by the /release drill, NOT in-session (OR-1)
 tests_min: 380              # floor; suite is 362 (shipped 2.0.0) at session start
 skip_max: 0

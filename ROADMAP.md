@@ -1146,7 +1146,7 @@ OBLIGATIONS, offline queue bullet) and carries forward INTACT:
   - the projectFrame seam swap to lite-stream's createSignalWriter (LS4)
     also rides 2.1 if LS4 has shipped by then (parity test unchanged --
     it is the contract).
-status: pipeline-complete (2026-09-03; brief c4ca7c5, plan e29bcad
+status: shipped (2026-09-03; brief c4ca7c5, plan e29bcad
   ratified ON-1..ON-5 incl. STOP-DECISION-2 = seam swap APPROVED on
   operator re-verified source evidence, the at-least-once crash law, and
   the dropQueued poison-item lever. Ladder C1 53e9755 .. C9 97a2c77:
@@ -1165,7 +1165,9 @@ status: pipeline-complete (2026-09-03; brief c4ca7c5, plan e29bcad
   QD-1: the floor is a MINIMUM -- a test fold made for count vanity was
   reverted; floors never trim named contracts. Suite 362 -> 391/0/0
   (QA-frozen), GATE byte-identical, controls 5/5, pack 13 files;
-  awaiting /release 2.1.0 + operator publish per OR-1)
+  drill sites=3/30 tests=391/0 GATE ok pack 13 files 125.5 kB; operator
+  publish 051b9ed; registry artifact verified: 13 files, [2.1.0] head,
+  VERSION sync, latest=2.1.0)
 tests_min: 380 at session start (ON-5 raised the working floor to 389;
   the pipeline closed at 391 -- QA froze the final)
 rejections ledger: queueOnFailure (auto-enqueue on a rejected fetch)
