@@ -20,7 +20,7 @@ import assert from "node:assert/strict";
 
 import { signal, effect, createRegistry, setDefaultRegistry, createRoot } from "@zakkster/lite-signal";
 
-import { queryClient, query } from "../Query.js";
+import { queryClient, query, infiniteQuery } from "../Query.js";
 import { createMockClock, createMockBroadcastChannel, createControlledFetcher, createQueuedFetcher } from "./harness.js";
 
 beforeEach(() => setDefaultRegistry(createRegistry({ maxNodes: 16384 })));
@@ -412,6 +412,77 @@ test("QD-1(c): resurrection honesty -- after clear, a re-ensured entry re-regist
     clock.advance(1000); await tick();
     assert.ok(calls.length > resumed, "polling resumed on the recreated entry at the same cadence");
     d(); q.dispose();
+});
+
+// -----------------------------------------------------------------------------
+// QD-2 (QA) -- re-entrant teardown from inside a poll-dispatched fetcher must
+// not crash the timer callback (pollTick null-guards its scan + re-arm).
+// -----------------------------------------------------------------------------
+
+test("QD-2(crash): a poll-dispatched fetcher calling qc.clear() mid-scan does not crash", async () => {
+    const clock = createMockClock();
+    let calls = 0;
+    let qc;
+    const fetcher = async () => {
+        calls++;
+        if (calls >= 2) qc.clear();                // the poll-triggered fetch tears the client down mid-scan
+        return calls;
+    };
+    qc = queryClient({ now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, defaultStaleTime: 0 });
+    const q = query(qc, { key: ["a"], fetcher, refetchInterval: 1000 });
+    const d = createRoot(() => effect(() => q.status()));
+    await tick();
+    assert.equal(calls, 1, "attach fetch");
+    assert.doesNotThrow(() => clock.advance(1000), "the mid-scan clear() must not throw out of the timer callback");
+    await tick();
+    assert.equal(qc._internal.pollCount, -1, "scanner torn down by the re-entrant clear");
+    assert.equal(clock.pendingCount, 0, "zero armed timers at drain");
+    const before = calls;
+    clock.advance(5000); await tick();
+    assert.equal(calls, before, "no fetch ever fires after the re-entrant teardown");
+    d(); q.dispose();
+});
+
+test("QD-2(crash): a poll-dispatched fetcher calling qc.dispose() mid-scan does not crash", async () => {
+    const clock = createMockClock();
+    let calls = 0;
+    let qc;
+    const fetcher = async () => {
+        calls++;
+        if (calls >= 2) qc.dispose();              // dispose -> clear -> pollList null, mid-scan
+        return calls;
+    };
+    qc = queryClient({ now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, defaultStaleTime: 0 });
+    const q = query(qc, { key: ["a"], fetcher, refetchInterval: 1000 });
+    const d = createRoot(() => effect(() => q.status()));
+    await tick();
+    assert.doesNotThrow(() => clock.advance(1000), "the mid-scan dispose() must not throw out of the timer callback");
+    await tick();
+    assert.equal(qc._internal.pollCount, -1, "scanner torn down by the re-entrant dispose");
+    assert.equal(clock.pendingCount, 0, "zero armed timers at drain");
+    const before = calls;
+    clock.advance(5000); await tick();
+    assert.equal(calls, before, "no fetch ever fires after the re-entrant teardown");
+    d(); q.dispose();
+});
+
+// -----------------------------------------------------------------------------
+// QD-2 (QA) -- infiniteQuery rejects the query()-only options at the door
+// (fail closed -- silent acceptance is the queue:1 fail-open the law bans).
+// -----------------------------------------------------------------------------
+
+test("QD-2(door): infiniteQuery throws TypeError on refetchInterval (not silently ignored)", () => {
+    const qc = queryClient();
+    assert.throws(
+        () => infiniteQuery(qc, { key: ["i"], fetcher: async () => [], getNextCursor: () => null, refetchInterval: 1000 }),
+        (err) => err instanceof TypeError && /refetchInterval is not supported on infiniteQuery/.test(err.message));
+});
+
+test("QD-2(door): infiniteQuery throws TypeError on keepPreviousData (not silently ignored)", () => {
+    const qc = queryClient();
+    assert.throws(
+        () => infiniteQuery(qc, { key: ["i"], fetcher: async () => [], getNextCursor: () => null, keepPreviousData: true }),
+        (err) => err instanceof TypeError && /keepPreviousData is not supported on infiniteQuery/.test(err.message));
 });
 
 // -----------------------------------------------------------------------------

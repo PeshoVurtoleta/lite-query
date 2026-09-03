@@ -869,14 +869,30 @@ async function runIntervalSoak() {
   const clock = createMockClock();
   const qc = queryClient({ now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout, defaultStaleTime: 0, defaultCacheTime: Infinity });
   for (let i = 0; i < CYC; i++) {
+    // QD-1/QD-2: rotate the teardown path so the entry-removal disarm (clear /
+    // removeQueries) AND the re-entrant teardown-from-inside-a-poll-dispatched-
+    // fetcher stay covered as a CLASS, not just detach/dispose. Each variant must
+    // leave zero dangling poll timers at the next drain check.
+    const variant = i % 4;
+    if (variant === 3) {
+      // Re-entrant: the poll-triggered fetch synchronously calls qc.clear() mid
+      // scan; pollTick must null-guard and not throw out of the timer callback.
+      let n = 0;
+      const reFetcher = async () => { n++; if (n >= 2) qc.clear(); return n; };
+      const q = query(qc, { key: ['iv', i & 7], fetcher: reFetcher, refetchInterval: 1000 });
+      const stop = createRoot(() => effect(() => q.status()));
+      await Promise.resolve();
+      clock.advance(1000);                                      // poll tick -> fetcher clears mid-scan
+      await Promise.resolve();
+      stop();
+      q.dispose();
+      await Promise.resolve();
+      continue;
+    }
     const q = query(qc, { key: ['iv', i & 7], fetcher: FETCHER, refetchInterval: 1000 });
     const stop = createRoot(() => effect(() => q.status()));   // attach -> register + arm
     clock.advance(1000);                                        // fire one poll tick
     await Promise.resolve();
-    // QD-1: rotate the teardown path so the entry-removal disarm (clear /
-    // removeQueries) stays covered as a CLASS, not just detach/dispose. Each
-    // variant must leave zero dangling poll timers at the next drain check.
-    const variant = i % 3;
     if (variant === 0) {
       stop();                                                   // detach -> unregister
       q.dispose();

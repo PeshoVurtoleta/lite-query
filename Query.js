@@ -1406,14 +1406,20 @@ export function queryClient(options = {}) {
         pollTimerId = null;
         if (pollList === null || pollList.length === 0) return;
         const now = opts.now();
-        for (let i = 0; i < pollList.length; i++) {
+        // QD-2: a poll-dispatched fetcher may synchronously tear the client down
+        // (clear / dispose null pollList mid-scan). Re-test pollList !== null on
+        // every step so the loop ABORTS the remaining scan instead of reading
+        // .length on null -- records after such a teardown must not dispatch.
+        // Forward iteration + swap-remove never double-visits; a swap-skipped
+        // record simply waits one tick (within the on-or-after contract).
+        for (let i = 0; pollList !== null && i < pollList.length; i++) {
             const rec = pollList[i];
             if (now >= rec.nextPollAt) {
                 rec.nextPollAt = now + rec.interval;
                 pollDispatch(rec.entry);
             }
         }
-        armPoll();
+        if (pollList !== null) armPoll();          // re-arm only if the scan did not tear down
     }
 
     // Dispatch one due poll through the NORMAL fetch path (the maybeFetch tail),
@@ -2438,6 +2444,17 @@ export function infiniteQuery(qc, infOpts) {
     }
     if (typeof infOpts.getNextCursor !== "function") {
         throw new TypeError("infiniteQuery: `getNextCursor` must be a function (lastPage, allPages) => cursor | null");
+    }
+    // QD-2: fail closed at the door. refetchInterval and keepPreviousData are
+    // query()-only this session (their designs collide with the live flat-array
+    // accumulation); silently accepting them on infiniteQuery is the queue:1
+    // fail-open the house law bans -- a caller who set them believes they took
+    // effect. Reject explicitly rather than ignore.
+    if (infOpts.refetchInterval !== undefined) {
+        throw new TypeError("lite-query: refetchInterval is not supported on infiniteQuery");
+    }
+    if (infOpts.keepPreviousData !== undefined) {
+        throw new TypeError("lite-query: keepPreviousData is not supported on infiniteQuery");
     }
 
     const { ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, opts, setStatus } = qc._internal;
