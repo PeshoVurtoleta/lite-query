@@ -1337,6 +1337,57 @@ export function queryClient(options = {}) {
         }
     }
 
+    // -- refetchInterval scanner: the single check-and-rearm timer (C3) --
+
+    // The scanner granularity: the SMALLEST registered interval. Firing at the
+    // min means a coarser poll is served on-or-after its due time (a nextPollAt
+    // gate below), never early -- the documented RISK. O(list) and cold.
+    function pollPeriod() {
+        let m = Infinity;
+        for (let i = 0; i < pollList.length; i++) {
+            if (pollList[i].interval < m) m = pollList[i].interval;
+        }
+        return m;
+    }
+
+    // Arm the ONE scanner timer if it is not already armed and the list is
+    // non-empty. All timers go through opts.setTimeout (the injectable door) so
+    // the mock clock drives them; unref'd so a polling app never pins the Node
+    // event loop open.
+    function armPoll() {
+        if (pollTimerId !== null) return;
+        if (pollList === null || pollList.length === 0) return;
+        pollTimerId = opts.setTimeout(pollTick, pollPeriod());
+        if (pollTimerId && typeof pollTimerId.unref === "function") pollTimerId.unref();
+    }
+
+    // One tick of the scanner: scan every record, dispatch the ones whose
+    // nextPollAt has come due (>= now, never early), advance their nextPollAt by
+    // one interval, then re-arm -- but ONLY if the list is still non-empty (a
+    // dispatch that drained the last observer could unregister mid-scan). The
+    // timer id is nulled first so armPoll() re-arms exactly one successor.
+    function pollTick() {
+        pollTimerId = null;
+        if (pollList === null || pollList.length === 0) return;
+        const now = opts.now();
+        for (let i = 0; i < pollList.length; i++) {
+            const rec = pollList[i];
+            if (now >= rec.nextPollAt) {
+                rec.nextPollAt = now + rec.interval;
+                pollDispatch(rec.entry);
+            }
+        }
+        armPoll();
+    }
+
+    // Dispatch one due poll through the NORMAL fetch path. C4 gives this the
+    // "interval" feed reason; here it is the maybeFetch tail, refcount-gated so a
+    // record whose observers have all left (before its unregister runs) never
+    // fetches.
+    function pollDispatch(entry) {
+        if (entry.observerCount > 0) maybeFetch(entry);
+    }
+
     // -- attach / detach --
 
     function attach(entry, queryOpts) {
@@ -2023,7 +2074,7 @@ export function queryClient(options = {}) {
         // Not part of the public surface; documented as such in llms.txt. `feed`
         // is the live per-client cell (V2: a `let` cannot cross the subpath
         // boundary, so the subpath reads the same object through _internal).
-        _internal: { entries, ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, sharedStreamActive, broadcast, clientId, claimStreamEpoch, armWatchdog, disarmWatchdog, closeStream, opts, installPersistHook, feed, setStatus, emitStream, emitStreamPromote, emitClient, enqueue, emitQueue, installQueueHook, dehydrateQueue, restoreQueue },
+        _internal: { entries, ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, sharedStreamActive, broadcast, clientId, claimStreamEpoch, armWatchdog, disarmWatchdog, closeStream, opts, installPersistHook, feed, setStatus, emitStream, emitStreamPromote, emitClient, enqueue, emitQueue, installQueueHook, dehydrateQueue, restoreQueue, registerPoll, unregisterPoll },
     };
 }
 

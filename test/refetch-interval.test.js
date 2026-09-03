@@ -75,3 +75,102 @@ test("refetchInterval: a non-number (object) throws TypeError", () => {
     const qc = queryClient();
     assert.throws(() => query(qc, { key: ["a"], fetcher: async () => 1, refetchInterval: {} }), TypeError);
 });
+
+// -----------------------------------------------------------------------------
+// C3 -- the scanner mechanics: ONE timer, period = min interval, on-or-after due.
+// -----------------------------------------------------------------------------
+
+function mkPollEnv(staleTime = 0) {
+    const clock = createMockClock();
+    const calls = [];
+    const qc = queryClient({
+        now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
+        defaultStaleTime: staleTime,
+    });
+    const fetcher = async () => { calls.push(1); return calls.length; };
+    return { clock, calls, qc, fetcher };
+}
+
+test("scanner: a registered poll fetches on-or-after its due time, never early", async () => {
+    const { clock, calls, qc, fetcher } = mkPollEnv();
+    const q = query(qc, { key: ["a"], fetcher });
+    const stop = createRoot(() => effect(() => q.status()));
+    await tick();
+    assert.equal(calls.length, 1, "attach fetched once");
+    const entry = qc._internal.entries.get(JSON.stringify(["a"]));
+    qc._internal.registerPoll(entry, 1000);
+    clock.advance(999);
+    await tick();
+    assert.equal(calls.length, 1, "not fetched before the interval elapses (never early)");
+    clock.advance(1);
+    await tick();
+    assert.equal(calls.length, 2, "fetched once the interval came due");
+    stop();
+    q.dispose();
+});
+
+test("scanner: re-arms across multiple ticks", async () => {
+    const { clock, calls, qc, fetcher } = mkPollEnv();
+    const q = query(qc, { key: ["a"], fetcher });
+    const stop = createRoot(() => effect(() => q.status()));
+    await tick();
+    const entry = qc._internal.entries.get(JSON.stringify(["a"]));
+    qc._internal.registerPoll(entry, 1000);
+    for (let i = 0; i < 3; i++) { clock.advance(1000); await tick(); }
+    assert.equal(calls.length, 4, "one attach fetch + three interval fetches");
+    stop();
+    q.dispose();
+});
+
+test("scanner: unregister disarms -- no further fetches after the last poll leaves", async () => {
+    const { clock, calls, qc, fetcher } = mkPollEnv();
+    const q = query(qc, { key: ["a"], fetcher });
+    const stop = createRoot(() => effect(() => q.status()));
+    await tick();
+    const entry = qc._internal.entries.get(JSON.stringify(["a"]));
+    qc._internal.registerPoll(entry, 1000);
+    clock.advance(1000); await tick();
+    assert.equal(calls.length, 2);
+    qc._internal.unregisterPoll(entry);
+    clock.advance(5000); await tick();
+    assert.equal(calls.length, 2, "no ticks fire after the scanner disarms");
+    stop();
+    q.dispose();
+});
+
+test("scanner: refcount -- two registrations, one record, unregister once still polls", async () => {
+    const { clock, calls, qc, fetcher } = mkPollEnv();
+    const q = query(qc, { key: ["a"], fetcher });
+    const stop = createRoot(() => effect(() => q.status()));
+    await tick();
+    const entry = qc._internal.entries.get(JSON.stringify(["a"]));
+    qc._internal.registerPoll(entry, 1000);
+    qc._internal.registerPoll(entry, 1000);   // second observer, same key -> refcount 2
+    qc._internal.unregisterPoll(entry);        // one leaves -> refcount 1, still armed
+    clock.advance(1000); await tick();
+    assert.equal(calls.length, 2, "still polling while one registration remains");
+    qc._internal.unregisterPoll(entry);        // last leaves -> disarm
+    clock.advance(5000); await tick();
+    assert.equal(calls.length, 2, "disarmed after the last registration leaves");
+    stop();
+    q.dispose();
+});
+
+test("scanner: period = min registered interval (coarser poll served on-or-after)", async () => {
+    const { clock, calls, qc, fetcher } = mkPollEnv();
+    const qa = query(qc, { key: ["a"], fetcher });
+    const qb = query(qc, { key: ["b"], fetcher });
+    const stop = createRoot(() => effect(() => { qa.status(); qb.status(); }));
+    await tick();
+    assert.equal(calls.length, 2, "two attach fetches");
+    const ea = qc._internal.entries.get(JSON.stringify(["a"]));
+    const eb = qc._internal.entries.get(JSON.stringify(["b"]));
+    qc._internal.registerPoll(ea, 1000);      // fast
+    qc._internal.registerPoll(eb, 3000);      // slow
+    clock.advance(1000); await tick();
+    assert.equal(calls.length, 3, "fast poll fired at 1000, slow not yet due");
+    clock.advance(2000); await tick();          // t=3000: both due (fast twice more, slow once)
+    assert.ok(calls.length >= 5, "slow poll served on-or-after 3000, fast kept its cadence");
+    stop();
+    qa.dispose(); qb.dispose();
+});
