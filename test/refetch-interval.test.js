@@ -18,10 +18,10 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { effect, createRegistry, setDefaultRegistry, createRoot } from "@zakkster/lite-signal";
+import { signal, effect, createRegistry, setDefaultRegistry, createRoot } from "@zakkster/lite-signal";
 
 import { queryClient, query } from "../Query.js";
-import { createMockClock } from "./harness.js";
+import { createMockClock, createMockBroadcastChannel, createControlledFetcher, createQueuedFetcher } from "./harness.js";
 
 beforeEach(() => setDefaultRegistry(createRegistry({ maxNodes: 16384 })));
 
@@ -247,4 +247,199 @@ test("dispatch: a poll does not fetch once the entry has no observers (refcount-
     assert.equal(calls.length, 1, "an observerless entry is never polled");
     qc._internal.unregisterPoll(entry);
     q.dispose();
+});
+
+// -----------------------------------------------------------------------------
+// C5 -- watcher-seam lifecycle: register on attach; unregister on detach,
+// enabled:false, and dispose. OFF path never touches the scanner.
+// -----------------------------------------------------------------------------
+
+test("lifecycle: OFF path -- no refetchInterval leaves pollList null forever (never registered)", async () => {
+    const { qc, fetcher } = mkPollEnv();
+    assert.equal(qc._internal.pollCount, -1, "pollList is null before any register (null is not zero)");
+    const q = query(qc, { key: ["a"], fetcher });
+    const d = createRoot(() => effect(() => q.status()));
+    await tick();
+    assert.equal(qc._internal.pollCount, -1, "an OFF-path query never registers a poll");
+    d(); q.dispose();
+});
+
+test("lifecycle: register on attach -- a live observer with the option registers one record", async () => {
+    const { qc, fetcher } = mkPollEnv();
+    const q = query(qc, { key: ["a"], fetcher, refetchInterval: 1000 });
+    assert.equal(qc._internal.pollCount, -1, "constructing the query does not register (no observer yet)");
+    const d = createRoot(() => effect(() => q.status()));
+    await tick();
+    assert.equal(qc._internal.pollCount, 1, "attach registered exactly one poll record");
+    d(); q.dispose();
+});
+
+test("lifecycle: no registration while observerCount is 0 (query alone never polls)", async () => {
+    const { clock, calls, qc, fetcher } = mkPollEnv();
+    query(qc, { key: ["a"], fetcher, refetchInterval: 1000 });   // never read inside an effect
+    clock.advance(5000); await tick();
+    assert.equal(qc._internal.pollCount, -1, "no observer -> no registration");
+    assert.equal(calls.length, 0, "no observer -> no poll fetch");
+});
+
+test("lifecycle: no registration while enabled is false", async () => {
+    const { qc, fetcher } = mkPollEnv();
+    const q = query(qc, { key: ["a"], fetcher, refetchInterval: 1000, enabled: () => false });
+    const d = createRoot(() => effect(() => q.status()));
+    await tick();
+    assert.equal(qc._internal.pollCount, -1, "enabled:false never registers");
+    d(); q.dispose();
+});
+
+test("lifecycle: unregister on detach (last observer leaves)", async () => {
+    const { qc, fetcher } = mkPollEnv();
+    const q = query(qc, { key: ["a"], fetcher, refetchInterval: 1000 });
+    const d = createRoot(() => effect(() => q.status()));
+    await tick();
+    assert.equal(qc._internal.pollCount, 1);
+    d();                                    // last observer leaves
+    await tick();                           // the deferred stopWatcher microtask runs
+    assert.equal(qc._internal.pollCount, 0, "detach unregistered the poll (list empty, not null)");
+    q.dispose();
+});
+
+test("lifecycle: unregister on enabled flipping false, re-register on flipping true", async () => {
+    const { qc, fetcher } = mkPollEnv();
+    const en = signal(true);
+    const q = query(qc, { key: ["a"], fetcher, refetchInterval: 1000, enabled: () => en() });
+    const d = createRoot(() => effect(() => q.status()));
+    await tick();
+    assert.equal(qc._internal.pollCount, 1, "enabled -> registered");
+    en.set(false); await tick();
+    assert.equal(qc._internal.pollCount, 0, "disabled -> unregistered");
+    en.set(true); await tick();
+    assert.equal(qc._internal.pollCount, 1, "re-enabled -> re-registered");
+    d(); q.dispose();
+});
+
+test("lifecycle: unregister on dispose", async () => {
+    const { qc, fetcher } = mkPollEnv();
+    const q = query(qc, { key: ["a"], fetcher, refetchInterval: 1000 });
+    const d = createRoot(() => effect(() => q.status()));
+    await tick();
+    assert.equal(qc._internal.pollCount, 1);
+    q.dispose();
+    assert.equal(qc._internal.pollCount, 0, "dispose unregistered the poll");
+    d();
+});
+
+test("lifecycle: a reactive key swap moves the poll off the old entry onto the new", async () => {
+    const { qc, fetcher } = mkPollEnv();
+    const k = signal("a");
+    const q = query(qc, { key: () => [k()], fetcher, refetchInterval: 1000 });
+    const d = createRoot(() => effect(() => q.status()));
+    await tick();
+    assert.equal(qc._internal.pollCount, 1, "one record for key a");
+    const ea = qc._internal.entries.get(JSON.stringify(["a"]));
+    k.set("b"); await tick();
+    assert.equal(qc._internal.pollCount, 1, "still one record after the swap (old unregistered, new registered)");
+    const eb = qc._internal.entries.get(JSON.stringify(["b"]));
+    assert.equal(ea.observerCount, 0, "old entry detached");
+    assert.equal(eb.observerCount, 1, "new entry attached");
+    d(); q.dispose();
+});
+
+// -----------------------------------------------------------------------------
+// C5 / G4 -- shared-polling truthfulness. The leader polls; N followers stay
+// fresh WITHOUT hitting their own network. A leaderless follower still self-
+// fetches within sharedFetchTimeout (the Q8 liveness law, verbatim).
+// -----------------------------------------------------------------------------
+
+function setupSharedPoll() {
+    const mockBC = createMockBroadcastChannel();
+    const clock = createMockClock();
+    let leaderAlive = true;                          // the election flag the "kill" flips
+    const base = {
+        crossTab: true,
+        sharedFetch: true,
+        broadcastChannel: mockBC.BroadcastChannel,
+        crossTabChannel: "poll",
+        now: clock.now, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
+        sharedFetchTimeout: 3000,
+        defaultStaleTime: 0,
+    };
+    // The leader's authority is a live election read, not a hard-coded true, so a
+    // "kill" can revoke it WITHOUT a clear/remove broadcast (a crashed tab simply
+    // vanishes -- it never announces a teardown). demoteLeader() models exactly
+    // that: no tab serves fetch-req afterward, and followers must self-heal.
+    const qcLeader = queryClient({ ...base, isLeader: () => leaderAlive });
+    const followers = [0, 1, 2].map(() => queryClient({ ...base, isLeader: () => false }));
+    return { qcLeader, followers, mockBC, clock, demoteLeader() { leaderAlive = false; } };
+}
+
+test("G4: leader + 3 followers polling -- upstream fetches === the leader's alone across 20 ticks", async () => {
+    const { qcLeader, followers, clock } = setupSharedPoll();
+    const leaderF = createQueuedFetcher();
+    const followerFs = followers.map(() => createControlledFetcher());
+
+    const qL = query(qcLeader, { key: ["d"], fetcher: leaderF.fetcher, refetchInterval: 1000 });
+    const dL = createRoot(() => effect(() => qL.data()));
+    const qFs = followers.map((qc, i) => query(qc, { key: ["d"], fetcher: followerFs[i].fetcher, refetchInterval: 1000 }));
+    const dFs = qFs.map((q) => createRoot(() => effect(() => q.data())));
+    await tick();
+
+    // The attach round: the leader fetched once, followers issued fetch-reqs only.
+    assert.equal(leaderF.callCount, 1, "leader fetched on attach");
+    for (const f of followerFs) assert.equal(f.callCount, 0, "no follower self-fetched on attach");
+    leaderF.resolveNth(0, { tick: 0 });
+    await tick(); await tick();
+
+    const before = leaderF.callCount;               // == 1
+    // 20 interval ticks. Each tick: leader polls (one upstream fetch, pending);
+    // the three followers' fetch-reqs land while it is in flight -> dedup to it;
+    // resolve -> leader broadcasts setData -> all followers fresh, zero self-fetch.
+    for (let t = 1; t <= 20; t++) {
+        clock.advance(1000);
+        await tick();                               // deliver fetch-reqs -> dedup onto the in-flight leader fetch
+        leaderF.resolveNth(t, { tick: t });
+        await tick(); await tick();                 // settle + broadcast + follower receive
+    }
+    const upstream = leaderF.callCount - before;
+    assert.equal(upstream, 20, "exactly one upstream fetch per tick -- the leader's alone (followers deduped)");
+    for (const f of followerFs) assert.equal(f.callCount, 0, "no follower ever hit its own network across 20 ticks");
+
+    dL(); dFs.forEach((d) => d());
+    qL.dispose(); qFs.forEach((q) => q.dispose());
+});
+
+test("G4 liveness: kill the leader -> a follower self-fetches within sharedFetchTimeout", async () => {
+    const { qcLeader, followers, clock, demoteLeader } = setupSharedPoll();
+    const leaderF = createQueuedFetcher();
+    const followerFs = followers.map(() => createControlledFetcher());
+
+    const qL = query(qcLeader, { key: ["d"], fetcher: leaderF.fetcher, refetchInterval: 1000 });
+    const dL = createRoot(() => effect(() => qL.data()));
+    const qFs = followers.map((qc, i) => query(qc, { key: ["d"], fetcher: followerFs[i].fetcher, refetchInterval: 1000 }));
+    const dFs = qFs.map((q) => createRoot(() => effect(() => q.data())));
+    await tick();
+    leaderF.resolveNth(0, { tick: 0 });
+    await tick(); await tick();
+    for (const f of followerFs) assert.equal(f.callCount, 0, "followers fresh via the leader, none self-fetched");
+
+    // KILL the leader: revoke its election + stop it observing. No clear/remove
+    // is broadcast (a crashed tab just vanishes), so the followers keep their
+    // entries and nobody answers their fetch-req.
+    demoteLeader();
+    dL();
+    await tick();
+
+    // A follower's next poll issues a fetch-req nobody serves; its fallback timer
+    // must self-fetch within sharedFetchTimeout so the UI never hangs.
+    clock.advance(1000);                            // follower poll tick -> requestSharedFetch
+    await tick();
+    for (const f of followerFs) assert.equal(f.callCount, 0, "no self-fetch before the fallback window elapses");
+    clock.advance(3000);                            // sharedFetchTimeout
+    await tick();
+    const selfFetched = followerFs.reduce((n, f) => n + (f.callCount > 0 ? 1 : 0), 0);
+    assert.ok(selfFetched >= 1, "a leaderless follower self-fetched within sharedFetchTimeout (liveness law)");
+
+    dFs.forEach((d) => d());
+    qFs.forEach((q) => q.dispose());
+    followers.forEach((qc) => qc.dispose());
+    qcLeader.dispose();
 });

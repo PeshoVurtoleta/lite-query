@@ -2079,7 +2079,7 @@ export function queryClient(options = {}) {
         // Not part of the public surface; documented as such in llms.txt. `feed`
         // is the live per-client cell (V2: a `let` cannot cross the subpath
         // boundary, so the subpath reads the same object through _internal).
-        _internal: { entries, ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, sharedStreamActive, broadcast, clientId, claimStreamEpoch, armWatchdog, disarmWatchdog, closeStream, opts, installPersistHook, feed, setStatus, emitStream, emitStreamPromote, emitClient, enqueue, emitQueue, installQueueHook, dehydrateQueue, restoreQueue, registerPoll, unregisterPoll },
+        _internal: { entries, ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, sharedStreamActive, broadcast, clientId, claimStreamEpoch, armWatchdog, disarmWatchdog, closeStream, opts, installPersistHook, feed, setStatus, emitStream, emitStreamPromote, emitClient, enqueue, emitQueue, installQueueHook, dehydrateQueue, restoreQueue, registerPoll, unregisterPoll, get pollCount() { return pollList === null ? -1 : pollList.length; } },
     };
 }
 
@@ -2108,7 +2108,7 @@ export function queryClient(options = {}) {
  *   effect(() => console.log(user.data()));       // attach + fetch
  */
 export function query(qc, queryOpts) {
-    const { ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, opts } = qc._internal;
+    const { ensureEntry, attach, detach, maybeFetch, runFetch, requestSharedFetch, sharedFetchActive, opts, registerPoll, unregisterPoll } = qc._internal;
 
     // Fail closed at the door (ON-4): an invalid refetchInterval throws here, at
     // construction, so the scanner and every hot path downstream only ever see a
@@ -2158,6 +2158,10 @@ export function query(qc, queryOpts) {
 
             if (!isEnabled) {
                 if (attachedEntry) {
+                    // Unregister the poll BEFORE detach (ON-4: no polling while
+                    // enabled is false). refetchInterval === null is the OFF path
+                    // -- this guard is a single comparison on the cold watcher.
+                    if (refetchInterval !== null) unregisterPoll(attachedEntry);
                     untrack(() => detach(attachedEntry));
                     attachedEntry = null;
                 }
@@ -2170,10 +2174,16 @@ export function query(qc, queryOpts) {
             if (entry !== attachedEntry) {
                 // Different entry: detach the old, attach the new, decide on
                 // fetch via maybeFetch on this fresh attachment.
-                if (attachedEntry) untrack(() => detach(attachedEntry));
+                if (attachedEntry) {
+                    if (refetchInterval !== null) unregisterPoll(attachedEntry);
+                    untrack(() => detach(attachedEntry));
+                }
                 untrack(() => attach(entry, queryOpts));
                 attachedEntry = entry;
                 currentEntry.set(entry);
+                // Register the poll on THIS fresh attachment (ON-4: register on
+                // attach when the option is set; observerCount is >= 1 here).
+                if (refetchInterval !== null) registerPoll(entry, refetchInterval);
                 untrack(() => maybeFetch(entry));
             }
             // Same entry: leave attach state alone, no maybeFetch. The user's
@@ -2187,6 +2197,9 @@ export function query(qc, queryOpts) {
         watcher();
         watcher = null;
         if (attachedEntry) {
+            // Unregister the poll on teardown (stopWatcher covers detach-to-zero
+            // AND dispose). Idempotent under refcount if it already left.
+            if (refetchInterval !== null) unregisterPoll(attachedEntry);
             detach(attachedEntry);
             attachedEntry = null;
         }
