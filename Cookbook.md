@@ -732,7 +732,11 @@ const persist = persistQueryClient(qc, {
   queueSave: (env) => localStorage.setItem('lq:queue', JSON.stringify(env)),
   queueLoad: ()    => JSON.parse(localStorage.getItem('lq:queue') || 'null'),
 });
-await persist.queueRestored;      // { status: 'restored' | 'empty' | 'dropped', count, reason }
+// Await BOTH restores before any replay: replay resolves each record against a
+// LIVE cache entry, so if the cache has not re-seeded its entries yet every
+// restored record drops as "entry-missing" (a drop is a removal -- the mutation
+// is lost). The cache restore must complete first.
+await Promise.all([persist.restored, persist.queueRestored]);   // { status, count, reason } each
 
 // 2. A mutation that queues while offline.
 const saveTodo = mutation(qc, {
