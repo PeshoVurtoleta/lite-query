@@ -345,6 +345,76 @@ test("lifecycle: a reactive key swap moves the poll off the old entry onto the n
 });
 
 // -----------------------------------------------------------------------------
+// QD-1 (reviewer) -- entry-removal sites disarm interval polls. clear() and
+// removeQueries() destroy entries; their poll records must go with them or the
+// scanner re-arms every period on a dead entry for the client's life.
+// -----------------------------------------------------------------------------
+
+test("QD-1(a): clear() with a mounted polled query disarms the scanner and never fetches the dead entry", async () => {
+    const { clock, calls, qc, fetcher } = mkPollEnv();
+    const q = query(qc, { key: ["a"], fetcher, refetchInterval: 1000 });
+    const d = createRoot(() => effect(() => q.status()));
+    await tick();
+    clock.advance(1000); await tick();
+    assert.equal(calls.length, 2, "polling before clear");
+    assert.ok(clock.pendingCount >= 1, "a poll timer is armed");
+
+    qc.clear();
+    assert.equal(qc._internal.pollCount, -1, "clear() tore the scanner down (list nulled -- null is not zero)");
+    assert.equal(clock.pendingCount, 0, "zero armed timers after clear");
+    const before = calls.length;
+    clock.advance(10000); await tick();
+    assert.equal(calls.length, before, "no fetch ever fires on the dead entry after clear");
+    d(); q.dispose();
+});
+
+test("QD-1(b): removeQueries on a polled key leaves a second polled key polling on schedule", async () => {
+    const { clock, calls, qc, fetcher } = mkPollEnv();
+    const qa = query(qc, { key: ["a"], fetcher, refetchInterval: 1000 });
+    const qb = query(qc, { key: ["b"], fetcher, refetchInterval: 1000 });
+    const d = createRoot(() => effect(() => { qa.status(); qb.status(); }));
+    await tick();
+    assert.equal(qc._internal.pollCount, 2, "two poll records");
+    clock.advance(1000); await tick();
+    const afterFirst = calls.length;               // both polled once (== 4: 2 attach + 2 poll)
+
+    qc.removeQueries(["a"], { exact: true });
+    assert.equal(qc._internal.pollCount, 1, "the removed key's record dropped, the survivor's stays");
+    clock.advance(1000); await tick();
+    assert.ok(calls.length > afterFirst, "the survivor key keeps polling on schedule");
+    // The removed entry is gone; only ['b'] should still be fetching.
+    assert.equal(qc._internal.entries.has(JSON.stringify(["a"])), false, "removed entry destroyed");
+    assert.ok(qc._internal.entries.has(JSON.stringify(["b"])), "survivor entry alive");
+    d(); qa.dispose(); qb.dispose();
+});
+
+test("QD-1(c): resurrection honesty -- after clear, a re-ensured entry re-registers and polling resumes", async () => {
+    const { clock, calls, qc, fetcher } = mkPollEnv();
+    const bump = signal(0);
+    // A reactive key that reads `bump` but returns the SAME key value: bumping it
+    // re-runs the watcher, which re-ensures ['a'] (a fresh entry, since clear()
+    // deleted the old one) and re-registers the poll at the entry-swap seam.
+    const q = query(qc, { key: () => { bump(); return ["a"]; }, fetcher, refetchInterval: 1000 });
+    const d = createRoot(() => effect(() => q.status()));
+    await tick();
+    clock.advance(1000); await tick();
+    assert.equal(calls.length, 2, "polling before clear");
+
+    qc.clear();
+    assert.equal(qc._internal.pollCount, -1, "scanner torn down by clear");
+    clock.advance(2000); await tick();
+    assert.equal(calls.length, 2, "no polling while the entry is dead");
+
+    // Resurrect: the watcher re-runs, re-ensures ['a'], registers a fresh poll.
+    bump.set(1); await tick();
+    assert.equal(qc._internal.pollCount, 1, "register fired at the entry-swap seam (list lazily re-created)");
+    const resumed = calls.length;                  // attach-refetch on the recreated entry
+    clock.advance(1000); await tick();
+    assert.ok(calls.length > resumed, "polling resumed on the recreated entry at the same cadence");
+    d(); q.dispose();
+});
+
+// -----------------------------------------------------------------------------
 // C5 / G4 -- shared-polling truthfulness. The leader polls; N followers stay
 // fresh WITHOUT hitting their own network. A leaderless follower still self-
 // fetches within sharedFetchTimeout (the Q8 liveness law, verbatim).

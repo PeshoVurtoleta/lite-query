@@ -1350,6 +1350,29 @@ export function queryClient(options = {}) {
         }
     }
 
+    // Force-drop the poll record for `entry` COUNT-AGNOSTICALLY. The entry-removal
+    // sites (removeQueries / clear) destroy the entry regardless of how many
+    // observers were polling it, so its record must go with it -- an outstanding
+    // refcount would otherwise re-arm the scanner every period on a dead entry
+    // (whose observerCount is never decremented on those paths). Disarms the
+    // single timer if the list drains. Idempotent: a null list or an absent
+    // record is a silent no-op.
+    function dropPoll(entry) {
+        if (pollList === null) return;
+        for (let i = 0; i < pollList.length; i++) {
+            if (pollList[i].entry === entry) {
+                const last = pollList.length - 1;
+                pollList[i] = pollList[last];
+                pollList.pop();
+                if (pollList.length === 0 && pollTimerId !== null) {
+                    opts.clearTimeout(pollTimerId);
+                    pollTimerId = null;
+                }
+                return;
+            }
+        }
+    }
+
     // -- refetchInterval scanner: the single check-and-rearm timer (C3) --
 
     // The scanner granularity: the SMALLEST registered interval. Firing at the
@@ -1796,6 +1819,7 @@ export function queryClient(options = {}) {
             }
             cancelGc(e);
             clearSharedTimer(e);
+            dropPoll(e);                                 // QD-1: the entry is destroyed -- drop its poll record count-agnostically
             entries.delete(h);
             disposeEntry(e);
             if (feed.hook !== null) emitEntry("entry:remove", e, 0, "remove");   // site 5a
@@ -1819,6 +1843,16 @@ export function queryClient(options = {}) {
             if (feed.hook !== null) emitEntry("entry:remove", e, 0, "clear");   // site 5b
         }
         entries.clear();
+        // QD-1: every entry is gone -- mirror dispose's scanner teardown so no
+        // dead-entry poll record survives to re-arm the timer for the client's
+        // life. registerPoll lazily re-creates pollList when a still-mounted
+        // handle's watcher re-ensures its entry and re-registers at the swap seam;
+        // a later unregisterPoll is a safe no-op on the null list.
+        if (pollTimerId !== null) {
+            opts.clearTimeout(pollTimerId);
+            pollTimerId = null;
+        }
+        pollList = null;
         if (had) notifyWrite();                          // hook site 5: map was non-empty (persists emptiness)
         broadcast({ type: "clear" });
     }

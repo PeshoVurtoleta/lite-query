@@ -1,6 +1,6 @@
 # @zakkster/lite-query
 
-Reactive async cache with cross-tab coherence. Built on `@zakkster/lite-signal`. ~6KB minified+gzipped, framework-agnostic, 430 tests, zero runtime dependencies outside the lite ecosystem.
+Reactive async cache with cross-tab coherence. Built on `@zakkster/lite-signal`. ~6KB minified+gzipped, framework-agnostic, 433 tests, zero runtime dependencies outside the lite ecosystem.
 
 [![npm version](https://img.shields.io/npm/v/@zakkster/lite-query.svg?style=for-the-badge&color=latest)](https://www.npmjs.com/package/@zakkster/lite-query)
 ![Zero-GC](https://img.shields.io/badge/Zero--GC-Hot%20path-00C853?style=for-the-badge&logo=leaf&logoColor=white)
@@ -67,7 +67,7 @@ The honest comparison. Numbers are min+gzip, current as of writing.
 | Per-query timeout | Yes | No (manual via fetcher) | No (manual via fetcher) |
 | Devtools feed | **`qc.inspect` (31-type push feed)** | Feed + bundled UI | Feed + UI |
 | Devtools UI | External (lite-studio) | Yes (mature) | Yes |
-| Tests | 430 | ~hundreds | ~hundreds |
+| Tests | 433 | ~hundreds | ~hundreds |
 | Foundation | Signals (lite-signal) | Observer pattern | SWR algo + hooks |
 
 Where lite-query trails: the devtools *panel* is external (lite-studio), not bundled. What lite-query ships is the FEED a panel renders (`qc.inspect`, zero-cost when off). Where it leads: cross-tab, cursor pagination, and the signal-native composition story.
@@ -446,16 +446,16 @@ If you're new to the family, start with lite-signal -- every other library here 
 npm test
 ```
 
-430 deterministic tests. Run output:
+433 deterministic tests. Run output:
 
 ```
-# tests 430
-# pass 430
+# tests 433
+# pass 433
 # fail 0
 # skipped 0
 ```
 
-The core suite (253) uses a controlled fetcher, mock clock, and mock `BroadcastChannel` so every test is deterministic -- no real timers, no real network, and it covers `infiniteQuery` cursor pagination, `qc.prefetch`, the persistence primitive + adapter (with a dependency-free dehydrated-cache corruption matrix), and the devtools feed `qc.inspect` (all 31 event types, the 10-key monomorphic shape + pooled-reuse identity, two-seam independence, and throwing-hook containment). The optional entry points add 31 (`/await`) and 24 (`/stream`) tests, the latter driving a manually-pumped async iterator through every termination path; the 2.0 shared-streams work adds 43 cross-tab shared-stream tests (the 7 named failover cells F1-F7, the epoch/clientId/seq projection gate, latest + buffer projection with differential parity against `pipeToSignal`, the watchdog under a lying oracle, promotion/adopt/abdication, the 3 new feed types, and the LS4 writer-slot swap) and 28 offline mutation queue tests (the opt-in dispatch ladder, replay ordering + per-item results + single-flight + `dropQueued`, the persistence seam with whole-queue drop, and the at-least-once crash boundary) and 6 falsy-rejection tests (the ON-3 breaking fix); the 2.2 freshness work adds 28 `refetchInterval` tests (option validation, the single-scanner mechanics -- one timer, min-period, on-or-after-due, refcount -- the watcher-seam lifecycle, the `"interval"` dispatch reason, and the G4 leader + 3-follower shared-polling truthfulness with leaderless liveness) and 11 `keepPreviousData` tests (validation, the hold across a reactive key swap, `isPlaceholder()`, entry-truth in `status`/`loading`/`getQueryData`/`dehydrate`, and OFF-path byte-identity); and 6 repo drift guards keep the shipped files ASCII-clean, the documented surface in sync with the real exports, and the runtime `VERSION` const equal to `package.json`. See `test/harness.js` for the mocks.
+The core suite (253) uses a controlled fetcher, mock clock, and mock `BroadcastChannel` so every test is deterministic -- no real timers, no real network, and it covers `infiniteQuery` cursor pagination, `qc.prefetch`, the persistence primitive + adapter (with a dependency-free dehydrated-cache corruption matrix), and the devtools feed `qc.inspect` (all 31 event types, the 10-key monomorphic shape + pooled-reuse identity, two-seam independence, and throwing-hook containment). The optional entry points add 31 (`/await`) and 24 (`/stream`) tests, the latter driving a manually-pumped async iterator through every termination path; the 2.0 shared-streams work adds 43 cross-tab shared-stream tests (the 7 named failover cells F1-F7, the epoch/clientId/seq projection gate, latest + buffer projection with differential parity against `pipeToSignal`, the watchdog under a lying oracle, promotion/adopt/abdication, the 3 new feed types, and the LS4 writer-slot swap) and 28 offline mutation queue tests (the opt-in dispatch ladder, replay ordering + per-item results + single-flight + `dropQueued`, the persistence seam with whole-queue drop, and the at-least-once crash boundary) and 6 falsy-rejection tests (the ON-3 breaking fix); the 2.2 freshness work adds 31 `refetchInterval` tests (option validation, the single-scanner mechanics -- one timer, min-period, on-or-after-due, refcount -- the watcher-seam lifecycle, the `"interval"` dispatch reason, the entry-removal disarm on `clear`/`removeQueries` (QD-1), and the G4 leader + 3-follower shared-polling truthfulness with leaderless liveness) and 11 `keepPreviousData` tests (validation, the hold across a reactive key swap, `isPlaceholder()`, entry-truth in `status`/`loading`/`getQueryData`/`dehydrate`, and OFF-path byte-identity); and 6 repo drift guards keep the shipped files ASCII-clean, the documented surface in sync with the real exports, and the runtime `VERSION` const equal to `package.json`. See `test/harness.js` for the mocks.
 
 Every entry point exports `VERSION` -- lite-query's own version string, the single runtime version source. It lives in `Query.js`, is re-exported by `/stream` and `/await`, and `test/version-sync.test.js` asserts it equals `package.json`.
 

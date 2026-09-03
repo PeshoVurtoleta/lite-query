@@ -873,9 +873,23 @@ async function runIntervalSoak() {
     const stop = createRoot(() => effect(() => q.status()));   // attach -> register + arm
     clock.advance(1000);                                        // fire one poll tick
     await Promise.resolve();
-    stop();                                                     // detach -> unregister
-    q.dispose();
-    qc.removeQueries(['iv', i & 7], { exact: true });
+    // QD-1: rotate the teardown path so the entry-removal disarm (clear /
+    // removeQueries) stays covered as a CLASS, not just detach/dispose. Each
+    // variant must leave zero dangling poll timers at the next drain check.
+    const variant = i % 3;
+    if (variant === 0) {
+      stop();                                                   // detach -> unregister
+      q.dispose();
+      qc.removeQueries(['iv', i & 7], { exact: true });
+    } else if (variant === 1) {
+      qc.removeQueries(['iv', i & 7], { exact: true });         // remove a still-mounted polled entry
+      stop();
+      q.dispose();
+    } else {
+      qc.clear();                                               // clear with a still-mounted polled query
+      stop();
+      q.dispose();
+    }
     await Promise.resolve();
   }
   const pendingAtDrain = clock.pendingCount;                    // must be 0: nothing armed
