@@ -137,6 +137,19 @@ function validateRefetchInterval(v) {
     return v;
 }
 
+// keepPreviousData validation (ON-4, fail closed at the door). Absent (undefined)
+// or false = off; strictly === true to enable; anything else present (null, a
+// number, a string) throws TypeError at query construction -- an ambiguous truthy
+// value is never silently coerced. Returns the boolean the hold reads.
+function validateKeepPreviousData(v) {
+    if (v === undefined) return false;
+    if (typeof v !== "boolean") {
+        throw new TypeError(
+            "lite-query: keepPreviousData must be a boolean (keepPreviousData: true to opt in)");
+    }
+    return v;
+}
+
 // Abort reasons exposed on AbortSignal.reason. Users' fetchers can inspect
 // these to decide whether to retry -- e.g., a user-initiated detach (component
 // unmounting) is non-retryable, but a timeout might be.
@@ -2115,6 +2128,18 @@ export function query(qc, queryOpts) {
     // finite period > 0 or null (off). null is not zero.
     const refetchInterval = validateRefetchInterval(queryOpts.refetchInterval);
 
+    // keepPreviousData hold (C6): a HANDLE-level presentation, never entry truth
+    // (OR-5 -- the cache never lies). heldData carries the previous entry's data
+    // across a reactive key swap; placeholderSig is the reactive isPlaceholder()
+    // flag. Both are allocated ONLY when the option is on, so an OFF-path query
+    // constructs exactly what 2.1.0 did (placeholderSig === null is the OFF path).
+    // status()/loading() read entry truth and are untouched; only data() consults
+    // the hold, and only after e.data() is undefined (dehydrate walks entries, not
+    // handles, so persist/feed never see the placeholder).
+    const keepPrev = validateKeepPreviousData(queryOpts.keepPreviousData);
+    let heldData = undefined;
+    const placeholderSig = keepPrev ? signal(false) : null;
+
     // currentEntry is itself a signal -- accessors subscribe to it so they
     // refire when the key changes (reactive key) or attach/detach flips.
     const currentEntry = signal(null);
@@ -2175,6 +2200,13 @@ export function query(qc, queryOpts) {
                 // Different entry: detach the old, attach the new, decide on
                 // fetch via maybeFetch on this fresh attachment.
                 if (attachedEntry) {
+                    // Capture the outgoing entry's data as the placeholder BEFORE
+                    // detaching it (the pre-detach seam). Only when it is defined:
+                    // a swap away from a still-loading entry holds nothing.
+                    if (placeholderSig !== null) {
+                        const prev = untrack(() => attachedEntry.data());
+                        if (prev !== undefined) { heldData = prev; placeholderSig.set(true); }
+                    }
                     if (refetchInterval !== null) unregisterPoll(attachedEntry);
                     untrack(() => detach(attachedEntry));
                 }
@@ -2250,7 +2282,24 @@ export function query(qc, queryOpts) {
         data() {
             trackObserver();
             const e = currentEntry();
-            return e ? e.data() : undefined;
+            const d = e ? e.data() : undefined;
+            // OFF path (placeholderSig === null): a single comparison, then the
+            // 2.1.0 return -- zero added allocation. ON path: hold heldData while
+            // the new entry has no data yet, and clear on the first defined value.
+            if (placeholderSig === null) return d;
+            if (d !== undefined) {
+                if (placeholderSig.peek()) { heldData = undefined; placeholderSig.set(false); }
+                return d;
+            }
+            return placeholderSig.peek() ? heldData : d;
+        },
+        // isPlaceholder(): reactive true while the handle is showing held previous
+        // data across a key swap, false once the new entry's real data arrives.
+        // OFF path returns a constant false with no subscription.
+        isPlaceholder() {
+            if (placeholderSig === null) return false;
+            trackObserver();
+            return placeholderSig();
         },
         error() {
             trackObserver();
@@ -2290,6 +2339,12 @@ export function query(qc, queryOpts) {
         dispose() {
             disposed = true;
             stopWatcher();
+            // Release the placeholder hold (ON path only): drop the retained data
+            // reference and return the flag's signal node to the pool.
+            if (placeholderSig !== null) {
+                heldData = undefined;
+                try { disposeNode(placeholderSig); } catch {}
+            }
             // Return currentEntry's signal node to lite-signal's pool -- without
             // this, an app that creates + disposes many queries (e.g. many
             // routes over an SPA lifetime) leaks one signal per query() call.
